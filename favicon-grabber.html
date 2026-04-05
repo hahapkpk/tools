@@ -138,6 +138,22 @@
       text-align: center;
       line-height: 1.6;
     }
+    .ddg-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 12px;
+      padding: 8px 18px;
+      border-radius: 8px;
+      border: 1px solid #2a2a2a;
+      background: #1a1a1a;
+      color: #888;
+      font-size: 13px;
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.15s;
+    }
+    .ddg-btn:hover { border-color: #444; color: #ccc; background: #222; }
   </style>
 </head>
 <body>
@@ -148,6 +164,7 @@
     <input type="text" id="urlInput" placeholder="https://example.com" />
     <button class="grab-btn" onclick="grab()">获取图标</button>
   </div>
+  <div id="ddgLink"></div>
 
   <div id="results"></div>
 
@@ -235,6 +252,11 @@
       fetchManifestIcons(origin).then(icons => {
         icons.forEach(src => container.appendChild(createCard(src)));
       });
+
+      // ── DuckDuckGo 搜索跳转链接 ────────────────────────────
+      const ddgDiv = document.getElementById('ddgLink');
+      const ddgQuery = encodeURIComponent(`${domain} logo icon png`);
+      ddgDiv.innerHTML = `<a class="ddg-btn" href="https://duckduckgo.com/?q=${ddgQuery}&iax=images&ia=images" target="_blank">🔍 在 DuckDuckGo 图片搜索更多图标</a>`;
     }
 
     // 尝试常见 manifest 路径，解析出 PWA 图标列表
@@ -334,18 +356,33 @@
     async function downloadIcon(url, label) {
       const filename = label.replace(/\s+/g, '-');
 
-      // 方法1：直接 fetch（服务器有 CORS 头时可用，如 gstatic）
+      // 方法1：fetch blob → 若是 ICO/非 PNG 则 Canvas 转 PNG，否则直接下载
       try {
         const res = await fetch(url);
         const blob = await res.blob();
-        const ext = blob.type.includes('svg') ? 'svg' : blob.type.includes('ico') ? 'ico' : 'png';
-        triggerDownload(URL.createObjectURL(blob), `${filename}.${ext}`);
+        const isIco = blob.type.includes('icon') || blob.type.includes('ico') || url.toLowerCase().endsWith('.ico');
+        const isSvg = blob.type.includes('svg');
+
+        if (isSvg) {
+          // SVG 保持原格式
+          triggerDownload(URL.createObjectURL(blob), `${filename}.svg`);
+          return;
+        }
+        if (isIco) {
+          // ICO → Canvas → PNG
+          const pngBlob = await blobToCanvasPng(blob);
+          triggerDownload(URL.createObjectURL(pngBlob), `${filename}.png`);
+          return;
+        }
+        // 其他（png/jpg/webp 等）→ Canvas → PNG，统一格式
+        const pngBlob = await blobToCanvasPng(blob);
+        triggerDownload(URL.createObjectURL(pngBlob), `${filename}.png`);
         return;
       } catch {}
 
-      // 方法2：Canvas 转 Blob（服务器支持 crossOrigin 时可用）
+      // 方法2：crossOrigin img → Canvas → PNG
       try {
-        const blob = await imgToBlob(url);
+        const blob = await urlToCanvasPng(url);
         triggerDownload(URL.createObjectURL(blob), `${filename}.png`);
         return;
       } catch {}
@@ -354,16 +391,31 @@
       showSaveModal(url);
     }
 
-    function triggerDownload(href, filename) {
-      const a = document.createElement('a');
-      a.href = href;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+    // 从已有 Blob 经 Canvas 导出 PNG
+    function blobToCanvasPng(blob) {
+      return new Promise((resolve, reject) => {
+        const blobUrl = URL.createObjectURL(blob);
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const size = Math.max(img.naturalWidth, img.naturalHeight, 64);
+          canvas.width = img.naturalWidth || size;
+          canvas.height = img.naturalHeight || size;
+          try {
+            canvas.getContext('2d').drawImage(img, 0, 0);
+            canvas.toBlob(b => {
+              URL.revokeObjectURL(blobUrl);
+              b ? resolve(b) : reject(new Error('toBlob failed'));
+            }, 'image/png');
+          } catch (e) { URL.revokeObjectURL(blobUrl); reject(e); }
+        };
+        img.onerror = () => { URL.revokeObjectURL(blobUrl); reject(new Error('img load failed')); };
+        img.src = blobUrl;
+      });
     }
 
-    function imgToBlob(url) {
+    // 从 URL 经 crossOrigin img → Canvas 导出 PNG
+    function urlToCanvasPng(url) {
       return new Promise((resolve, reject) => {
         const img = new Image();
         img.crossOrigin = 'anonymous';
@@ -373,7 +425,7 @@
           canvas.height = img.naturalHeight || 256;
           try {
             canvas.getContext('2d').drawImage(img, 0, 0);
-            canvas.toBlob(b => b ? resolve(b) : reject(new Error('toBlob failed')));
+            canvas.toBlob(b => b ? resolve(b) : reject(new Error('toBlob failed')), 'image/png');
           } catch (e) { reject(e); }
         };
         img.onerror = () => reject(new Error('load failed'));
