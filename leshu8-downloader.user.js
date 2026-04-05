@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         乐书网书籍下载器 (leshu8 Downloader)
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.0.0
+// @version      1.1.0
 // @description  在 leshu8.com 书籍阅读页添加「下载本书」按钮，将整本书导出为带样式的 HTML 文件
 // @author       hahapkpk
 // @match        https://leshu8.com/book-chapter*
@@ -24,6 +24,19 @@
     return params.get('bookId');
   }
 
+  // 检查并自动解锁（每日限额由服务端控制，无需 Turnstile token）
+  async function ensureUnlocked(bookId, ui) {
+    const app = useNuxtApp();
+    const hasKey = await app.$hasResourceAccessKey('ebook', bookId);
+    if (hasKey) return;
+    ui.setStatus('本书未解锁，正在自动解锁\n（每日免费解锁限额由平台控制）');
+    await app.$resourceUnlock('ebook', bookId, '');
+    // 等待 resource_ac 写入
+    await sleep(500);
+    const confirmed = await app.$hasResourceAccessKey('ebook', bookId);
+    if (!confirmed) throw new Error('解锁失败，可能已超出每日免费解锁次数\n请在网页上手动解锁后再试');
+  }
+
   async function getHeaders(bookId) {
     const app = useNuxtApp();
     const token = localStorage.getItem('token');
@@ -32,7 +45,7 @@
       app.$getRequestAccessKey('ebook', bookId),
       app.$getClientId(),
     ]);
-    if (!dsac) throw new Error('无资源访问密钥，请先在网页上打开本书任意章节');
+    if (!dsac) throw new Error('获取访问密钥失败，请刷新页面后重试');
     return { authorization: `Bearer ${token}`, dsac, cid };
   }
 
@@ -192,11 +205,14 @@
     ui.btn.textContent = '下载中...';
 
     try {
+      const token = localStorage.getItem('token');
+      if (!token) throw new Error('未登录，请先登录账号');
+
       const title = await getBookTitle();
       ui.setStatus(`《${title}》\n正在初始化...`);
 
-      // 验证登录状态
-      await getHeaders(bookId);
+      // 检查登录 & 自动解锁
+      await ensureUnlocked(bookId, ui);
 
       const chapters = [];
       let page = 1;
