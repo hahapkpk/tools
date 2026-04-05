@@ -4,6 +4,8 @@
 // @version      1.1.0
 // @description  在 leshu8.com 书籍阅读页添加「下载本书」按钮，将整本书导出为带样式的 HTML 文件
 // @author       hahapkpk
+// @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/leshu8-downloader.user.js
+// @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/leshu8-downloader.user.js
 // @match        https://leshu8.com/book-chapter*
 // @run-at       document-idle
 // @grant        none
