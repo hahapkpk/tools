@@ -354,49 +354,52 @@
     }
 
     async function downloadIcon(url, label) {
-      const filename = label.replace(/\s+/g, '-');
+      // 去掉原始扩展名，避免 "Favicon.ico.png" 双扩展名被 Windows 误识别
+      const filename = label.replace(/\s+/g, '-').replace(/\.[a-z0-9]+$/i, '');
 
-      // 方法1：fetch blob → 若是 ICO/非 PNG 则 Canvas 转 PNG，否则直接下载
-      try {
-        const res = await fetch(url);
-        const blob = await res.blob();
-        const isIco = blob.type.includes('icon') || blob.type.includes('ico') || url.toLowerCase().endsWith('.ico');
-        const isSvg = blob.type.includes('svg');
-
-        if (isSvg) {
-          // SVG 保持原格式
-          triggerDownload(URL.createObjectURL(blob), `${filename}.svg`);
-          return;
-        }
-        if (isIco) {
-          // ICO → Canvas → PNG
+      // 尝试获取 blob 并转 PNG 的通用函数
+      async function tryFetchAndConvert(fetchUrl) {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 8000);
+        try {
+          const res = await fetch(fetchUrl, { signal: ctrl.signal });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const blob = await res.blob();
+          if (blob.type.includes('svg')) return { blob, ext: 'svg' };
           const pngBlob = await blobToCanvasPng(blob);
-          triggerDownload(URL.createObjectURL(pngBlob), `${filename}.png`);
-          return;
+          return { blob: pngBlob, ext: 'png' };
+        } finally {
+          clearTimeout(timer);
         }
-        // 其他（png/jpg/webp 等）→ Canvas → PNG，统一格式
-        const pngBlob = await blobToCanvasPng(blob);
-        triggerDownload(URL.createObjectURL(pngBlob), `${filename}.png`);
+      }
+
+      // 方法1：直接 fetch
+      try {
+        const { blob, ext } = await tryFetchAndConvert(url);
+        triggerDownload(URL.createObjectURL(blob), `${filename}.${ext}`);
         return;
       } catch {}
 
       // 方法2：crossOrigin img → Canvas → PNG
       try {
-        const blob = await urlToCanvasPng(url);
-        triggerDownload(URL.createObjectURL(blob), `${filename}.png`);
-        return;
-      } catch {}
-
-      // 方法3：CORS 代理绕过限制 → Canvas → PNG（适用 ICO 等无 CORS 头的图标）
-      try {
-        const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(url)}`;
-        const res = await fetch(proxyUrl);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const blob = await res.blob();
-        const pngBlob = await blobToCanvasPng(blob);
+        const pngBlob = await urlToCanvasPng(url);
         triggerDownload(URL.createObjectURL(pngBlob), `${filename}.png`);
         return;
       } catch {}
+
+      // 方法3：依次尝试多个 CORS 代理
+      const proxies = [
+        `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+        `https://thingproxy.freeboard.io/fetch/${url}`,
+      ];
+      for (const proxyUrl of proxies) {
+        try {
+          const { blob, ext } = await tryFetchAndConvert(proxyUrl);
+          triggerDownload(URL.createObjectURL(blob), `${filename}.${ext}`);
+          return;
+        } catch {}
+      }
 
       // 最终兜底：弹出预览框
       showSaveModal(url);
