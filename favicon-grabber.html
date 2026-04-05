@@ -387,7 +387,18 @@
         return;
       } catch {}
 
-      // 方法3：弹出大图预览，右键另存为（不跳新页面）
+      // 方法3：CORS 代理绕过限制 → Canvas → PNG（适用 ICO 等无 CORS 头的图标）
+      try {
+        const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(url)}`;
+        const res = await fetch(proxyUrl);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        const pngBlob = await blobToCanvasPng(blob);
+        triggerDownload(URL.createObjectURL(pngBlob), `${filename}.png`);
+        return;
+      } catch {}
+
+      // 最终兜底：弹出预览框
       showSaveModal(url);
     }
 
