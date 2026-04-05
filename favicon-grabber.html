@@ -361,9 +361,44 @@
         const ext = url.split('.').pop().split('?')[0].toLowerCase() || 'png';
         triggerDownload(URL.createObjectURL(blob), `${filename}.${ext}`);
       } catch {
-        // CORS 限制时直接用 <a> 打开
-        window.open(url, '_blank');
+        // CORS 限制时弹出预览框，右键另存为
+        showSaveModal(url);
       }
+    }
+
+    function showSaveModal(url) {
+      const overlay = document.createElement('div');
+      overlay.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,0.8);
+        display:flex;align-items:center;justify-content:center;z-index:9999;`;
+      overlay.onclick = () => overlay.remove();
+
+      const box = document.createElement('div');
+      box.style.cssText = `background:#1a1a1a;border-radius:16px;padding:24px 28px;
+        display:flex;flex-direction:column;align-items:center;gap:14px;max-width:320px;`;
+      box.onclick = e => e.stopPropagation();
+
+      const title = document.createElement('div');
+      title.textContent = '右键图片 → 图片另存为';
+      title.style.cssText = 'font-size:15px;font-weight:600;color:#fff;';
+
+      const img = document.createElement('img');
+      img.src = url;
+      img.style.cssText = `max-width:180px;max-height:180px;border-radius:12px;
+        cursor:context-menu;border:1px solid #333;`;
+
+      const tip = document.createElement('div');
+      tip.textContent = '该图标不支持直接下载（无 CORS 头），右键图片选择"图片另存为"保存';
+      tip.style.cssText = 'font-size:12px;color:#555;text-align:center;line-height:1.6;';
+
+      const closeBtn = document.createElement('button');
+      closeBtn.textContent = '关闭';
+      closeBtn.style.cssText = `padding:7px 22px;border-radius:8px;border:1px solid #333;
+        background:#222;color:#aaa;font-size:13px;cursor:pointer;`;
+      closeBtn.onclick = () => overlay.remove();
+
+      box.append(title, img, tip, closeBtn);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
     }
 
     function showStatus(msg) {
