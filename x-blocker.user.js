@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Blocker - 元素选取屏蔽器
 // @namespace    http://tampermonkey.net/
-// @version      2.1.0
+// @version      2.2.0
 // @description  可视化选取并屏蔽 X/Twitter 页面上不想要的区域（支持多项选择+预览确认）
 // @author       You
 // @match        https://x.com/*
@@ -318,8 +318,8 @@
     function updateToggleState(visible) {
         const toggleLabel = document.getElementById('xb-toggle-label');
         const toggleSwitch = document.getElementById('xb-toggle-switch');
-        if (toggleLabel) toggleLabel.textContent = visible ? '界面已显示' : '界面已隐藏';
-        if (toggleSwitch) toggleSwitch.classList.toggle('on', visible);
+        if (toggleLabel) toggleLabel.textContent = visible ? '显示面板' : '隐藏面板';
+        if (toggleSwitch) { toggleSwitch.checked = visible; }
     }
 
     function createPanel() {
@@ -365,13 +365,15 @@
                 ${state.confirmedRules.length === 0 ? '<p class="xb-empty">暂无屏蔽规则<br>使用「选取」功能添加</p>' : ''}
             </div>
 
-            <!-- 底部：显示/隐藏切换开关 -->
+            <!-- 底部：显示/隐藏切换开关 (Tampermonkey 风格) -->
             <div class="xb-footer">
                 <div class="xb-toggle-wrap" id="xb-toggle-container">
-                    <span class="xb-toggle-label" id="xb-toggle-label">界面已显示</span>
-                    <label class="xb-switch">
+                    <label class="xb-tm-switch">
                         <input type="checkbox" id="xb-toggle-switch" checked>
-                        <span class="xb-slider"></span>
+                        <span class="xb-tm-slider">
+                            <span class="xb-tm-knob"></span>
+                        </span>
+                        <span class="xb-toggle-label" id="xb-toggle-label">显示面板</span>
                     </label>
                 </div>
             </div>
@@ -513,64 +515,75 @@
             .xb-empty { text-align:center; color:#8899a6; padding:30px 0; font-size:13px; line-height:1.6; }
             .xb-hidden { display:none!important; }
 
-            /* ===== 底部切换区域 ===== */
+            /* ===== 底部切换区域 (Tampermonkey 风格) ===== */
             .xb-footer {
-                padding: 10px 16px 14px;
+                padding: 12px 16px 14px;
                 border-top: 1px solid #38444d;
                 flex-shrink: 0;
             }
             .xb-toggle-wrap {
                 display: flex;
                 align-items: center;
-                justify-content: space-between;
+                justify-content: center;
                 gap: 10px;
             }
+            
+            /* TM 风格开关容器 */
+            .xb-tm-switch {
+                display: flex !important;
+                align-items: center;
+                gap: 10px;
+                cursor: pointer;
+                user-select: none;
+                -webkit-user-select: none;
+                padding: 2px 0;
+            }
+            .xb-tm-switch input { display: none; }
+
+            /* 圆角胶囊轨道 */
+            .xb-tm-slider {
+                position: relative;
+                width: 44px;
+                height: 24px;
+                background-color: #536471;
+                border-radius: 9999px;
+                transition: background-color 0.25s ease;
+                flex-shrink: 0;
+            }
+
+            /* 启用状态：绿色背景 */
+            .xb-tm-switch input:checked + .xb-tm-slider {
+                background-color: #00ba7c;
+                box-shadow: inset 0 0 0 1px rgba(0,186,124,0.3);
+            }
+
+            /* 圆形滑块 */
+            .xb-tm-knob {
+                position: absolute;
+                top: 2px;
+                left: 2px;
+                width: 20px;
+                height: 20px;
+                background: #ffffff;
+                border-radius: 50%;
+                transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+                box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+            }
+
+            /* 启用状态：滑块滑到右边 */
+            .xb-tm-switch input:checked + .xb-tm-slider .xb-tm-knob {
+                transform: translateX(20px);
+            }
+
+            /* 标签文字 */
             .xb-toggle-label {
-                font-size: 12px;
+                font-size: 13px;
                 color: #8899a6;
                 font-weight: 500;
                 transition: color 0.2s;
             }
-            
-            /* Switch 开关样式 - 类似 iOS 风格 */
-            .xb-switch {
-                position: relative;
-                display: inline-block;
-                width: 44px;
-                height: 24px;
-                flex-shrink: 0;
-            }
-            .xb-switch input { opacity:0; width:0; height:0; }
-            .xb-slider {
-                position: absolute;
-                cursor: pointer;
-                top: 0; left: 0; right: 0; bottom: 0;
-                background-color: #536471;
-                border-radius: 9999px;
-                transition: all 0.3s ease;
-            }
-            .xb-slider:before {
-                content: "";
-                position: absolute;
-                height: 18px; width: 18px;
-                left: 3px; bottom: 3px;
-                background-color: white;
-                border-radius: 50%;
-                transition: all 0.3s ease;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-            }
-            .xb-slider.round { border-radius: 24px; }
-            .xb-switch input:checked + .xb-slider { background-color: #1d9bf0; }
-            .xb-switch input:checked + .xb-slider:before {
-                transform: translateX(20px);
-            }
-            .xb-switch input:checked + .xb-slider {
-                box-shadow: 0 0 8px rgba(29,155,240,0.3);
-            }
-            /* hover 效果 */
-            .xb-toggle-wrap:hover .xb-toggle-label { color: #e7e9ea; }
-            .xb-toggle-wrap { cursor: pointer; }
-            .xb-toggle-wrap:active .xb-slider:before { width: 22px; }
+            .xb-tm-switch:hover .xb-toggle-label { color: #e7e9ea; }
+            .xb-tm-switch:active .xb-tm-knob { width: 22px; }
 
             /* ===== 浮动按钮 ===== */
             #xb-floating-btn {
