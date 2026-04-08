@@ -66,8 +66,8 @@
   // ========== 模拟学习进度上报 ==========
 
   async function studyOneLesson(videoId, detailId, year, durationSeconds, onProgress) {
-    // 分多次上报，模拟正常观看行为，每次推进 10%，间隔 2 秒
-    const steps = 10;
+    // 分 2 次上报（50% 和 100%），间隔 2 秒
+    const steps = 2;
     for (let i = 1; i <= steps; i++) {
       if (stopFlag) return;
 
@@ -86,6 +86,7 @@
       if (i < steps) await sleep(2000);
     }
   }
+
 
   // ========== UI 面板 ==========
 
