@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Blocker - 元素选取屏蔽器
 // @namespace    http://tampermonkey.net/
-// @version      2.3.0
+// @version      2.4.0
 // @description  可视化选取并屏蔽 X/Twitter 页面上不想要的区域（支持多项选择+预览确认）
 // @author       You
 // @match        https://x.com/*
@@ -298,7 +298,7 @@
         updateToggleState(true);
     }
 
-    // 隐藏面板，显示浮动按钮
+    // 隐藏面板和浮动按钮
     function hidePanel() {
         if (panel) {
             panel.style.transition = 'all 0.2s ease-in';
@@ -310,7 +310,7 @@
                 panel.style.transform = '';
             }, 200);
         }
-        if (floatingBtn) floatingBtn.style.display = 'flex';
+        if (floatingBtn) floatingBtn.style.display = 'none';  // 同时隐藏浮动按钮
         savePanelVisibility(false);
         updateToggleState(false);
         exitPickingMode();
@@ -854,7 +854,7 @@
         document.addEventListener('click', onPageClick, true);
         document.addEventListener('mouseover', onMouseOver, true);
         document.addEventListener('keydown', onKeydown, true);
-        showNotification('🛡️ X 屏蔽选取器已就绪', 'success');
+        // 静默就绪，不弹通知
     }
 
     if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', init);
