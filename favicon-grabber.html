@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Favicon Grabber</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎯</text></svg>">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f0f0f;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 48px 16px;
+    }
+    h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
+    .subtitle { color: #888; font-size: 14px; margin-bottom: 32px; }
+
+    .input-row {
+      display: flex;
+      gap: 8px;
+      width: 100%;
+      max-width: 640px;
+      margin-bottom: 32px;
+    }
+    input[type="text"] {
+      flex: 1;
+      padding: 12px 16px;
+      border-radius: 10px;
+      border: 1px solid #333;
+      background: #1a1a1a;
+      color: #fff;
+      font-size: 15px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input[type="text"]:focus { border-color: #555; }
+    button.grab-btn {
+      padding: 12px 24px;
+      border-radius: 10px;
+      border: none;
+      background: #3b82f6;
+      color: #fff;
+      font-size: 15px;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.2s;
+    }
+    button.grab-btn:hover { background: #2563eb; }
+
+    #results {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 16px;
+      width: 100%;
+      max-width: 800px;
+    }
+
+    .card {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 14px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      position: relative;
+    }
+    .card .label {
+      font-size: 12px;
+      color: #ccc;
+      text-align: center;
+      font-weight: 500;
+    }
+    .card .group-badge {
+      font-size: 10px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 4px;
+      padding: 1px 6px;
+      color: #64748b;
+    }
+    .card .size-badge {
+      font-size: 11px;
+      background: #2a2a2a;
+      border-radius: 6px;
+      padding: 2px 8px;
+      color: #aaa;
+    }
+    .icon-wrap {
+      width: 80px;
+      height: 80px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #222;
+      border-radius: 16px;
+      overflow: hidden;
+    }
+    .icon-wrap img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+    }
+    .icon-wrap .broken {
+      font-size: 28px;
+      opacity: 0.3;
+    }
+    .card .actions {
+      display: flex;
+      gap: 8px;
+    }
+    .card button {
+      padding: 6px 14px;
+      border-radius: 8px;
+      border: 1px solid #333;
+      background: #222;
+      color: #ccc;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .card button:hover { background: #2a2a2a; color: #fff; border-color: #444; }
+    .card button.primary { background: #3b82f6; border-color: #3b82f6; color: #fff; }
+    .card button.primary:hover { background: #2563eb; }
+
+    .status { color: #888; font-size: 14px; text-align: center; }
+    .tip {
+      font-size: 13px;
+      color: #555;
+      margin-top: 24px;
+      text-align: center;
+      line-height: 1.6;
+    }
+    .ddg-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 12px;
+      padding: 8px 18px;
+      border-radius: 8px;
+      border: 1px solid #2a2a2a;
+      background: #1a1a1a;
+      color: #888;
+      font-size: 13px;
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.15s;
+    }
+    .ddg-btn:hover { border-color: #444; color: #ccc; background: #222; }
+  </style>
+</head>
+<body>
+  <h1>🎯 Favicon Grabber</h1>
+  <p class="subtitle">粘贴网址，自动获取最高清图标</p>
+
+  <div class="input-row">
+    <input type="text" id="urlInput" placeholder="https://example.com" />
+    <button class="grab-btn" onclick="grab()">获取图标</button>
+  </div>
+  <div id="ddgLink"></div>
+
+  <div id="results"></div>
+
+  <p class="tip">
+    网站直链：SVG · Apple Touch Icon · Favicon PNG/ICO<br>
+    第三方：Clearbit Logo · gstatic · DuckDuckGo · Yandex<br>
+    自动解析 PWA manifest.json 追加高清图标
+  </p>
+
+  <script>
+    const urlInput = document.getElementById('urlInput');
+    urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') grab(); });
+
+    // 自动粘贴处理（仅在输入框未聚焦时拦截，避免重复）
+    document.addEventListener('paste', e => {
+      if (document.activeElement === urlInput) return; // 输入框自己处理
+      const text = e.clipboardData.getData('text').trim();
+      if (text.startsWith('http')) {
+        e.preventDefault();
+        urlInput.value = text;
+        grab();
+      }
+    });
+
+    // 输入框粘贴后自动触发
+    urlInput.addEventListener('paste', e => {
+      setTimeout(() => {
+        const text = urlInput.value.trim();
+        if (text.startsWith('http')) grab();
+      }, 0);
+    });
+
+    function normalizeUrl(raw) {
+      raw = raw.trim();
+      if (!raw.startsWith('http')) raw = 'https://' + raw;
+      try {
+        const u = new URL(raw);
+        return u.origin; // 只取 origin
+      } catch {
+        return null;
+      }
+    }
+
+    function getDomain(raw) {
+      try {
+        return new URL(raw.startsWith('http') ? raw : 'https://' + raw).hostname;
+      } catch { return raw; }
+    }
+
+    async function grab() {
+      const raw = urlInput.value.trim();
+      if (!raw) return;
+
+      const origin = normalizeUrl(raw);
+      const domain = getDomain(raw);
+      if (!origin) {
+        showStatus('❌ 无效的网址');
+        return;
+      }
+
+      const container = document.getElementById('results');
+      container.innerHTML = '<p class="status">正在获取...</p>';
+
+      // ── 静态固定来源 ──────────────────────────────────────
+      const staticSources = [
+        // 直接来自网站
+        { label: 'SVG 矢量图标',            url: `${origin}/favicon.svg`,                   size: 'SVG',     group: '网站直链' },
+        { label: 'Apple Touch Icon',         url: `${origin}/apple-touch-icon.png`,          size: '180×180', group: '网站直链' },
+        { label: 'Apple Touch Icon 预合成',  url: `${origin}/apple-touch-icon-precomposed.png`, size: '180×180', group: '网站直链' },
+        { label: 'Favicon 32px',             url: `${origin}/favicon-32x32.png`,             size: '32×32',   group: '网站直链' },
+        { label: 'Favicon 96px',             url: `${origin}/favicon-96x96.png`,             size: '96×96',   group: '网站直链' },
+        { label: 'Favicon.ico',              url: `${origin}/favicon.ico`,                   size: 'ICO',     group: '网站直链' },
+        // 第三方服务
+        { label: 'Clearbit Logo',            url: `https://logo.clearbit.com/${domain}`,     size: '~800px',  group: '第三方', alwaysShow: true },
+        { label: 'gstatic 256px',            url: `https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=${encodeURIComponent(origin)}&size=256`, size: '256×256', group: '第三方', alwaysShow: true },
+        { label: 'gstatic 64px',             url: `https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=${encodeURIComponent(origin)}&size=64`,  size: '64×64',   group: '第三方', alwaysShow: true },
+        { label: 'DuckDuckGo',               url: `https://icons.duckduckgo.com/ip3/${domain}.ico`, size: 'ICO', group: '第三方', alwaysShow: true },
+        { label: 'Yandex 32px',              url: `https://favicon.yandex.net/favicon/v2/https://${domain}?size=32&stub=1`, size: '32×32', group: '第三方', alwaysShow: true },
+      ];
+
+      container.innerHTML = '';
+      staticSources.forEach(src => container.appendChild(createCard(src)));
+
+      // ── 动态解析 manifest（PWA 图标，异步追加）────────────
+      fetchManifestIcons(origin).then(icons => {
+        icons.forEach(src => container.appendChild(createCard(src)));
+      });
+
+      // ── DuckDuckGo 搜索跳转链接 ────────────────────────────
+      const ddgDiv = document.getElementById('ddgLink');
+      const ddgQuery = encodeURIComponent(`${domain} logo icon png`);
+      ddgDiv.innerHTML = `<a class="ddg-btn" href="https://duckduckgo.com/?q=${ddgQuery}&iax=images&ia=images" target="_blank">🔍 在 DuckDuckGo 图片搜索更多图标</a>`;
+    }
+
+    // 尝试常见 manifest 路径，解析出 PWA 图标列表
+    async function fetchManifestIcons(origin) {
+      const paths = ['/manifest.json', '/site.webmanifest', '/manifest.webmanifest', '/app.webmanifest'];
+      for (const path of paths) {
+        try {
+          const res = await fetch(origin + path, { signal: AbortSignal.timeout(6000) });
+          if (!res.ok) continue;
+          const data = await res.json();
+          if (!Array.isArray(data.icons) || data.icons.length === 0) continue;
+          // 按尺寸降序排列，取 PNG/SVG 类型
+          return data.icons
+            .filter(ic => ic.src && (!ic.type || ic.type.includes('image')))
+            .sort((a, b) => {
+              const sizeOf = s => parseInt((s?.sizes || '0').split('x')[0]) || 0;
+              return sizeOf(b) - sizeOf(a);
+            })
+            .map(ic => ({
+              label: `PWA ${ic.sizes || ic.type || '图标'}`,
+              url: ic.src.startsWith('http') ? ic.src : origin + ic.src,
+              size: ic.sizes || 'PWA',
+              group: 'PWA manifest'
+            }));
+        } catch {}
+      }
+      return [];
+    }
+
+    function createCard(src) {
+      const card = document.createElement('div');
+      card.className = 'card';
+
+      const label = document.createElement('div');
+      label.className = 'label';
+      label.textContent = src.label;
+
+      const groupBadge = document.createElement('span');
+      groupBadge.className = 'group-badge';
+      groupBadge.textContent = src.group || '';
+
+      const badge = document.createElement('span');
+      badge.className = 'size-badge';
+      badge.textContent = src.size;
+
+      const wrap = document.createElement('div');
+      wrap.className = 'icon-wrap';
+
+      const img = document.createElement('img');
+      img.src = src.url;
+      // 不设 crossOrigin，避免无 CORS 头的网站图片无法预览
+
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+
+      const copyBtn = document.createElement('button');
+      copyBtn.textContent = '复制链接';
+      copyBtn.onclick = () => {
+        navigator.clipboard.writeText(src.url);
+        copyBtn.textContent = '✓ 已复制';
+        setTimeout(() => copyBtn.textContent = '复制链接', 1500);
+      };
+
+      const dlBtn = document.createElement('button');
+      dlBtn.className = 'primary';
+      dlBtn.textContent = '下载';
+      dlBtn.onclick = () => downloadIcon(src.url, src.label);
+
+      actions.appendChild(copyBtn);
+      actions.appendChild(dlBtn);
+
+      const appendCard = () => {
+        card.appendChild(label);
+        if (src.group) card.appendChild(groupBadge);
+        card.appendChild(badge);
+        card.appendChild(wrap);
+        card.appendChild(actions);
+      };
+
+      img.onload = () => {
+        wrap.appendChild(img);
+        appendCard();
+      };
+
+      img.onerror = () => {
+        if (src.alwaysShow) {
+          wrap.innerHTML = '<span class="broken">🔗</span>';
+          appendCard();
+        } else {
+          card.style.display = 'none';
+        }
+      };
+
+      return card;
+    }
+
+    async function downloadIcon(url, label) {
+      const filename = label.replace(/\s+/g, '-');
+      try {
+        const res = await fetch(url);
+        const blob = await res.blob();
+        const ext = url.split('.').pop().split('?')[0].toLowerCase() || 'png';
+        triggerDownload(URL.createObjectURL(blob), `${filename}.${ext}`);
+      } catch {
+        // CORS 限制时弹出预览框，右键另存为
+        showSaveModal(url);
+      }
+    }
+
+    function showSaveModal(url) {
+      const overlay = document.createElement('div');
+      overlay.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,0.8);
+        display:flex;align-items:center;justify-content:center;z-index:9999;`;
+      overlay.onclick = () => overlay.remove();
+
+      const box = document.createElement('div');
+      box.style.cssText = `background:#1a1a1a;border-radius:16px;padding:24px 28px;
+        display:flex;flex-direction:column;align-items:center;gap:14px;max-width:320px;`;
+      box.onclick = e => e.stopPropagation();
+
+      const title = document.createElement('div');
+      title.textContent = '右键图片 → 图片另存为';
+      title.style.cssText = 'font-size:15px;font-weight:600;color:#fff;';
+
+      const img = document.createElement('img');
+      img.src = url;
+      img.style.cssText = `max-width:180px;max-height:180px;border-radius:12px;
+        cursor:context-menu;border:1px solid #333;`;
+
+      const tip = document.createElement('div');
+      tip.textContent = '该图标不支持直接下载（无 CORS 头），右键图片选择"图片另存为"保存';
+      tip.style.cssText = 'font-size:12px;color:#555;text-align:center;line-height:1.6;';
+
+      const closeBtn = document.createElement('button');
+      closeBtn.textContent = '关闭';
+      closeBtn.style.cssText = `padding:7px 22px;border-radius:8px;border:1px solid #333;
+        background:#222;color:#aaa;font-size:13px;cursor:pointer;`;
+      closeBtn.onclick = () => overlay.remove();
+
+      box.append(title, img, tip, closeBtn);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+    }
+
+    function showStatus(msg) {
+      document.getElementById('results').innerHTML = `<p class="status">${msg}</p>`;
+    }
+  </script>
+</body>
+</html>
