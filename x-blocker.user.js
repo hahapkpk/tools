@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Blocker - 元素选取屏蔽器
 // @namespace    http://tampermonkey.net/
-// @version      2.2.0
+// @version      2.3.0
 // @description  可视化选取并屏蔽 X/Twitter 页面上不想要的区域（支持多项选择+预览确认）
 // @author       You
 // @match        https://x.com/*
@@ -10,6 +10,8 @@
 // @grant        GM_getValue
 // @grant        GM_deleteValue
 // @grant        GM_listValues
+// @grant        GM_registerMenuCommand
+// @grant        GM_unregisterMenuCommand
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -797,12 +799,58 @@
         notificationTimer=setTimeout(()=>n.classList.remove('show'),2200);
     }
 
+    // ======================== Tampermonkey 菜单命令 ========================
+    let menuCommandIds = [];
+
+    function registerMenuCommands() {
+        // 显示/隐藏面板
+        const toggleId = GM_registerMenuCommand('👁️ 显示/隐藏面板', () => {
+            if (state.panelVisible) hidePanel();
+            else showPanel();
+        });
+        menuCommandIds.push(toggleId);
+
+        // 开始选取模式
+        const pickId = GM_registerMenuCommand('🎯 选取元素', () => {
+            if (!state.panelVisible) showPanel();
+            setTimeout(() => {
+                if (!state.pickingMode) togglePickingMode();
+            }, 300);
+        });
+        menuCommandIds.push(pickId);
+
+        // 查看规则数量
+        const rulesId = GM_registerMenuCommand(`📋 屏蔽规则 (${state.confirmedRules.length} 条)`, () => {
+            if (!state.panelVisible) showPanel();
+            setTimeout(() => switchTab('rules'), 300);
+        });
+        menuCommandIds.push(rulesId);
+
+        // 清除所有规则
+        const clearId = GM_registerMenuCommand('🗑️ 清除所有规则', () => {
+            if (confirm('确定要清除所有屏蔽规则吗？')) {
+                state.confirmedRules.forEach(rule => {
+                    try { document.querySelectorAll(rule.selector).forEach(el => { el.removeAttribute('data-xb-hidden'); el.style.removeProperty('display'); }); } catch(e){}
+                });
+                state.confirmedRules = []; saveRules(); updateRuleList();
+                showNotification('🗑️ 已清空所有屏蔽规则', 'info');
+            }
+        });
+        menuCommandIds.push(clearId);
+    }
+
+    function unregisterMenuCommands() {
+        menuCommandIds.forEach(id => { try { GM_unregisterMenuCommand(id); } catch(e){} });
+        menuCommandIds = [];
+    }
+
     // ======================== 初始化 ========================
     function init() {
         loadRules();
         createFloatingButton();
         createPanel();
         observeNavigation();
+        registerMenuCommands();  // 注册 Tampermonkey 菜单命令
         document.addEventListener('click', onPageClick, true);
         document.addEventListener('mouseover', onMouseOver, true);
         document.addEventListener('keydown', onKeydown, true);
