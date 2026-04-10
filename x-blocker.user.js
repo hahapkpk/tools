@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Blocker - 元素选取屏蔽器
 // @namespace    http://tampermonkey.net/
-// @version      2.4.0
+// @version      3.0.0
 // @description  可视化选取并屏蔽 X/Twitter 页面上不想要的区域（支持多项选择+预览确认）
 // @author       You
 // @match        https://x.com/*
@@ -44,56 +44,231 @@
         GM_setValue('xb_panel_visible', visible);
     }
 
-    // 应用所有已确认的屏蔽规则
+    // 应用所有已确认的屏蔽规则（支持选择器降级）
     function applyAllRules() {
         document.querySelectorAll('[data-xb-hidden]').forEach(el => {
             el.removeAttribute('data-xb-hidden');
             el.style.removeProperty('display');
         });
+        
         state.confirmedRules.forEach(rule => {
             if (rule.disabled) return;
-            try {
-                document.querySelectorAll(rule.selector).forEach(el => {
-                    el.setAttribute('data-xb-hidden', 'true');
-                    el.style.setProperty('display', 'none', 'important');
-                });
-            } catch(e) {}
+            
+            // 尝试主选择器
+            let found = tryApplySelector(rule.selector);
+            if (found > 0) return;  // 主选择器有效，不需要降级
+            
+            // 主选择器失败，尝试备选选择器
+            const fallbacks = rule.fallbacks || [];
+            for (const fb of fallbacks) {
+                found = tryApplySelector(fb);
+                if (found > 0) {
+                    console.log(`[X Blocker] 规则 "${rule.semanticLabel || rule.selector}" 主选择器失效，备选成功: ${fb}`);
+                    return;
+                }
+            }
+            
+            // 全部失败，标记规则可能需要更新
+            if (!rule._warned && !rule.stable) {
+                rule._warned = true;
+                console.warn(`[X Blocker] 规则可能失效: ${rule.selector} — 建议重新选取`);
+            }
         });
     }
+    
+    function tryApplySelector(selector) {
+        try {
+            const els = document.querySelectorAll(selector);
+            els.forEach(el => {
+                el.setAttribute('data-xb-hidden', 'true');
+                el.style.setProperty('display', 'none', 'important');
+            });
+            return els.length;
+        } catch(e) { return 0; }
+    }
 
-    // ======================== CSS 选择器生成 ========================
+    // ======================== CSS 选择器生成 (v3 - 稳定属性优先) ========================
+    
+    // X.com 的稳定属性优先级列表（从高到低）
+    const STABLE_ATTRS = ['data-testid', 'role', 'aria-label', 'data-name', 'href', 'name'];
+    
+    // 已知的 X.com 语义化选择器模式
+    const X_SEMANTIC_PATTERNS = [
+        // 导航区域
+        { test: el => el.closest('[role="navigation"]') || el.getAttribute('role') === 'navigation', label: '导航栏' },
+        { test: el => el.querySelector('a[href="/home"]') || el.querySelector('a[href="/explore"]') || el.querySelector('a[href="/notifications"]') || el.querySelector('a[href="/messages"]'), label: '导航链接区' },
+        { test: el => el.querySelector('[data-testid="SideNav_NewTweet_Button"]')?.closest('nav')?.contains(el), label: '发推按钮区域' },
+        // 侧边栏/趋势等
+        { test: el => {
+            const labels = ['趋势', 'Trends', '为你推荐', 'Who to follow', '可能感兴趣的人', '搜索 Twitter', 'Search and explore', 'Premium', '订阅'];
+            return Array.from(el.querySelectorAll('*')).some(c => labels.some(l => c.textContent?.trim() === l));
+        }, label: '侧边栏模块' },
+        // 底部栏
+        { test: el => {
+            const footerLinks = ['服务条款', 'Terms', '隐私政策', 'Privacy', 'Cookie', '帮助中心', 'Help Center', '关于', 'About', '状态', 'Status', '广告', 'Ads'];
+            return Array.from(el.querySelectorAll('*')).some(c => footerLinks.some(l => c.textContent?.trim().includes(l)));
+        }, label: '页脚' },
+    ];
+
     function generateSelector(el) {
-        if (el.id) return `#${CSS.escape(el.id)}`;
+        // 1. 如果有 ID，直接用（最稳定）
+        if (el.id && !el.id.startsWith('__')) return { primary: `#${CSS.escape(el.id)}`, stable: true };
+        
+        const selectors = [];
+        
+        // 2. 尝试生成基于稳定属性的选择器
+        const stableSelector = tryGenerateStableSelector(el);
+        if (stableSelector) selectors.push({ sel: stableSelector, stable: true });
+        
+        // 3. 生成基于类名的选择器（作为备选）
+        const classSelector = generateClassBasedSelector(el);
+        if (classSelector) selectors.push({ sel: classSelector, stable: false });
+        
+        // 4. 生成 :nth-child 路径选择器（最不稳定的最后手段）
+        const nthSelector = generateNthPathSelector(el);
+        if (nthSelector) selectors.push({ sel: nthSelector, stable: false });
+        
+        if (selectors.length === 0) return { primary: el.tagName.toLowerCase(), stable: false, fallbacks: [] };
+        
+        return {
+            primary: selectors[0].sel,
+            stable: selectors[0].stable,
+            fallbacks: selectors.slice(1).map(s => s.sel),
+            semanticLabel: detectSemanticLabel(el)
+        };
+    }
+    
+    // 尝试用稳定属性生成选择器
+    function tryGenerateStableSelector(el) {
+        // 检查元素自身是否有稳定属性
+        for (const attr of STABLE_ATTRS) {
+            const val = el.getAttribute(attr);
+            if (!val) continue;
+            
+            // data-testid 是最稳定的
+            if (attr === 'data-testid' && val) {
+                return `[${attr}="${CSS.escape(val)}"]`;
+            }
+            // role 属性也很稳定
+            if (attr === 'role' && val) {
+                return `${el.tagName.toLowerCase()}[${attr}="${CSS.escape(val)}"]`;
+            }
+            // aria-label
+            if (attr === 'aria-label' && val.length > 0 && val.length < 100) {
+                return `${el.tagName.toLowerCase()}[${attr}="${CSS.escape(val)}"]`;
+            }
+            // href 匹配（只取路径部分）
+            if (attr === 'href' && val.startsWith('/')) {
+                return `${el.tagName.toLowerCase()}[${attr}^="${val.split('?')[0]}"]`;
+            }
+        }
+        
+        // 尝试向上查找有 data-testid 的祖先 + 相对路径
+        const pathWithStable = buildPathWithStableAncestor(el);
+        if (pathWithStable) return pathWithStable;
+        
+        return null;
+    }
+    
+    // 从最近的稳定祖先开始构建路径
+    function buildPathWithStableAncestor(el) {
+        let current = el;
+        const pathToEl = [];
+        let foundStable = null;
+        let stablePart = '';
+        
+        // 先往上找稳定锚点（最多5层）
+        while (current && current !== document.body && pathToEl.length < 5) {
+            for (const attr of STABLE_ATTRS) {
+                if (attr === 'data-testid' && current.getAttribute(attr)) {
+                    foundStable = current;
+                    stablePart = `[${attr}="${CSS.escape(current.getAttribute(attr))}"]`;
+                    break;
+                }
+                if (attr === 'role' && current.getAttribute(attr)?.match(/^(navigation|main|complementary|banner|contentinfo)$/i)) {
+                    foundStable = current;
+                    stablePart = `${current.tagName.toLowerCase()}[${attr}="${current.getAttribute(attr)}"]`;
+                    break;
+                }
+            }
+            if (foundStable) break;
+            
+            // 记录到该元素的路径
+            const parent = current.parentElement;
+            if (parent) {
+                const siblings = Array.from(parent.children).filter(c => c.tagName === current.tagName);
+                let step = current.tagName.toLowerCase();
+                if (siblings.length > 1) step += `:nth-child(${indexOfInParent(current)})`;
+                pathToEl.unshift(step);
+            }
+            current = parent;
+        }
+        
+        if (foundStable) {
+            const remaining = pathToEl.join(' > ');
+            return remaining ? `${stablePart} > ${remaining}` : stablePart;
+        }
+        
+        return null;
+    }
+    
+    // 基于类的选择器生成（原有逻辑，精简版）
+    function generateClassBasedSelector(el) {
         const path = [];
         let current = el;
-        while (current && current !== document.body) {
+        while (current && current !== document.body && path.length < 6) {
             let selector = current.tagName.toLowerCase();
-            if (current.id) { selector = `#${CSS.escape(current.id)}`; path.unshift(selector); break; }
+            // 只用前2个非通用类名
             if (current.className && typeof current.className === 'string') {
-                const classes = current.className.trim().split(/\s+/).filter(c => c.length > 0 && !c.startsWith('xb-') && c !== 'highlighted');
+                const classes = current.className.trim().split(/\s+/).filter(c => 
+                    c.length > 0 && 
+                    !c.startsWith('xb-') && 
+                    !c.startsWith('css-') &&  // 排除动态哈希类名！
+                    !c.startsWith('r-') &&     // 排除 r- 开头的动态样式类
+                    c !== 'highlighted'
+                );
                 if (classes.length > 0) selector += '.' + classes.slice(0, 2).map(c => CSS.escape(c)).join('.');
             }
             const parent = current.parentElement;
             if (parent) {
                 const siblings = Array.from(parent.children).filter(c => c.tagName === current.tagName);
-                if (siblings.length > 1) selector += `:nth-child(${siblings.indexOf(current) + 1})`;
+                if (siblings.length > 1) selector += `:nth-child(${indexOfInParent(current)})`;
             }
             path.unshift(selector);
             current = parent;
-            if (path.length >= 5) break;
+        }
+        return path.join(' > ');
+    }
+    
+    // 纯 :nth-child 路径（最后手段，但至少能工作）
+    function generateNthPathSelector(el) {
+        const path = [];
+        let current = el;
+        while (current && current !== document.body && path.length < 8) {
+            let selector = current.tagName.toLowerCase();
+            const parent = current.parentElement;
+            if (parent) {
+                selector += `:nth-child(${indexOfInParent(current)})`;
+            }
+            path.unshift(selector);
+            current = parent;
         }
         return path.join(' > ');
     }
 
-    function shortenSelector(selector) {
-        const parts = selector.split(' > ');
-        if (parts.length <= 2) return selector;
-        for (let start = 0; start < parts.length - 1; start++) {
-            const shortSelector = parts.slice(start).join(' > ');
-            try { if (document.querySelectorAll(shortSelector).length === 1) return shortSelector; }
-            catch(e) { break; }
+    function indexOfInParent(el) {
+        let idx = 1;
+        let sib = el.previousElementSibling;
+        while (sib) { idx++; sib = sib.previousElementSibling; }
+        return idx;
+    }
+    
+    // 检测语义标签
+    function detectSemanticLabel(el) {
+        for (const pattern of X_SEMANTIC_PATTERNS) {
+            if (pattern.test(el)) return pattern.label;
         }
-        return selector;
+        return null;
     }
 
     // ======================== 高亮系统 ========================
@@ -174,9 +349,20 @@
         if (state.selectedElements.has(el)) return;
         for (const [elem] of state.selectedElements) { if (el.contains(elem)) deselectElement(elem); }
         for (const [elem] of state.selectedElements) { if (elem.contains(el)) deselectElement(elem); }
-        const selector = shortenSelector(generateSelector(el));
+        const selInfo = generateSelector(el);
+        // 存储完整的选择器信息（主选择器 + 备选 + 语义标签）
+        const displaySel = selInfo.semanticLabel 
+            ? `${selInfo.primary} [${selInfo.semanticLabel}]` 
+            : selInfo.primary;
         const highlightEl = createHighlightOverlay(el);
-        state.selectedElements.set(el, { selector, highlightEl });
+        state.selectedElements.set(el, { 
+            primary: selInfo.primary, 
+            stable: selInfo.stable,
+            fallbacks: selInfo.fallbacks || [],
+            semanticLabel: selInfo.semanticLabel,
+            display: displaySel,
+            highlightEl 
+        });
         updateSelectionUI();
     }
 
@@ -208,8 +394,15 @@
     function confirmSave() {
         let newCount = 0;
         for (const [el, data] of state.selectedElements) {
-            if (!state.confirmedRules.find(r => r.selector === data.selector)) {
-                state.confirmedRules.push({ selector: data.selector, timestamp: Date.now() }); newCount++;
+            if (!state.confirmedRules.find(r => r.selector === data.primary)) {
+                state.confirmedRules.push({ 
+                    selector: data.primary, 
+                    fallbacks: data.fallbacks || [],
+                    stable: data.stable,
+                    semanticLabel: data.semanticLabel,
+                    timestamp: Date.now() 
+                });
+                newCount++;
             }
             el.setAttribute('data-xb-hidden', 'true');
             if (data.highlightEl) data.highlightEl.remove();
@@ -503,6 +696,11 @@
                 display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:bold; flex-shrink:0;
             }
             .xb-selected-item .sel-text { flex:1; color:#ffd699; font-family:"SF Mono",Consolas,monospace; font-size:10px; }
+            
+            /* 选择器稳定性标签 */
+            .xb-stable-badge, .xb-unstable-badge { 
+                font-size: 11px; flex-shrink: 0; cursor: default;
+            }
 
             /* ===== 规则列表 ===== */
             .xb-rules-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; font-size:13px; color:#8899a6; }
@@ -511,6 +709,13 @@
             .xb-rule-item:hover { border-color:#536471; }
             .xb-rule-item.disabled { opacity:0.45; }
             .xb-rule-sel { font-family:"SF Mono",Consolas,monospace; font-size:11px; color:#1d9bf0; word-break:break-all; margin-bottom:6px; line-height:1.4; }
+            .xb-rule-header { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+            .xb-semantic-label { 
+                background:rgba(29,155,240,0.15); color:#1d9bf0; border:1px solid rgba(29,155,240,0.3);
+                padding:2px 8px; border-radius:9999px; font-size:10px; font-weight:600;
+            }
+            .xb-rule-stable { color:#00ba7c; font-size:11px; font-weight:600; white-space:nowrap; }
+            .xb-rule-unstable { color:#e67a00; font-size:11px; font-weight:600; white-space:nowrap; }
             .xb-rule-actions { display:flex; gap:6px; }
             .xb-rule-actions .xb-btn { padding:4px 10px; font-size:11px; margin-bottom:0; }
             .xb-rule-actions button.flex-1 { flex:1; }
@@ -695,7 +900,8 @@
             for (const [el, data] of state.selectedElements) {
                 const item = document.createElement('div');
                 item.className = 'xb-selected-item';
-                item.innerHTML = `<span class="num">${idx++}</span><span class="sel-text">${data.selector}</span>`;
+                const stableBadge = data.stable ? '<span class="xb-stable-badge" title="稳定选择器（基于data-testid等固定属性）">🔒</span>' : '<span class="xb-unstable-badge" title="不稳定选择器（可能因网站更新失效）">⚠️</span>';
+                item.innerHTML = `<span class="num">${idx++}</span><span class="sel-text">${escapeHtml(data.display || data.primary)}</span>${stableBadge}`;
                 item.addEventListener('mouseenter', () => { el.scrollIntoView({ behavior:'smooth', block:'center' }); const h=data.highlightEl; if(h) h.style.boxShadow='0 0 0 4px #fff, 0 0 30px rgba(255,140,0,0.8)'; });
                 item.addEventListener('mouseleave', () => { const h=data.highlightEl; if(h) h.style.boxShadow='0 0 20px rgba(255,140,0,0.4)'; });
                 list.appendChild(item);
@@ -714,9 +920,17 @@
         if (state.confirmedRules.length === 0) { container.innerHTML = '<p class="xb-empty">暂无屏蔽规则<br>使用「选取」功能添加</p>'; return; }
         state.confirmedRules.forEach((rule, index) => {
             const item = document.createElement('div');
+            const stableBadge = rule.stable 
+                ? '<span class="xb-rule-stable" title="基于稳定属性，不易失效">🔒稳定</span>' 
+                : '<span class="xb-rule-unstable" title="可能因X.com更新而失效，建议重新选取">⚠️不稳定</span>';
+            const label = rule.semanticLabel ? `<span class="xb-semantic-label">${escapeHtml(rule.semanticLabel)}</span>` : '';
+            
             item.className = 'xb-rule-item' + (rule.disabled ? ' disabled' : '');
             item.innerHTML = `
-                <div class="xb-rule-sel">${escapeHtml(rule.selector)}</div>
+                <div class="xb-rule-header">
+                    <div class="xb-rule-sel">${escapeHtml(rule.selector)}</div>
+                    ${label}${stableBadge}
+                </div>
                 <div class="xb-rule-actions">
                     <button class="xb-btn ${rule.disabled ? 'xb-btn-success' : 'xb-btn-preview'} flex-1" data-action="${rule.disabled?'enable':'disable'}" data-index="${index}">
                         ${rule.disabled ? '▶️ 启用' : '⏸️ 禁用'}
@@ -773,8 +987,43 @@
 
     function observeNavigation() {
         let lastUrl = location.href;
-        new MutationObserver(() => { if (location.href !== lastUrl) { lastUrl = location.href; setTimeout(applyAllRules, 500); } }).observe(document, { subtree:true, childList:true });
-        new MutationObserver(() => { if (!state.pickingMode) applyAllRules(); }).observe(document.body, { subtree:true, childList:true });
+        let applyTimer = null;
+        
+        // 1. URL 变化检测（SPA 导航）
+        new MutationObserver(() => { 
+            if (location.href !== lastUrl) { 
+                lastUrl = location.href; 
+                scheduleApply(800);  // URL变化后给更多时间渲染
+            } 
+        }).observe(document, { subtree:true, childList:true });
+        
+        // 2. DOM 持续监控（防抖版）- 监控 body 下所有子树变化
+        new MutationObserver(() => {
+            if (!state.pickingMode) scheduleApply(300);
+        }).observe(document.body, { subtree: true, childList: true });
+        
+        // 3. 额外：定时兜底（每5秒检查一次，防止遗漏）
+        setInterval(() => {
+            if (!state.pickingMode && document.visibilityState === 'visible') {
+                applyAllRules();
+            }
+        }, 5000);
+        
+        // 4. 页面可见性切换时重新应用
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible' && !state.pickingMode) {
+                setTimeout(applyAllRules, 500);
+            }
+        });
+    }
+    
+    // 防抖调度 applyAllRules
+    function scheduleApply(delay) {
+        if (applyTimer) clearTimeout(applyTimer);
+        applyTimer = setTimeout(() => {
+            applyAllRules();
+            applyTimer = null;
+        }, delay);
     }
 
     // ======================== 工具函数 ========================
