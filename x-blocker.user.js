@@ -601,9 +601,9 @@
                     <span>共 <strong id="xb-rule-count">${state.confirmedRules.length}</strong> 条规则</span>
                     <div style="display:flex;gap:4px;">
                         <button class="xb-btn xb-btn-sm xb-btn-preview" id="xb-export-rules">📤 导出</button>
-                        <label class="xb-import-label">
+                        <label class="xb-import-label" id="xb-import-label">
                             <input type="file" id="xb-import-file" accept=".json" style="display:none">
-                            <button class="xb-btn xb-btn-sm xb-btn-success" type="button" onclick="this.previousElementSibling.click()">📥 导入</button>
+                            <span class="xb-btn xb-btn-sm xb-btn-success">📥 导入</span>
                         </label>
                         <button class="xb-btn xb-btn-sm xb-btn-danger" id="xb-clear-all-rules">清空</button>
                     </div>
@@ -706,6 +706,7 @@
             .xb-rule-actions { display:flex; gap:6px; } .xb-rule-actions .xb-btn { padding:4px 10px; font-size:11px; margin-bottom:0; }
             .xb-rule-actions button.flex-1 { flex:1; }
             .xb-import-label { display:flex; cursor:pointer; }
+            .xb-import-label .xb-btn { cursor: pointer; }
             .xb-empty { text-align:center; color:#8899a6; padding:30px 0; font-size:13px; line-height:1.6; }
             .xb-hidden { display:none!important; }
             .xb-footer { padding: 12px 16px 14px; border-top: 1px solid #38444d; flex-shrink: 0; }
@@ -796,6 +797,12 @@
         const exportBtn = document.getElementById('xb-export-rules');
         if (exportBtn) exportBtn.addEventListener('click', exportRules);
         const importInput = document.getElementById('xb-import-file');
+        const importLabel = document.getElementById('xb-import-label');
+        if (importLabel && importInput) {
+            importLabel.addEventListener('click', (e) => {
+                if (e.target !== importInput) importInput.click();
+            });
+        }
         if (importInput) importInput.addEventListener('change', (e) => {
             if (e.target.files.length > 0) { importRules(e.target.files[0]); e.target.value = ''; }
         });
