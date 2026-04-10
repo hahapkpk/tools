@@ -1057,6 +1057,7 @@
     }
 
     // ======================== 初始化 (v3.2: 阶梯式重试 + CSS注入优化) ========================
+    /* eslint-disable-next-line userscripts/no-invalid-metadata */
     function init() {
         loadRules();
         createFloatingButton();
