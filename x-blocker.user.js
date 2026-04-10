@@ -13,7 +13,7 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_unregisterMenuCommand
 // @run-at       document-start
-// ==UserScript==
+// ==/UserScript==
 
 (function() {
     'use strict';
