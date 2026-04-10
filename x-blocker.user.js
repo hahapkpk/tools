@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         X Blocker - 元素选取屏蔽器
 // @namespace    http://tampermonkey.net/
-// @version      3.1.0
-// @description  可视化选取并屏蔽 X/Twitter 页面上不想要的区域（支持多项选择+预览确认）
+// @version      3.2.0
+// @description  可视化选取并屏蔽 X/Twitter 页面上不想要的区域（v3.2: 修复选取bug + CSS注入优化）
 // @author       You
 // @match        https://x.com/*
 // @match        https://twitter.com/*
@@ -30,25 +30,37 @@
 
     // ======================== CSS 注入屏蔽系统 (v3.1 新增) ========================
     let blockCSSStyle = null;
+    let cssInjectedToDOM = false; // v3.2: 标记是否已插入 DOM，防止重复
 
     // 把规则转成 CSS 注入 <head>，元素一出现就被拦截
     function injectBlockCSS() {
         if (blockCSSStyle) {
             // 已存在则更新内容
             blockCSSStyle.textContent = generateBlockCSSText();
+            ensureCSSInDOM(); // v3.2: 确保已在 DOM 中
             return;
         }
         blockCSSStyle = document.createElement('style');
         blockCSSStyle.id = 'xb-block-css';
         blockCSSStyle.textContent = generateBlockCSSText();
-        // 尽早插入 head（document-start 时 head 可能还没 ready）
-        if (document.head) document.head.appendChild(blockCSSStyle);
-        else new MutationObserver((_, obs) => {
-            if (document.head) {
-                document.head.appendChild(blockCSSStyle);
-                obs.disconnect();
-            }
-        }).observe(document, { childList: true });
+        ensureCSSInDOM();
+    }
+
+    // v3.2: 确保 style 元素已插入 DOM（幂等操作）
+    function ensureCSSInDOM() {
+        if (cssInjectedToDOM || !blockCSSStyle) return;
+        if (document.head) {
+            document.head.appendChild(blockCSSStyle);
+            cssInjectedToDOM = true;
+        } else {
+            new MutationObserver((_, obs) => {
+                if (document.head && !cssInjectedToDOM) {
+                    document.head.appendChild(blockCSSStyle);
+                    cssInjectedToDOM = true;
+                    obs.disconnect();
+                }
+            }).observe(document, { childList: true });
+        }
     }
 
     function generateBlockCSSText() {
@@ -64,6 +76,7 @@
     function syncBlockCSS() {
         if (blockCSSStyle) {
             blockCSSStyle.textContent = generateBlockCSSText();
+            ensureCSSInDOM(); // v3.2: 确保 style 已挂载到 DOM
         }
     }
 
@@ -344,9 +357,15 @@
     // ======================== 选择/取消选择 ========================
     function selectElement(el) {
         if (state.selectedElements.has(el)) return;
-        for (const [elem] of state.selectedElements) { if (el.contains(elem)) deselectElement(elem); }
-        for (const [elem] of state.selectedElements) { if (elem.contains(el)) deselectElement(elem); }
-        const selInfo = generateSelector();
+        // 先移除被新元素包含的已选元素（子元素）
+        for (const [elem] of state.selectedElements) {
+            if (el.contains(elem)) deselectElement(elem);
+        }
+        // 再检查新元素是否已被已选元素包含（父元素），如果是则不重复选取
+        for (const [elem] of state.selectedElements) {
+            if (elem.contains(el)) return;
+        }
+        const selInfo = generateSelector(el);
         const displaySel = selInfo.semanticLabel ? `${selInfo.primary} [${selInfo.semanticLabel}]` : selInfo.primary;
         const highlightEl = createHighlightOverlay(el);
         state.selectedElements.set(el, { 
@@ -887,7 +906,7 @@
         menuCommandIds = [];
     }
 
-    // ======================== 初始化 (v3.1: 阶梯式重试) ========================
+    // ======================== 初始化 (v3.2: 阶梯式重试 + CSS注入优化) ========================
     function init() {
         loadRules();
         createFloatingButton();
