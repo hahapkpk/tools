@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         X Blocker - 元素选取屏蔽器
 // @namespace    http://tampermonkey.net/
-// @version      3.2.0
-// @description  可视化选取并屏蔽 X/Twitter 页面上不想要的区域（v3.2: 修复选取bug + CSS注入优化）
+// @version      3.3.0
+// @description  可视化选取并屏蔽 X/Twitter 页面上不想要的区域（v3.3: 导入导出+选择器测试）
 // @author       You
 // @match        https://x.com/*
 // @match        https://twitter.com/*
@@ -437,6 +437,77 @@
         saveRules(); syncBlockCSS(); updateRuleList();
     }
 
+    // v3.3: 导出规则为 JSON 文件
+    function exportRules() {
+        if (state.confirmedRules.length === 0) { showNotification('⚠️ 没有可导出的规则', 'error'); return; }
+        const data = {
+            version: '3.3',
+            exportedAt: new Date().toISOString(),
+            rules: state.confirmedRules.map(r => ({
+                selector: r.selector,
+                fallbacks: r.fallbacks || [],
+                stable: r.stable,
+                semanticLabel: r.semanticLabel || null
+            }))
+        };
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `x-blocker-rules-${Date.now()}.json`;
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+        showNotification(`📤 已导出 ${data.rules.length} 条规则`, 'success');
+    }
+
+    // v3.3: 从 JSON 文件导入规则
+    function importRules(file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const data = JSON.parse(e.target.result);
+                if (!data.rules || !Array.isArray(data.rules)) throw new Error('无效格式');
+                let imported = 0, skipped = 0;
+                for (const r of data.rules) {
+                    if (!r.selector) { skipped++; continue; }
+                    if (state.confirmedRules.find(existing => existing.selector === r.selector)) { skipped++; continue; }
+                    state.confirmedRules.push({
+                        selector: r.selector,
+                        fallbacks: r.fallbacks || [],
+                        stable: !!r.stable,
+                        semanticLabel: r.semanticLabel || null,
+                        timestamp: Date.now()
+                    });
+                    imported++;
+                }
+                saveRules(); syncBlockCSS(); updateRuleList();
+                showNotification(`📥 已导入 ${imported} 条${skipped > 0 ? `，跳过 ${skipped} 条重复` : ''}`, 'success');
+            } catch(err) {
+                showNotification(`❌ 导入失败: ${err.message}`, 'error');
+            }
+        };
+        reader.readAsText(file);
+    }
+
+    // v3.3: 测试选择器是否匹配到元素
+    function testRuleSelector(selector) {
+        try {
+            const els = document.querySelectorAll(selector);
+            if (els.length === 0) return { count: 0, msg: '未匹配到任何元素' };
+            // 高亮显示匹配到的元素（3秒后自动消失）
+            els.forEach(el => {
+                el.style.outline = '3px solid #00ba7c';
+                el.style.outlineOffset = '-2px';
+                setTimeout(() => {
+                    el.style.removeProperty('outline');
+                    el.style.removeProperty('outlineOffset');
+                }, 3000);
+            });
+            return { count: els.length, msg: `匹配到 ${els.length} 个元素（已高亮3秒）` };
+        } catch(err) {
+            return { count: -1, msg: `选择器错误: ${err.message}` };
+        }
+    }
+
     // ======================== UI 面板 & 浮动按钮 ========================
     let panel = null;
     let floatingBtn = null;
@@ -528,7 +599,14 @@
             <div class="xb-tab-content" id="tab-rules">
                 <div class="xb-rules-header">
                     <span>共 <strong id="xb-rule-count">${state.confirmedRules.length}</strong> 条规则</span>
-                    <button class="xb-btn xb-btn-sm xb-btn-danger" id="xb-clear-all-rules">清空全部</button>
+                    <div style="display:flex;gap:4px;">
+                        <button class="xb-btn xb-btn-sm xb-btn-preview" id="xb-export-rules">📤 导出</button>
+                        <label class="xb-import-label">
+                            <input type="file" id="xb-import-file" accept=".json" style="display:none">
+                            <button class="xb-btn xb-btn-sm xb-btn-success" type="button" onclick="this.previousElementSibling.click()">📥 导入</button>
+                        </label>
+                        <button class="xb-btn xb-btn-sm xb-btn-danger" id="xb-clear-all-rules">清空</button>
+                    </div>
                 </div>
                 <div id="xb-rule-list" class="xb-rule-list"></div>
                 ${state.confirmedRules.length === 0 ? '<p class="xb-empty">暂无屏蔽规则<br>使用「选取」功能添加</p>' : ''}
@@ -627,6 +705,7 @@
             .xb-rule-unstable { color:#e67a00; font-size:11px; font-weight:600; white-space:nowrap; }
             .xb-rule-actions { display:flex; gap:6px; } .xb-rule-actions .xb-btn { padding:4px 10px; font-size:11px; margin-bottom:0; }
             .xb-rule-actions button.flex-1 { flex:1; }
+            .xb-import-label { display:flex; cursor:pointer; }
             .xb-empty { text-align:center; color:#8899a6; padding:30px 0; font-size:13px; line-height:1.6; }
             .xb-hidden { display:none!important; }
             .xb-footer { padding: 12px 16px 14px; border-top: 1px solid #38444d; flex-shrink: 0; }
@@ -713,6 +792,13 @@
             state.confirmedRules = []; saveRules(); syncBlockCSS(); updateRuleList();
             showNotification('🗑️ 已清空所有规则', 'info');
         });
+        // v3.3: 导出/导入按钮
+        const exportBtn = document.getElementById('xb-export-rules');
+        if (exportBtn) exportBtn.addEventListener('click', exportRules);
+        const importInput = document.getElementById('xb-import-file');
+        if (importInput) importInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) { importRules(e.target.files[0]); e.target.value = ''; }
+        });
     }
 
     function updateSelectionUI() {
@@ -763,13 +849,19 @@
                     ${label}${stableBadge}
                 </div>
                 <div class="xb-rule-actions">
+                    <button class="xb-btn xb-btn-sm" data-action="test" data-index="${index}" style="background:#536471;color:white;">🔍 测试</button>
                     <button class="xb-btn ${rule.disabled ? 'xb-btn-success' : 'xb-btn-preview'} flex-1" data-action="${rule.disabled?'enable':'disable'}" data-index="${index}">
                         ${rule.disabled ? '▶️ 启用' : '⏸️ 禁用'}
                     </button>
-                    <button class="xb-btn xb-btn-danger" data-action="delete" data-index="${index}">🗑️ 删除</button>
+                    <button class="xb-btn xb-btn-danger" data-action="delete" data-index="${index}">🗑️</button>
                 </div>`;
             item.querySelector('[data-action="delete"]')?.addEventListener('click', () => deleteRule(index));
             item.querySelector('[data-action="disable"],[data-action="enable"]')?.addEventListener('click', e => toggleRuleVisibility(index, e.currentTarget.dataset.action === 'disable'));
+            // v3.3: 绑定测试按钮
+            item.querySelector('[data-action="test"]')?.addEventListener('click', (e) => {
+                const result = testRuleSelector(rule.selector);
+                showNotification(`🔍 ${rule.selector.slice(0, 30)}${rule.selector.length > 30 ? '...' : ''} — ${result.msg}`, result.count > 0 ? 'success' : 'error');
+            });
             container.appendChild(item);
         });
     }
