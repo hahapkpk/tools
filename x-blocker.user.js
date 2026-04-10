@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         X Blocker - 元素选取屏蔽器
 // @namespace    http://tampermonkey.net/
-// @version      3.3.0
-// @description  可视化选取并屏蔽 X/Twitter 页面上不想要的区域（v3.3: 导入导出+选择器测试）
+// @version      3.3.1
+// @description  可视化选取并屏蔽 X/Twitter 页面上不想要的区域（v3.3.1: 导入容错增强）
 // @author       You
 // @match        https://x.com/*
 // @match        https://twitter.com/*
@@ -459,20 +459,62 @@
         showNotification(`📤 已导出 ${data.rules.length} 条规则`, 'success');
     }
 
-    // v3.3: 从 JSON 文件导入规则
+    // v3.3.1: 从 JSON 文件导入规则（智能识别多种格式）
     function importRules(file) {
         const reader = new FileReader();
         reader.onload = (e) => {
             try {
-                const data = JSON.parse(e.target.result);
-                if (!data.rules || !Array.isArray(data.rules)) throw new Error('无效格式');
-                let imported = 0, skipped = 0;
+                const text = e.target.result;
+
+                // 检测是否误导入了 .user.js 脚本文件
+                if (text.includes('==UserScript==') || text.includes('GM_setValue') || text.includes('GM_getValue')) {
+                    showNotification(`❌ 这是脚本源码(.user.js)，不是规则JSON\n请先点击「📤导出」生成规则文件`, 'error');
+                    return;
+                }
+
+                let data;
+
+                // 格式1: 标准导出格式 { version, exportedAt, rules: [...] }
+                try {
+                    data = JSON.parse(text);
+                } catch(parseErr) {
+                    showNotification(`❌ 文件不是有效的JSON格式`, 'error');
+                    return;
+                }
+
+                // 格式2: 纯数组 [{selector,...}, ...]
+                if (Array.isArray(data)) {
+                    data = { rules: data };
+                }
+
+                // 格式3: GM_setValue 原始存储数组（兼容手动备份）
+                if (!data.rules && Array.isArray(data) === false) {
+                    // 尝试将整个对象作为单条规则的集合
+                    if (data.selector) {
+                        data = { rules: [data] };
+                    } else {
+                        showNotification(`❌ 无法识别的文件格式\n需要包含 rules 数组或 selector 字段`, 'error');
+                        return;
+                    }
+                }
+
+                if (!data.rules || !Array.isArray(data.rules)) {
+                    showNotification(`❌ 无效格式：缺少 rules 数组`, 'error');
+                    return;
+                }
+
+                if (data.rules.length === 0) {
+                    showNotification(`⚠️ 文件中没有规则`, 'error');
+                    return;
+                }
+
+                let imported = 0, skipped = 0, invalid = 0;
                 for (const r of data.rules) {
-                    if (!r.selector) { skipped++; continue; }
+                    if (!r.selector || typeof r.selector !== 'string') { invalid++; continue; }
                     if (state.confirmedRules.find(existing => existing.selector === r.selector)) { skipped++; continue; }
                     state.confirmedRules.push({
                         selector: r.selector,
-                        fallbacks: r.fallbacks || [],
+                        fallbacks: Array.isArray(r.fallbacks) ? r.fallbacks : [],
                         stable: !!r.stable,
                         semanticLabel: r.semanticLabel || null,
                         timestamp: Date.now()
@@ -480,8 +522,17 @@
                     imported++;
                 }
                 saveRules(); syncBlockCSS(); updateRuleList();
-                showNotification(`📥 已导入 ${imported} 条${skipped > 0 ? `，跳过 ${skipped} 条重复` : ''}`, 'success');
+
+                let msg = `📥 已导入 ${imported} 条`;
+                if (skipped > 0) msg += `，跳过 ${skipped} 条重复`;
+                if (invalid > 0) msg += `，${invalid} 条无效`;
+                showNotification(msg, 'success');
+
+                // 同时在控制台输出详细信息
+                console.log('[X Blocker] 导入完成:', { imported, skipped, invalid, total: data.rules.length });
+
             } catch(err) {
+                console.error('[X Blocker] 导入异常:', err);
                 showNotification(`❌ 导入失败: ${err.message}`, 'error');
             }
         };
