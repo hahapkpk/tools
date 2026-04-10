@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         X Blocker - 元素选取屏蔽器
 // @namespace    http://tampermonkey.net/
-// @version      3.3.1
-// @description  可视化选取并屏蔽 X/Twitter 页面上不想要的区域（v3.3.1: 导入容错增强）
+// @version      3.3.2
+// @description  可视化选取并屏蔽 X/Twitter 页面上不想要的区域（v3.3.2: 修复 applyTimer 未声明、CSS注入MutationObserver监听目标）
 // @author       You
 // @match        https://x.com/*
 // @match        https://twitter.com/*
@@ -31,6 +31,7 @@
     // ======================== CSS 注入屏蔽系统 (v3.1 新增) ========================
     let blockCSSStyle = null;
     let cssInjectedToDOM = false; // v3.2: 标记是否已插入 DOM，防止重复
+    let applyTimer = null; // v3.3.2: 修复 applyTimer 未声明导致严格模式报错
 
     // 把规则转成 CSS 注入 <head>，元素一出现就被拦截
     function injectBlockCSS() {
@@ -59,7 +60,7 @@
                     cssInjectedToDOM = true;
                     obs.disconnect();
                 }
-            }).observe(document, { childList: true });
+            }).observe(document.documentElement || document, { childList: true, subtree: true });
         }
     }
 
@@ -488,7 +489,7 @@
                 }
 
                 // 格式3: GM_setValue 原始存储数组（兼容手动备份）
-                if (!data.rules && Array.isArray(data) === false) {
+                if (!data.rules) {
                     // 尝试将整个对象作为单条规则的集合
                     if (data.selector) {
                         data = { rules: [data] };
@@ -546,11 +547,13 @@
             if (els.length === 0) return { count: 0, msg: '未匹配到任何元素' };
             // 高亮显示匹配到的元素（3秒后自动消失）
             els.forEach(el => {
+                const prevOutline = el.style.outline;
+                const prevOutlineOffset = el.style.outlineOffset;
                 el.style.outline = '3px solid #00ba7c';
                 el.style.outlineOffset = '-2px';
                 setTimeout(() => {
-                    el.style.removeProperty('outline');
-                    el.style.removeProperty('outlineOffset');
+                    el.style.outline = prevOutline;
+                    el.style.outlineOffset = prevOutlineOffset;
                 }, 3000);
             });
             return { count: els.length, msg: `匹配到 ${els.length} 个元素（已高亮3秒）` };
