@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Element Blocker
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.3.0
+// @version      1.3.1
 // @description  在 X.com 上通过点选元素来屏蔽不想要的区域，类似 uBlock 的自定义屏蔽功能
 // @author       hahapkpk
 // @match        https://x.com/*
@@ -46,6 +46,7 @@
       user-select: none;
     }
     #xeb-panel.xeb-hidden { display: none !important; }
+    #xeb-toggle-fab.xeb-hidden { display: none !important; }
     #xeb-header {
       display: flex;
       align-items: center;
