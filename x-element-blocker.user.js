@@ -167,6 +167,24 @@
     }
     .xeb-rule-del:hover { opacity: 0.7; }
     #xeb-empty { color: #536471; font-size: 12px; text-align: center; padding: 8px 0; }
+    #xeb-io-row {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    #xeb-export-btn, #xeb-import-btn {
+      flex: 1;
+      padding: 6px 0;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    #xeb-export-btn { background: #38444d; color: #e7e9ea; }
+    #xeb-export-btn:hover { background: #4a5568; }
+    #xeb-import-btn { background: #38444d; color: #e7e9ea; }
+    #xeb-import-btn:hover { background: #4a5568; }
 
     /* 选取模式高亮 */
     .xeb-hover-highlight {
@@ -287,6 +305,10 @@
         <hr id="xeb-divider">
         <div id="xeb-rules-title">已保存规则</div>
         <div id="xeb-rules-list"></div>
+        <div id="xeb-io-row">
+          <button id="xeb-export-btn">导出</button>
+          <button id="xeb-import-btn">导入</button>
+        </div>
       </div>
     `;
     document.body.appendChild(panel);
@@ -417,6 +439,47 @@
         renderRules();
         applyRules();
       }
+    });
+
+    // 导出规则
+    document.getElementById('xeb-export-btn').addEventListener('click', () => {
+      const json = JSON.stringify(rules, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'x-element-blocker-rules.json';
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    // 导入规则
+    document.getElementById('xeb-import-btn').addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json,application/json';
+      input.addEventListener('change', () => {
+        const file = input.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = ev => {
+          try {
+            const imported = JSON.parse(ev.target.result);
+            if (!Array.isArray(imported)) throw new Error('格式错误');
+            imported.forEach(sel => {
+              if (typeof sel === 'string' && !rules.includes(sel)) rules.push(sel);
+            });
+            GM_setValue(STORAGE_KEY, rules);
+            renderRules();
+            applyRules();
+            alert(`已导入 ${imported.length} 条规则`);
+          } catch (e) {
+            alert('导入失败：' + e.message);
+          }
+        };
+        reader.readAsText(file);
+      });
+      input.click();
     });
 
     // 全局鼠标事件（选取模式）
