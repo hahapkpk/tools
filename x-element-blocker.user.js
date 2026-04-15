@@ -496,10 +496,11 @@
     if (!panel) return;
     if (panelVisible) {
       panel.classList.remove('xeb-hidden');
+      fab && fab.classList.remove('xeb-hidden');
       fab && fab.classList.add('panel-on');
     } else {
       panel.classList.add('xeb-hidden');
-      fab && fab.classList.remove('panel-on');
+      fab && fab.classList.add('xeb-hidden');
       if (pickMode) stopPickMode();
       clearPreview();
     }
