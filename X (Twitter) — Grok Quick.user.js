@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.2.0
+// @version      3.2.1
 // @license      MIT
 // @author       Flywind
 // @icon         https://abs.twimg.com/favicons/twitter.3.ico
@@ -221,6 +221,7 @@
   let _activeTimer = null;
   let _pendingTask = null;
   const _hijackedButtons = new WeakSet();
+  const _nativeClickBypass = new WeakSet();
   let _hijackScheduled = false;
 
   // ════════════════════════════════════════════════════════════════
@@ -495,9 +496,22 @@
       return;
     }
 
+    const sourceBtn = tweetData?.sourceGrokButton;
+    if (sourceBtn && sourceBtn.isConnected) {
+      triggerNativeGrokButton(sourceBtn);
+      startInjection();
+      return;
+    }
+
     const globalBtn = findGlobalGrokButton();
     if (globalBtn) { triggerClick(globalBtn); startInjection(); }
     else showToast(t("alert_no_grok"));
+  }
+
+  function triggerNativeGrokButton(btn) {
+    _nativeClickBypass.add(btn);
+    triggerClick(btn);
+    setTimeout(() => _nativeClickBypass.delete(btn), 500);
   }
 
   async function startInjectionDirect(targetInput) {
@@ -780,7 +794,7 @@
     const modal = document.createElement("div"); modal.id = "gq-settings-modal";
 
     modal.innerHTML = `
-      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.2</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
+      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.2.1</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
       <div class="gq-modal-body">
         <!-- 语言 & 模式 -->
         <div class="gq-section-card"><div class="gq-section-header">⚙️ ${t("lang_label")} & ${t("send_mode_label")}</div><div class="gq-section-body">
@@ -1050,19 +1064,20 @@
 
   function replaceWithQuickButton(origBtn) {
     try {
-      const newBtn = origBtn.cloneNode(true);
-      newBtn.classList.add("gq-btn");
-      newBtn.style.color = "#FF1493";
-      newBtn.style.cursor = "pointer";
-      newBtn.setAttribute("aria-label", "Grok Quick: \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49");
-      newBtn.title = "Grok Quick v3.2 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
+      origBtn.classList.add("gq-btn");
+      origBtn.style.color = "#FF1493";
+      origBtn.style.cursor = "pointer";
+      origBtn.setAttribute("aria-label", "Grok Quick: \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49");
+      origBtn.title = "Grok Quick v3.2.1 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
 
-      newBtn.onclick = (e) => {
+      origBtn.addEventListener("click", (e) => {
+        if (_nativeClickBypass.has(origBtn)) return;
         e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-        const tweetData = extractTweetData(newBtn.closest("article"));
+        const tweetData = extractTweetData(origBtn.closest("article"));
+        tweetData.sourceGrokButton = origBtn;
         showMenu(e.clientX, e.clientY, tweetData);
-      };
-      if (origBtn.parentNode) { origBtn.parentNode.replaceChild(newBtn, origBtn); return newBtn; }
+      }, true);
+      return origBtn;
     } catch (err) { console.warn("[Grok Quick]", err); }
     return null;
   }
@@ -1158,6 +1173,6 @@
   let scrollTimer = null;
   window.addEventListener("scroll", () => { if (scrollTimer) return; scrollTimer = setTimeout(() => { scrollTimer = null; scheduleHijack(); }, 200); }, { passive: true });
 
-  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3 \u8BBE\u7F6E", openSettings);
-  console.log("[Grok Quick] v3.2 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
+  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.2.1 \u8BBE\u7F6E", openSettings);
+  console.log("[Grok Quick] v3.2.1 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
 })();
