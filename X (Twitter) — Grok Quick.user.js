@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.2.2
+// @version      3.2.3
 // @license      MIT
 // @author       Flywind
 // @icon         https://abs.twimg.com/favicons/twitter.3.ico
@@ -392,6 +392,14 @@
     return true;
   }
 
+  function isTweetComposer(el) {
+    if (!el) return false;
+    const testId = el.getAttribute("data-testid") || "";
+    if (/tweetTextarea|tweetcomposer/i.test(testId)) return true;
+    const label = (el.getAttribute("aria-label") || "").toLowerCase();
+    return /post|tweet|reply|帖子|推文|回复/.test(label);
+  }
+
   function extractTweetData(article) {
     if (!article) return { text: "", url: location.href, author: "", handle: "", displayName: "", note: "", vip: null, time: "" };
     const textEl = article.querySelector("[data-testid='tweetText']");
@@ -530,17 +538,31 @@
     resetGlobalState();
     _pendingTask = { content: fullContent, autoSend: cfg.autoSend === true, textFilled: false, targetInput: null };
 
-    const existingComposer = getVisibleComposer();
-    if (existingComposer && isLikelyGrokSurface(existingComposer)) { startInjectionDirect(existingComposer); return; }
-
     if (cfg.privateMode) {
-      // 私密模式：跳转到 x.com/i/grok 并携带参数
       const encoded = encodeURIComponent(fullContent.slice(0, 2000));
       window.open(`https://x.com/i/grok?q=${encoded}`, "_blank");
       showToast("\uD83D\uDD12 " + t("private_mode"));
       return;
     }
 
+    // 优先尝试已存在的 composer
+    const existingComposer = getVisibleComposer();
+    if (existingComposer) {
+      // 明确识别为 Grok 表面：直接注入
+      if (isLikelyGrokSurface(existingComposer)) {
+        startInjectionDirect(existingComposer);
+        return;
+      }
+      // X.com 用 React portal 渲染 Grok textarea，不在 sidebarColumn DOM 树内。
+      // 只要不是推文/回复框，视为 Grok 的游离 composer 直接注入，
+      // 避免重复触发原生 Grok 按钮导致侧边栏重置为默认 UI。
+      if (!isTweetComposer(existingComposer)) {
+        startInjectionDirect(existingComposer);
+        return;
+      }
+    }
+
+    // 未找到可用 composer：触发原生 Grok 按钮打开侧边栏，再轮询注入
     const sourceBtn = tweetData?.sourceGrokButton;
     if (sourceBtn && sourceBtn.isConnected) {
       triggerNativeGrokButton(sourceBtn);
@@ -592,7 +614,7 @@
     while (attempts < INJECT_MAX_ATTEMPTS) {
       attempts++;
       const composer = getVisibleComposer();
-      if (composer && (isLikelyGrokSurface(composer) || attempts > 25)) { startInjectionDirect(composer); return; }
+      if (composer && (isLikelyGrokSurface(composer) || (!isTweetComposer(composer) && attempts > 10))) { startInjectionDirect(composer); return; }
       await sleep(INJECT_INTERVAL_MS);
     }
     showToast(t("alert_no_grok")); resetGlobalState();
