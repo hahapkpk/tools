@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Element Blocker
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.4.2
+// @version      1.5.0
 // @description  在 X.com 上通过点选元素来屏蔽不想要的区域，类似 uBlock 的自定义屏蔽功能
 // @author       hahapkpk
 // @match        https://x.com/*
@@ -21,6 +21,8 @@
   const PANEL_VISIBLE_KEY = 'x_element_blocker_panel_visible';
   const PAUSED_KEY = 'x_element_blocker_paused';
   const DEBUG_KEY = 'x_element_blocker_debug';
+  const BACKUPS_KEY = 'x_element_blocker_backups';
+  const LAST_ADDED_KEY = 'x_element_blocker_last_added';
 
   // ─── 状态 ───────────────────────────────────────────────────────────────────
   let rules = normalizeRules(GM_getValue(STORAGE_KEY, []));
@@ -33,6 +35,9 @@
   let highlightedEl = null;
   let selectedEls = []; // 多选暂存
   let applyTimer = null;
+  let filterText = '';
+  let filterMode = 'all';
+  let previewRuleIndex = null;
 
   function normalizeRules(saved) {
     const now = new Date().toISOString();
@@ -42,6 +47,8 @@
         if (typeof item === 'string') {
           return {
             selector: item,
+            note: '',
+            scope: { type: 'global', value: '' },
             enabled: true,
             createdAt: now,
             updatedAt: now
@@ -50,6 +57,8 @@
         if (item && typeof item.selector === 'string') {
           return {
             selector: item.selector,
+            note: item.note || '',
+            scope: normalizeScope(item.scope),
             enabled: item.enabled !== false,
             createdAt: item.createdAt || now,
             updatedAt: item.updatedAt || item.createdAt || now
@@ -60,14 +69,22 @@
       .filter(Boolean);
   }
 
+  function normalizeScope(scope) {
+    if (!scope || typeof scope !== 'object') return { type: 'global', value: '' };
+    const type = ['global', 'path', 'profile'].includes(scope.type) ? scope.type : 'global';
+    return { type, value: scope.value || '' };
+  }
+
   function saveRules() {
     GM_setValue(STORAGE_KEY, rules);
   }
 
-  function createRule(selector) {
+  function createRule(selector, scopeType = 'global') {
     const now = new Date().toISOString();
     return {
       selector,
+      note: inferNote(selector),
+      scope: createScope(scopeType),
       enabled: true,
       createdAt: now,
       updatedAt: now
@@ -89,6 +106,106 @@
 
   function getSelector(rule) {
     return typeof rule === 'string' ? rule : rule.selector;
+  }
+
+  function inferNote(selector) {
+    if (selector.includes('premium')) return 'Premium 相关区域';
+    if (selector.includes('sidebar') || selector.includes('aside')) return '侧边栏区域';
+    if (selector.includes('trend')) return '趋势/推荐区域';
+    if (selector.includes('article')) return '帖子区域';
+    return '';
+  }
+
+  function createScope(type) {
+    if (type === 'path') return { type: 'path', value: location.pathname };
+    if (type === 'profile') {
+      const match = location.pathname.match(/^\/([^/?]+)$/);
+      return { type: 'profile', value: match ? `/${match[1]}` : location.pathname };
+    }
+    return { type: 'global', value: '' };
+  }
+
+  function scopeMatches(rule) {
+    const scope = normalizeScope(rule.scope);
+    if (scope.type === 'global') return true;
+    if (scope.type === 'path') return location.pathname === scope.value;
+    if (scope.type === 'profile') return location.pathname === scope.value;
+    return true;
+  }
+
+  function formatScope(scope) {
+    const normalized = normalizeScope(scope);
+    if (normalized.type === 'path') return `路径 ${normalized.value}`;
+    if (normalized.type === 'profile') return `主页 ${normalized.value}`;
+    return '全站';
+  }
+
+  function createBackup(action) {
+    const backups = GM_getValue(BACKUPS_KEY, []);
+    backups.unshift({
+      action,
+      createdAt: new Date().toISOString(),
+      rules: JSON.parse(JSON.stringify(rules))
+    });
+    GM_setValue(BACKUPS_KEY, backups.slice(0, 5));
+  }
+
+  function restoreLatestBackup() {
+    const backups = GM_getValue(BACKUPS_KEY, []);
+    if (!backups.length) {
+      alert('暂无可恢复的自动备份');
+      return;
+    }
+    const backup = backups[0];
+    if (!confirm(`恢复到 ${formatDate(backup.createdAt)} 的备份？\n来源：${backup.action}`)) return;
+    createBackup('恢复前自动备份');
+    rules = normalizeRules(backup.rules);
+    saveRules();
+    applyRules({ restore: true });
+    renderRules();
+  }
+
+  function setLastAdded(selectors) {
+    GM_setValue(LAST_ADDED_KEY, {
+      selectors,
+      createdAt: new Date().toISOString()
+    });
+  }
+
+  function undoLastAdded() {
+    const last = GM_getValue(LAST_ADDED_KEY, null);
+    if (!last || !Array.isArray(last.selectors) || !last.selectors.length) {
+      alert('暂无可撤销的最近添加规则');
+      return;
+    }
+    createBackup('撤销最近添加前自动备份');
+    const before = rules.length;
+    rules = rules.filter(rule => !last.selectors.includes(rule.selector));
+    GM_setValue(LAST_ADDED_KEY, null);
+    saveRules();
+    applyRules({ restore: true });
+    renderRules();
+    alert(`已撤销 ${before - rules.length} 条最近添加规则`);
+  }
+
+  function getRiskInfo(selector, hitCount) {
+    const warnings = [];
+    if (hitCount >= 10) warnings.push('命中过多');
+    if (/^(html|body|main|nav|aside|section|article)$/i.test(selector)) warnings.push('范围过宽');
+    if (selector.includes(':nth-of-type')) warnings.push('结构选择器');
+    if (/^div(>|$|:|\s)/.test(selector) || selector.split('>').length >= 5) warnings.push('稳定性较低');
+    return warnings;
+  }
+
+  function ruleMatchesFilter(rule, hitCount, warnings) {
+    if (filterMode === 'enabled' && !rule.enabled) return false;
+    if (filterMode === 'disabled' && rule.enabled) return false;
+    if (filterMode === 'matched' && hitCount === 0) return false;
+    if (filterMode === 'risky' && warnings.length === 0) return false;
+    if (!filterText) return true;
+    const needle = filterText.toLowerCase();
+    return [rule.selector, rule.note || '', formatScope(rule.scope)]
+      .some(text => text.toLowerCase().includes(needle));
   }
 
   // ─── 样式 ───────────────────────────────────────────────────────────────────
@@ -300,7 +417,7 @@
       flex-shrink: 0;
       padding-top: 1px;
     }
-    .xeb-rule-toggle, .xeb-rule-del {
+    .xeb-rule-toggle, .xeb-rule-del, .xeb-rule-edit, .xeb-rule-locate, .xeb-rule-preview {
       border: none;
       background: transparent;
       cursor: pointer;
@@ -315,10 +432,84 @@
       align-items: center;
       justify-content: center;
     }
-    .xeb-rule-toggle:hover, .xeb-rule-del:hover { background: #38444d; }
+    .xeb-rule-toggle:hover, .xeb-rule-del:hover, .xeb-rule-edit:hover, .xeb-rule-locate:hover, .xeb-rule-preview:hover { background: #38444d; }
     .xeb-rule-toggle.off { color: #8899a6; }
     .xeb-rule-del { color: #f4212e; font-size: 14px; }
+    .xeb-rule-edit, .xeb-rule-locate, .xeb-rule-preview {
+      color: #8899a6;
+      font-size: 12px;
+    }
+    .xeb-rule-preview.active { color: #ffad1f; }
+    .xeb-rule-note {
+      margin-bottom: 4px;
+      color: #e7e9ea;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .xeb-rule-extra {
+      margin-top: 5px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      color: #8899a6;
+      font-size: 10px;
+    }
+    .xeb-rule-scope, .xeb-rule-risk {
+      border-radius: 999px;
+      padding: 1px 6px;
+      background: rgba(83, 100, 113, 0.22);
+    }
+    .xeb-rule-risk {
+      color: #ffad1f;
+      background: rgba(255, 173, 31, 0.12);
+      border: 1px solid rgba(255, 173, 31, 0.24);
+    }
     #xeb-empty { color: #536471; font-size: 12px; text-align: center; padding: 8px 0; }
+    #xeb-filter-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 104px;
+      gap: 8px;
+      margin-bottom: 8px;
+      flex-shrink: 0;
+    }
+    #xeb-search, #xeb-filter-mode, #xeb-scope-select {
+      min-height: 30px;
+      border: 1px solid #38444d;
+      border-radius: 7px;
+      background: #0f1720;
+      color: #e7e9ea;
+      padding: 5px 8px;
+      font-size: 12px;
+      outline: none;
+    }
+    #xeb-search:focus, #xeb-filter-mode:focus, #xeb-scope-select:focus {
+      border-color: #1d9bf0;
+    }
+    #xeb-save-options {
+      display: grid;
+      grid-template-columns: 1fr 118px;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    #xeb-utility-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+      flex-shrink: 0;
+    }
+    #xeb-undo-btn, #xeb-restore-btn, #xeb-clear-filter-btn {
+      flex: 1;
+      min-height: 30px;
+      border: none;
+      border-radius: 7px;
+      cursor: pointer;
+      color: #e7e9ea;
+      background: #223142;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    #xeb-undo-btn:hover, #xeb-restore-btn:hover, #xeb-clear-filter-btn:hover { background: #2d4054; }
     #xeb-io-row {
       display: flex;
       gap: 8px;
@@ -359,6 +550,27 @@
       outline: 2px solid #ffad1f !important;
       outline-offset: 2px !important;
       background: rgba(255, 173, 31, 0.12) !important;
+    }
+    .xeb-rule-preview-match {
+      outline: 2px solid #f4212e !important;
+      outline-offset: 2px !important;
+      background: rgba(244, 33, 46, 0.12) !important;
+    }
+    .xeb-debug-badge {
+      position: fixed;
+      z-index: 1000000;
+      min-width: 18px;
+      height: 18px;
+      padding: 0 5px;
+      border-radius: 999px;
+      background: #ffad1f;
+      color: #111820;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 18px;
+      text-align: center;
+      pointer-events: none;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.35);
     }
 
     /* 底部开关按钮 */
@@ -438,6 +650,7 @@
     }
     rules.forEach((rule, index) => {
       if (!rule.enabled) return;
+      if (!scopeMatches(rule)) return;
       const selector = getSelector(rule);
       try {
         document.querySelectorAll(selector).forEach(el => {
@@ -450,6 +663,7 @@
             el.classList.add('xeb-debug-match');
             el.dataset.xebDebugRule = String(index + 1);
             el.title = `[X Element Blocker #${index + 1}] ${selector}`;
+            addDebugBadge(el, index + 1);
           } else {
             hideElement(el);
           }
@@ -475,6 +689,7 @@
   }
 
   function clearDebugMarks() {
+    document.querySelectorAll('.xeb-debug-badge').forEach(el => el.remove());
     document.querySelectorAll('.xeb-debug-match').forEach(el => {
       el.classList.remove('xeb-debug-match');
       delete el.dataset.xebDebugRule;
@@ -486,6 +701,17 @@
       delete el.dataset.xebHadTitle;
       delete el.dataset.xebOldTitle;
     });
+  }
+
+  function addDebugBadge(el, number) {
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const badge = document.createElement('div');
+    badge.className = 'xeb-debug-badge';
+    badge.textContent = String(number);
+    badge.style.left = `${Math.max(4, rect.left + 4)}px`;
+    badge.style.top = `${Math.max(4, rect.top + 4)}px`;
+    document.body.appendChild(badge);
   }
 
   function hideElement(el) {
@@ -535,6 +761,14 @@
           <button id="xeb-debug-btn" title="高亮命中的元素，方便排查误屏蔽">调试</button>
         </div>
         <div id="xeb-pending-list"></div>
+        <div id="xeb-save-options" style="display:none">
+          <select id="xeb-scope-select" title="新规则作用范围">
+            <option value="global">作用范围：全站</option>
+            <option value="path">作用范围：当前路径</option>
+            <option value="profile">作用范围：当前主页</option>
+          </select>
+          <button id="xeb-undo-btn" title="删除最近一次保存的新规则">撤销最近添加</button>
+        </div>
         <div id="xeb-action-row" style="display:none">
           <button id="xeb-preview-btn">预览</button>
           <button id="xeb-save-btn">确认保存</button>
@@ -542,7 +776,21 @@
         </div>
         <hr id="xeb-divider">
         <div id="xeb-rules-title"><span>已保存规则</span><span id="xeb-status"></span></div>
+        <div id="xeb-filter-row">
+          <input id="xeb-search" type="search" placeholder="搜索规则或备注">
+          <select id="xeb-filter-mode">
+            <option value="all">全部规则</option>
+            <option value="enabled">已启用</option>
+            <option value="disabled">已禁用</option>
+            <option value="matched">当前命中</option>
+            <option value="risky">风险提示</option>
+          </select>
+        </div>
         <div id="xeb-rules-list"></div>
+        <div id="xeb-utility-row">
+          <button id="xeb-restore-btn">恢复备份</button>
+          <button id="xeb-clear-filter-btn">清除筛选</button>
+        </div>
         <div id="xeb-io-row">
           <button id="xeb-export-btn">导出</button>
           <button id="xeb-import-btn">导入</button>
@@ -566,6 +814,7 @@
   function renderPending() {
     const list = document.getElementById('xeb-pending-list');
     const row = document.getElementById('xeb-action-row');
+    const options = document.getElementById('xeb-save-options');
     if (!list) return;
     list.innerHTML = '';
     pendingSelectors.forEach((sel, i) => {
@@ -575,6 +824,7 @@
       list.appendChild(item);
     });
     if (row) row.style.display = pendingSelectors.length ? 'flex' : 'none';
+    if (options) options.style.display = pendingSelectors.length ? 'grid' : 'none';
   }
 
   function renderRules() {
@@ -591,26 +841,41 @@
       list.innerHTML = '<div id="xeb-empty">暂无规则</div>';
       return;
     }
+    let visibleCount = 0;
     rules.forEach((rule, i) => {
       const sel = getSelector(rule);
+      const hitCount = scopeMatches(rule) ? countMatches(sel) : 0;
+      const warnings = getRiskInfo(sel, hitCount);
+      if (!ruleMatchesFilter(rule, hitCount, warnings)) return;
+      visibleCount++;
       const item = document.createElement('div');
       item.className = `xeb-rule-item${rule.enabled ? '' : ' disabled'}`;
-      const hitCount = countMatches(sel);
+      const note = rule.note ? `<div class="xeb-rule-note">${escHtml(rule.note)}</div>` : '';
+      const risk = warnings.length ? `<span class="xeb-rule-risk" title="${escHtml(warnings.join('、'))}">${escHtml(warnings[0])}</span>` : '';
       item.innerHTML = `
         <div class="xeb-rule-main">
+          ${note}
           <code title="${escHtml(sel)}">${escHtml(sel)}</code>
+          <div class="xeb-rule-extra">
+            <span class="xeb-rule-scope">${escHtml(formatScope(rule.scope))}</span>
+            ${risk}
+          </div>
           <div class="xeb-rule-meta">
             <span>添加：${escHtml(formatDate(rule.createdAt))}</span>
             <span class="xeb-rule-hit">命中 ${hitCount}</span>
           </div>
         </div>
         <div class="xeb-rule-actions">
+          <button class="xeb-rule-locate" data-i="${i}" title="调试并定位第一处命中">⌖</button>
+          <button class="xeb-rule-preview${previewRuleIndex === i ? ' active' : ''}" data-i="${i}" title="单独预览此规则">◉</button>
+          <button class="xeb-rule-edit" data-i="${i}" title="编辑备注和范围">✎</button>
           <button class="xeb-rule-toggle${rule.enabled ? '' : ' off'}" data-i="${i}" title="${rule.enabled ? '禁用此规则' : '启用此规则'}">${rule.enabled ? '✓' : '○'}</button>
           <button class="xeb-rule-del" data-i="${i}" title="删除此规则">×</button>
         </div>
       `;
       list.appendChild(item);
     });
+    if (visibleCount === 0) list.innerHTML = '<div id="xeb-empty">没有符合筛选的规则</div>';
   }
 
   function syncControlButtons() {
@@ -624,6 +889,10 @@
       debugBtn.textContent = debugMode ? '退出调试' : '调试';
       debugBtn.classList.toggle('active', debugMode);
     }
+    const search = document.getElementById('xeb-search');
+    const mode = document.getElementById('xeb-filter-mode');
+    if (search && search.value !== filterText) search.value = filterText;
+    if (mode && mode.value !== filterMode) mode.value = filterMode;
   }
 
   function escHtml(s) {
@@ -647,6 +916,22 @@
 
     document.getElementById('xeb-debug-btn').addEventListener('click', () => {
       setDebugMode(!debugMode);
+    });
+
+    document.getElementById('xeb-undo-btn').addEventListener('click', undoLastAdded);
+    document.getElementById('xeb-restore-btn').addEventListener('click', restoreLatestBackup);
+    document.getElementById('xeb-clear-filter-btn').addEventListener('click', () => {
+      filterText = '';
+      filterMode = 'all';
+      renderRules();
+    });
+    document.getElementById('xeb-search').addEventListener('input', e => {
+      filterText = e.target.value.trim();
+      renderRules();
+    });
+    document.getElementById('xeb-filter-mode').addEventListener('change', e => {
+      filterMode = e.target.value;
+      renderRules();
     });
 
     // 选取按钮
@@ -679,9 +964,23 @@
     // 确认保存
     document.getElementById('xeb-save-btn').addEventListener('click', () => {
       clearPreview();
+      const scopeType = document.getElementById('xeb-scope-select').value;
+      const risky = pendingSelectors
+        .map(sel => ({ sel, hit: countMatches(sel), warnings: getRiskInfo(sel, countMatches(sel)) }))
+        .filter(item => item.warnings.length);
+      if (risky.length) {
+        const message = risky.map(item => `${item.sel}\n${item.warnings.join('、')}，当前命中 ${item.hit}`).join('\n\n');
+        if (!confirm(`以下规则可能误屏蔽，仍然保存吗？\n\n${message}`)) return;
+      }
+      createBackup('保存新规则前自动备份');
+      const added = [];
       pendingSelectors.forEach(sel => {
-        if (!rules.some(rule => getSelector(rule) === sel)) rules.push(createRule(sel));
+        if (!rules.some(rule => getSelector(rule) === sel)) {
+          rules.push(createRule(sel, scopeType));
+          added.push(sel);
+        }
       });
+      if (added.length) setLastAdded(added);
       saveRules();
       pendingSelectors = [];
       clearSelectedHighlights();
@@ -710,10 +1009,26 @@
 
     // 启用、禁用、删除已保存规则
     document.getElementById('xeb-rules-list').addEventListener('click', e => {
+      const locate = e.target.closest('.xeb-rule-locate');
+      if (locate) {
+        locateRule(parseInt(locate.dataset.i));
+        return;
+      }
+      const preview = e.target.closest('.xeb-rule-preview');
+      if (preview) {
+        previewRule(parseInt(preview.dataset.i));
+        return;
+      }
+      const edit = e.target.closest('.xeb-rule-edit');
+      if (edit) {
+        editRule(parseInt(edit.dataset.i));
+        return;
+      }
       const toggle = e.target.closest('.xeb-rule-toggle');
       if (toggle) {
         const i = parseInt(toggle.dataset.i);
         if (rules[i]) {
+          createBackup('切换规则启用状态前自动备份');
           rules[i].enabled = !rules[i].enabled;
           rules[i].updatedAt = new Date().toISOString();
           saveRules();
@@ -725,6 +1040,7 @@
       const del = e.target.closest('.xeb-rule-del');
       if (del) {
         const i = parseInt(del.dataset.i);
+        createBackup('删除规则前自动备份');
         rules.splice(i, 1);
         saveRules();
         applyRules({ restore: true });
@@ -757,6 +1073,7 @@
           try {
             const imported = JSON.parse(ev.target.result);
             if (!Array.isArray(imported)) throw new Error('格式错误');
+            createBackup('导入规则前自动备份');
             normalizeRules(imported).forEach(rule => {
               if (!rules.some(item => getSelector(item) === rule.selector)) rules.push(rule);
             });
@@ -840,6 +1157,60 @@
     document.querySelectorAll('.xeb-preview-hidden').forEach(el => {
       el.classList.remove('xeb-preview-hidden');
     });
+    document.querySelectorAll('.xeb-rule-preview-match').forEach(el => {
+      el.classList.remove('xeb-rule-preview-match');
+    });
+    previewRuleIndex = null;
+  }
+
+  function previewRule(index) {
+    document.querySelectorAll('.xeb-rule-preview-match').forEach(el => {
+      el.classList.remove('xeb-rule-preview-match');
+    });
+    if (previewRuleIndex === index) {
+      previewRuleIndex = null;
+      renderRules();
+      return;
+    }
+    const rule = rules[index];
+    if (!rule || !scopeMatches(rule)) return;
+    previewRuleIndex = index;
+    try {
+      document.querySelectorAll(rule.selector).forEach(el => {
+        if (!el.closest('#xeb-panel') && !el.closest('#xeb-toggle-fab')) {
+          el.classList.add('xeb-rule-preview-match');
+        }
+      });
+    } catch (e) {}
+    renderRules();
+  }
+
+  function locateRule(index) {
+    const rule = rules[index];
+    if (!rule || !scopeMatches(rule)) return;
+    setDebugMode(true);
+    try {
+      const target = Array.from(document.querySelectorAll(rule.selector))
+        .find(el => !el.closest('#xeb-panel') && !el.closest('#xeb-toggle-fab'));
+      if (target) target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
+    } catch (e) {}
+  }
+
+  function editRule(index) {
+    const rule = rules[index];
+    if (!rule) return;
+    const note = prompt('规则备注：', rule.note || '');
+    if (note === null) return;
+    const currentScope = normalizeScope(rule.scope).type;
+    const scope = prompt('作用范围：global=全站，path=当前路径，profile=当前主页', currentScope);
+    if (scope === null) return;
+    createBackup('编辑规则前自动备份');
+    rule.note = note.trim();
+    rule.scope = createScope(['global', 'path', 'profile'].includes(scope) ? scope : currentScope);
+    rule.updatedAt = new Date().toISOString();
+    saveRules();
+    applyRules({ restore: true });
+    renderRules();
   }
 
   function setPaused(value) {
