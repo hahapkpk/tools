@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Element Blocker
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.5.1
+// @version      1.5.2
 // @description  在 X.com 上通过点选元素来屏蔽不想要的区域，类似 uBlock 的自定义屏蔽功能
 // @author       hahapkpk
 // @match        https://x.com/*
@@ -206,6 +206,11 @@
     const needle = filterText.toLowerCase();
     return [rule.selector, rule.note || '', formatScope(rule.scope)]
       .some(text => text.toLowerCase().includes(needle));
+  }
+
+  function cssEscape(value) {
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
+    return String(value).replace(/["\\]/g, '\\$&');
   }
 
   // ─── 样式 ───────────────────────────────────────────────────────────────────
@@ -600,18 +605,114 @@
   // ─── 生成稳定 CSS 选择器 ─────────────────────────────────────────────────────
   // X.com 会动态更换 class，所以优先用结构路径 + 稳定属性
   function getStableSelector(el) {
-    // 优先用 data-testid（X.com 大量使用且相对稳定）
+    const candidates = getSelectorCandidates(el);
+    return candidates[0] ? candidates[0].selector : buildStructuralSelector(el);
+  }
+
+  function getSelectorCandidates(el) {
+    const candidates = [];
+    const seen = new Set();
+    let cur = el;
+    let level = 0;
+    while (cur && cur !== document.body && level < 7) {
+      buildSelectorPieces(cur).forEach(piece => {
+        addSelectorCandidate(candidates, seen, piece.selector, level, piece.label);
+      });
+      addSelectorCandidate(candidates, seen, buildStructuralSelector(cur), level, level === 0 ? '当前元素结构路径' : `上层 ${level} 结构路径`);
+      cur = cur.parentElement;
+      level++;
+    }
+    return candidates
+      .map(candidate => {
+        const hitCount = countMatches(candidate.selector);
+        const warnings = getRiskInfo(candidate.selector, hitCount);
+        return {
+          ...candidate,
+          hitCount,
+          warnings,
+          score: scoreSelectorCandidate(candidate, hitCount, warnings)
+        };
+      })
+      .sort((a, b) => a.score - b.score)
+      .slice(0, 8);
+  }
+
+  function buildSelectorPieces(el) {
+    const pieces = [];
+    const tag = el.tagName.toLowerCase();
     if (el.dataset && el.dataset.testid) {
-      return `[data-testid="${el.dataset.testid}"]`;
+      pieces.push({
+        selector: `[data-testid="${cssEscape(el.dataset.testid)}"]`,
+        label: 'data-testid'
+      });
     }
-    // aria-label
     if (el.getAttribute('aria-label')) {
-      const tag = el.tagName.toLowerCase();
-      const label = el.getAttribute('aria-label').replace(/"/g, '\\"');
-      return `${tag}[aria-label="${label}"]`;
+      pieces.push({
+        selector: `${tag}[aria-label="${cssEscape(el.getAttribute('aria-label'))}"]`,
+        label: 'aria-label'
+      });
     }
-    // role + 结构路径
-    return buildStructuralSelector(el);
+    if (el.getAttribute('role')) {
+      const role = el.getAttribute('role');
+      pieces.push({
+        selector: `${tag}[role="${cssEscape(role)}"]`,
+        label: 'role'
+      });
+      if (el.getAttribute('aria-label')) {
+        pieces.push({
+          selector: `${tag}[role="${cssEscape(role)}"][aria-label="${cssEscape(el.getAttribute('aria-label'))}"]`,
+          label: 'role + aria-label'
+        });
+      }
+    }
+    if (tag === 'a' && el.getAttribute('href')) {
+      const href = el.getAttribute('href');
+      if (href && href.length < 160) {
+        pieces.push({
+          selector: `a[href="${cssEscape(href)}"]`,
+          label: '链接地址'
+        });
+      }
+    }
+    return pieces;
+  }
+
+  function addSelectorCandidate(candidates, seen, selector, level, label) {
+    if (!selector || seen.has(selector)) return;
+    seen.add(selector);
+    candidates.push({ selector, level, label });
+  }
+
+  function scoreSelectorCandidate(candidate, hitCount, warnings) {
+    let score = candidate.level * 8;
+    if (hitCount === 0) score += 80;
+    if (hitCount === 1) score -= 20;
+    if (hitCount > 1 && hitCount <= 4) score += hitCount;
+    if (hitCount > 4) score += hitCount * 4;
+    score += warnings.length * 18;
+    if (candidate.label.includes('data-testid')) score -= 18;
+    if (candidate.label.includes('aria-label')) score -= 12;
+    if (candidate.label.includes('结构路径')) score += 12;
+    return score;
+  }
+
+  function choosePreciseSelector(el) {
+    const candidates = getSelectorCandidates(el);
+    const best = candidates[0];
+    if (!best) return buildStructuralSelector(el);
+    if (best.warnings.length === 0 && best.hitCount <= 4) return best.selector;
+
+    const lines = candidates.map((candidate, index) => {
+      const risk = candidate.warnings.length ? `；风险：${candidate.warnings.join('、')}` : '';
+      return `${index + 1}. ${candidate.label}；命中 ${candidate.hitCount}${risk}\n${candidate.selector}`;
+    });
+    const input = prompt(`当前选择器可能不够精确。输入序号选择要保存的规则：\n\n${lines.join('\n\n')}`, '1');
+    if (input === null) return null;
+    const index = parseInt(input, 10) - 1;
+    if (Number.isInteger(index) && candidates[index]) {
+      return candidates[index].selector;
+    }
+    return best.selector;
   }
 
   function buildStructuralSelector(el) {
@@ -1172,7 +1273,8 @@
     e.preventDefault();
     e.stopPropagation();
 
-    const sel = getStableSelector(el);
+    const sel = choosePreciseSelector(el);
+    if (!sel) return;
     el.classList.remove('xeb-hover-highlight');
     el.classList.add('xeb-selected-highlight');
     selectedEls.push(el);
