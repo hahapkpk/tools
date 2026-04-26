@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.2.4
+// @version      3.2.5
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -352,7 +352,12 @@
   }
 
   function findGlobalGrokButton() {
-    for (const btn of document.querySelectorAll("[data-testid='primaryColumn'] button, [data-testid='sidebarColumn'] button, button[aria-label], [role='button'][aria-label]")) {
+    // X.com 导航栏 Grok 入口是 <a href="/i/grok">，优先按 href 匹配
+    for (const el of document.querySelectorAll("a[href='/i/grok'],a[href*='/i/grok']")) {
+      if (el.offsetParent !== null) return el;
+    }
+    // 兜底：按 aria-label / SVG 指纹匹配（排除 article 内的推文专属按钮）
+    for (const btn of document.querySelectorAll("[data-testid='primaryColumn'] button,[data-testid='sidebarColumn'] button,button[aria-label],[role='button'][aria-label]")) {
       if (btn.closest("article") || btn.classList.contains("gq-btn") || btn.offsetParent === null) continue;
       if (isLikelyGrokButton(btn)) return btn;
     }
@@ -564,11 +569,13 @@
       }
     }
 
-    // 未找到可用 composer：触发全局 Grok 导航按钮（不触发推文原生分析），再轮询注入
-    // 注意：不再使用 sourceBtn（推文专属按钮），因为它会触发 X.com 的原生「分析帖子」行为
+    // 未找到可用 composer：优先用全局 Grok 导航链接（不触发推文原生分析）
     const globalBtn = findGlobalGrokButton();
-    if (globalBtn) { triggerClick(globalBtn); startInjection(); }
-    else showToast(t("alert_no_grok"));
+    if (globalBtn) { triggerClick(globalBtn); startInjection(); return; }
+    // 兜底：推文专属按钮（会触发原生分析，但 startInjection 里的 stopGrokGeneration 会中止它）
+    const sourceBtn = tweetData?.sourceGrokButton;
+    if (sourceBtn && sourceBtn.isConnected) { triggerNativeGrokButton(sourceBtn); startInjection(); return; }
+    showToast(t("alert_no_grok"));
   }
 
   function triggerNativeGrokButton(btn) {
