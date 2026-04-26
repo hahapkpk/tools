@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.2.5
+// @version      3.2.6
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -352,11 +352,7 @@
   }
 
   function findGlobalGrokButton() {
-    // X.com 导航栏 Grok 入口是 <a href="/i/grok">，优先按 href 匹配
-    for (const el of document.querySelectorAll("a[href='/i/grok'],a[href*='/i/grok']")) {
-      if (el.offsetParent !== null) return el;
-    }
-    // 兜底：按 aria-label / SVG 指纹匹配（排除 article 内的推文专属按钮）
+    // 仅在 button/role=button 里找（不用 <a href="/i/grok">，那是全页导航会离开当前页）
     for (const btn of document.querySelectorAll("[data-testid='primaryColumn'] button,[data-testid='sidebarColumn'] button,button[aria-label],[role='button'][aria-label]")) {
       if (btn.closest("article") || btn.classList.contains("gq-btn") || btn.offsetParent === null) continue;
       if (isLikelyGrokButton(btn)) return btn;
@@ -569,12 +565,11 @@
       }
     }
 
-    // 未找到可用 composer：优先用全局 Grok 导航链接（不触发推文原生分析）
-    const globalBtn = findGlobalGrokButton();
-    if (globalBtn) { triggerClick(globalBtn); startInjection(); return; }
-    // 兜底：推文专属按钮（会触发原生分析，但 startInjection 里的 stopGrokGeneration 会中止它）
+    // 未找到可用 composer：用推文专属按钮打开侧边栏，startInjection 会先停掉原生分析再注入
     const sourceBtn = tweetData?.sourceGrokButton;
     if (sourceBtn && sourceBtn.isConnected) { triggerNativeGrokButton(sourceBtn); startInjection(); return; }
+    const globalBtn = findGlobalGrokButton();
+    if (globalBtn) { triggerClick(globalBtn); startInjection(); return; }
     showToast(t("alert_no_grok"));
   }
 
@@ -613,12 +608,22 @@
 
   async function startInjection() {
     const task = _pendingTask; if (!task) return;
+
+    // 阶段 1：等侧边栏打开后，尝试停止原生分析 / 新建对话（最多等 2s）
+    for (let i = 0; i < 25; i++) {
+      await sleep(80);
+      if (!_pendingTask) return;
+      if (stopGrokGeneration()) { await sleep(400); break; }
+      if (startNewGrokConversation()) { await sleep(600); break; }
+    }
+
+    // 阶段 2：轮询等待 textarea 可用，再注入
     let attempts = 0;
     while (attempts < INJECT_MAX_ATTEMPTS) {
+      if (!_pendingTask) return;
       attempts++;
       const composer = getVisibleComposer();
       if (composer && (isLikelyGrokSurface(composer) || (!isTweetComposer(composer) && attempts > 10))) {
-        if (stopGrokGeneration()) await sleep(350);
         startInjectionDirect(composer); return;
       }
       await sleep(INJECT_INTERVAL_MS);
@@ -638,11 +643,47 @@
   }
 
   function stopGrokGeneration() {
-    for (const btn of document.querySelectorAll("button")) {
+    const STOP_RE = /\bstop\b|\bcancel\b|停止|停止生成|stop.generat/i;
+    const EXCLUDE_RE = /repost|follow|unfollow|report|block|bookmark/i;
+    for (const btn of document.querySelectorAll("button,[role='button']")) {
       if (btn.offsetParent === null) continue;
       if (btn.closest("article,.gq-btn,#gq-menu,#gq-settings-overlay,#gq-push-overlay")) continue;
-      const label = (btn.getAttribute("aria-label") || btn.getAttribute("data-testid") || "").toLowerCase();
-      if (/\bstop\b|\bcancel\b|停止/.test(label) && !/repost|follow|unfollow/.test(label)) {
+      const combined = [btn.getAttribute("aria-label"), btn.getAttribute("data-testid"), btn.getAttribute("title")].filter(Boolean).join(" ");
+      if (STOP_RE.test(combined) && !EXCLUDE_RE.test(combined)) {
+        console.log("[GQ] stopGrokGeneration hit:", combined.trim().substring(0, 60));
+        triggerClick(btn); return true;
+      }
+    }
+    // 兜底：侧边栏内单路径 SVG 按钮（停止按钮通常只有一个极简矩形 path）
+    const sidebar = document.querySelector("[data-testid='sidebarColumn'],aside");
+    if (sidebar) {
+      for (const btn of sidebar.querySelectorAll("button")) {
+        if (btn.offsetParent === null || btn.closest("article,.gq-btn")) continue;
+        const paths = [...btn.querySelectorAll("path")];
+        if (paths.length === 1) {
+          const d = paths[0].getAttribute("d") || "";
+          // 矩形 stop 图标：只有 M/H/V/Z 命令，极少参数
+          if (/^[Mm][\d\s.,-]+[Hh][\d\s.,-]+[Vv][\d\s.,-]+[Hh][\d\s.,-]+[Zz]?$/i.test(d.trim())) {
+            console.log("[GQ] stopGrokGeneration SVG hit:", d.substring(0, 40));
+            triggerClick(btn); return true;
+          }
+        }
+      }
+    }
+    console.log("[GQ] stopGrokGeneration: no stop button found");
+    return false;
+  }
+
+  function startNewGrokConversation() {
+    // 点击 Grok 侧边栏头部的「新建对话」按钮（✏️ / compose 图标）
+    const NEW_RE = /new.*(convers|chat)|新.*(对话|会话|建)|compose|撰写/i;
+    const sidebar = document.querySelector("[data-testid='sidebarColumn'],aside");
+    if (!sidebar) return false;
+    for (const btn of sidebar.querySelectorAll("button,[role='button'],a[role='button']")) {
+      if (btn.offsetParent === null || btn.closest("article,.gq-btn")) continue;
+      const combined = [btn.getAttribute("aria-label"), btn.getAttribute("data-testid"), btn.getAttribute("title")].filter(Boolean).join(" ");
+      if (NEW_RE.test(combined)) {
+        console.log("[GQ] startNewGrokConversation hit:", combined.trim().substring(0, 60));
         triggerClick(btn); return true;
       }
     }
