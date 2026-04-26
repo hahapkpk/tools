@@ -2,12 +2,13 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.0.0
+// @version      3.1.0
 // @license      MIT
 // @author       Flywind
 // @icon         https://abs.twimg.com/favicons/twitter.3.ico
 // @match        https://twitter.com/*
 // @match        https://x.com/*
+// @match        https://pro.x.com/*
 // @match        https://mobile.twitter.com/*
 // @match        https://m.x.com/*
 // @grant        GM_setValue
@@ -17,7 +18,7 @@
 // @connect      discord.com
 // @connect      api.telegram.org
 // @run-at       document-idle
-// @description  替换每条推文的 Grok 按钮，一键将推文发送到 Grok 侧边栏分析。支持事实核查、深度分析、翻译及 5 个自定义 prompt 槽位。多语言支持、推送通知（Discord/Telegram）、私密模式。
+// @description  替换每条推文的 Grok 按钮，一键将推文发送到 Grok 侧边栏分析。支持事实核查、深度分析、翻译及 5 个自定义 prompt 槽位。兼容领哥脚本备注/重点关注数据，支持多语言、推送通知（Discord/Telegram）、私密模式。
 // ==/UserScript==
 
 (function () {
@@ -50,7 +51,7 @@
     },
   };
 
-  // 扩展自定义槽位（v3.0 从 5 → 3 + Commander 兼容的 tree/solution）
+  // 扩展自定义槽位（v3.1 保留 5 个自定义槽位并兼容 Commander 习惯）
   const EXTRA_CUSTOM_DEFAULTS = {
     custom3: { label: "\u81EA\u5B9A\u4E49 3", icon: "\u270F\uFE0F", prompt: "\u8BF7\u4ECE\u6279\u5224\u6027\u601D\u7EF4\u89D2\u5EA6\u8BC4\u4F30\u8FD9\u6761\u63A8\u6587\uFF1A\n\n" },
     custom4: { label: "\u81EA\u5B9A\u4E49 4", icon: "\u270F\uFE0F", prompt: "\u8BF7\u603B\u7ED3\u8FD9\u6761\u63A8\u6587\u7684\u6838\u5FC3\u4FE1\u606F\uFF0C\u5E76\u7ED9\u51FA\u4F60\u7684\u770B\u6CD5\uFF1A\n\n" },
@@ -253,15 +254,21 @@
   function loadPushConfig() {
     try {
       const raw = JSON.parse(GM_getValue("gq_push_config", "{}"));
-      if (!raw.discord && !raw.telegram) {
-        return { discord: [], telegram: [], skipConfirm: !!raw.skipConfirm, urlConverter: raw.urlConverter || "x.com" };
-      }
-      if (!raw.urlConverter) raw.urlConverter = "x.com";
-      return raw;
+      return normalizePushConfig(raw);
     } catch { return { discord: [], telegram: [], skipConfirm: false, urlConverter: "x.com" }; }
   }
 
   function savePushConfig(cfg) { GM_setValue("gq_push_config", JSON.stringify(cfg)); }
+
+  function normalizePushConfig(raw) {
+    const cfg = raw && typeof raw === "object" ? raw : {};
+    return {
+      discord: Array.isArray(cfg.discord) ? cfg.discord : [],
+      telegram: Array.isArray(cfg.telegram) ? cfg.telegram : [],
+      skipConfirm: !!cfg.skipConfirm,
+      urlConverter: URL_CONVERTER_DOMAINS.includes(cfg.urlConverter) ? cfg.urlConverter : "x.com",
+    };
+  }
 
   // ════════════════════════════════════════════════════════════════
   //  工具函数
@@ -323,15 +330,119 @@
   }
 
   function extractTweetData(article) {
-    if (!article) return { text: "", url: location.href, author: "" };
+    if (!article) return { text: "", url: location.href, author: "", handle: "", displayName: "", note: "", vip: null, time: "" };
     const textEl = article.querySelector("[data-testid='tweetText']");
-    const urlEl  = article.querySelector("time")?.closest("a");
-    const userLink = article.querySelector("[data-testid='User-Name'] a");
+    const userBlock = article.querySelector("[data-testid='User-Name']");
+    const userLink = findAuthorLink(article);
+    const handle = normalizeHandle(userLink?.getAttribute("href") || "");
+    const url = getTweetUrl(article);
+    const profile = getLingProfileInfo(handle);
+    const timeEl = article.querySelector("time");
     return {
-      text: textEl ? textEl.innerText : "",
-      url: urlEl ? `${location.origin}${urlEl.getAttribute("href")}` : location.href,
-      author: userLink ? userLink.getAttribute("href")?.replace("/", "") : "",
+      text: cleanText(textEl ? textEl.innerText : getFallbackTweetText(article)),
+      url,
+      author: handle ? `@${handle}` : "",
+      handle,
+      displayName: getDisplayName(userBlock, handle),
+      note: profile.note,
+      vip: profile.vip,
+      time: timeEl?.getAttribute("datetime") || "",
     };
+  }
+
+  function normalizeHandle(value) {
+    if (!value) return "";
+    let clean = String(value).trim();
+    clean = clean.replace(/^(https?:\/\/)?(www\.)?(twitter\.com|x\.com|pro\.x\.com|mobile\.twitter\.com|m\.x\.com)\//i, "");
+    clean = clean.replace(/^\/+/, "").split(/[/?#]/)[0].replace(/^@/, "");
+    const systemPaths = new Set(["home","explore","notifications","messages","status","hashtag","search","settings","i","intent","compose"]);
+    if (!clean || systemPaths.has(clean.toLowerCase())) return "";
+    return clean;
+  }
+
+  function findAuthorLink(article) {
+    const links = [
+      ...article.querySelectorAll("[data-testid='User-Name'] a[href^='/'], [data-testid='User-Name'] a[href*='x.com/'], a[role='link'][href^='/']")
+    ];
+    return links.find(link => {
+      const handle = normalizeHandle(link.getAttribute("href"));
+      return handle && !/\d{8,}/.test(handle);
+    }) || null;
+  }
+
+  function getTweetUrl(article) {
+    const timeLink = article.querySelector("time")?.closest("a[href*='/status/']");
+    const statusLink = timeLink || [...article.querySelectorAll("a[href*='/status/']")].find(a => /\d{8,}/.test(a.getAttribute("href") || ""));
+    if (!statusLink) return location.href;
+    try { return new URL(statusLink.getAttribute("href"), location.origin).href; }
+    catch { return location.href; }
+  }
+
+  function getDisplayName(userBlock, handle) {
+    if (!userBlock) return "";
+    const lines = cleanText(userBlock.innerText).split("\n").map(s => s.trim()).filter(Boolean);
+    return lines.find(line => !line.startsWith("@") && line.toLowerCase() !== handle.toLowerCase()) || "";
+  }
+
+  function cleanText(value) {
+    return String(value || "").replace(/\u00a0/g, " ").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  }
+
+  function getFallbackTweetText(article) {
+    const ignored = new Set(["Reply","Repost","Like","View","Share","Post","Translate post"]);
+    return [...article.querySelectorAll("div[lang], span")]
+      .map(el => el.innerText || el.textContent || "")
+      .map(cleanText)
+      .filter(text => text && !ignored.has(text) && !/^@\w+$/.test(text))
+      .slice(0, 8)
+      .join("\n");
+  }
+
+  function getLingProfileInfo(handle) {
+    if (!handle) return { note: "", vip: null };
+    const key = handle.toLowerCase();
+    const note = readLingNote(key);
+    const vip = readLingVip(key);
+    return { note, vip };
+  }
+
+  function readLingNote(handle) {
+    const candidates = ["ling_user_notes", "ling_notes", "twitter_notes", "x_user_notes"];
+    for (const key of candidates) {
+      try {
+        const raw = GM_getValue(key, null);
+        if (!raw) continue;
+        const data = typeof raw === "string" ? JSON.parse(raw) : raw;
+        const value = data?.[handle] || data?.[`@${handle}`];
+        if (typeof value === "string") return value;
+        if (value?.note) return String(value.note);
+      } catch {}
+    }
+    return "";
+  }
+
+  function readLingVip(handle) {
+    try {
+      const raw = GM_getValue("ling_vips", null);
+      if (!raw) return null;
+      const data = typeof raw === "string" ? JSON.parse(raw) : raw;
+      const value = data?.[handle] || data?.[`@${handle}`];
+      if (!value) return null;
+      if (Array.isArray(value)) return { label: value[0] || "重点关注", raw: value };
+      if (typeof value === "string") return { label: value, raw: value };
+      return { label: value.label || value.name || "重点关注", raw: value };
+    } catch { return null; }
+  }
+
+  function buildTweetMeta(tweetData) {
+    const lines = [];
+    lines.push(`[推文链接]: ${tweetData.url || location.href}`);
+    if (tweetData.displayName || tweetData.author) lines.push(`[推文作者]: ${[tweetData.displayName, tweetData.author].filter(Boolean).join(" ")}`);
+    if (tweetData.time) lines.push(`[发布时间]: ${tweetData.time}`);
+    if (tweetData.note) lines.push(`[本地备注]: ${tweetData.note}`);
+    if (tweetData.vip?.label) lines.push(`[重点关注]: ${tweetData.vip.label}`);
+    lines.push(`[推文内容]: ${tweetData.text || "(未提取到正文)"}`);
+    return lines.join("\n");
   }
 
   function escapeHtml(str) {
@@ -341,8 +452,8 @@
   }
 
   function convertTweetUrl(url, domain) {
-    if (!domain || domain === "x.com") return url;
-    try { return url.replace(/^(https?:\/\/)(www\.)?(x\.com|twitter\.com)/i, `$1${domain}`); }
+    if (!domain) return url;
+    try { return url.replace(/^(https?:\/\/)(www\.)?(x\.com|twitter\.com|pro\.x\.com|mobile\.twitter\.com|m\.x\.com)/i, `$1${domain}`); }
     catch { return url; }
   }
 
@@ -351,8 +462,7 @@
   // ════════════════════════════════════════════════════════════════
   function executeCommand(prompt, tweetData) {
     const cfg = loadConfig();
-    const meta = `[${t("push_url_format")}]: ${tweetData.url}\n[${"\u63A8\u6587\u4F5C\u8005"}]: ${tweetData.author || "\u672A\u77E5"}\n[${"\u63A8\u6587\u5185\u5BB9"}]: ${tweetData.text}`;
-    const fullContent = `${prompt}\n${meta}`;
+    const fullContent = `${prompt}\n${buildTweetMeta(tweetData)}`;
 
     resetGlobalState();
     _pendingTask = { content: fullContent, autoSend: cfg.autoSend === true, textFilled: false, targetInput: null };
@@ -550,13 +660,13 @@
       ...(cfg.telegram||[]).filter(e=>e.enabled&&e.token&&e.chat).map(e=>({type:"telegram",label:e.label||"Telegram",token:e.token,chat:e.chat})),
     ];
     if (!allTargets.length) { showToast(t("push_not_configured")); openSettings(); return; }
-    if (allTargets.length === 1) { execPush(tweetData.url, allTargets); return; }
-    showPushSelect(tweetData.url, allTargets);
+    if (allTargets.length === 1) { execPush(tweetData, allTargets); return; }
+    showPushSelect(tweetData, allTargets);
   }
 
-  function showPushSelect(url, targets) {
+  function showPushSelect(tweetData, targets) {
     const cfg = loadPushConfig();
-    const convUrl = convertTweetUrl(url, cfg.urlConverter);
+    const convUrl = convertTweetUrl(tweetData.url, cfg.urlConverter);
     const ovId = "gq-push-overlay";
     document.getElementById(ovId)?.remove();
 
@@ -585,13 +695,14 @@
     ov.querySelector("#gq-push-ok").onclick = () => {
       const selected = [...list.querySelectorAll(":checked")].map(el=>targets[parseInt(el.dataset.i)]);
       if (!selected.length) { showToast(t("push_not_configured")); return; }
-      ov.remove(); execPush(url, selected);
+      ov.remove(); execPush(tweetData, selected);
     };
   }
 
-  function execPush(url, targets) {
+  function execPush(tweetData, targets) {
     const cfg = loadPushConfig();
-    const convertedUrl = convertTweetUrl(url, cfg.urlConverter);
+    const convertedUrl = convertTweetUrl(tweetData.url, cfg.urlConverter);
+    const message = buildPushMessage(tweetData, convertedUrl);
     let ok = 0, fail = 0, total = targets.length;
     function done() { if (ok+fail>=total) showToast(`${ok?t("push_result_ok"):t("push_result_fail")} (${ok}/${total})`); }
 
@@ -601,7 +712,7 @@
           GM_xmlhttpRequest({
             method:"POST", url:tgt.url,
             headers:{"Content-Type":"application/json"},
-            data:JSON.stringify({content: convertedUrl}),
+            data:JSON.stringify({content: truncateFor(message, 1900)}),
             onload:(r)=>{(r.status>=200&&r.status<300)?ok++:fail++;done()},
             onerror:()=>{fail++;done()}
           });
@@ -609,13 +720,29 @@
           GM_xmlhttpRequest({
             method:"POST", url:`https://api.telegram.org/bot${tgt.token}/sendMessage`,
             headers:{"Content-Type":"application/json"},
-            data:JSON.stringify({chat_id:tgt.chat,text:convertutedUrl,disable_web_page_preview:false}),
+            data:JSON.stringify({chat_id:tgt.chat,text:truncateFor(message, 3900),disable_web_page_preview:false}),
             onload:(r)=>{try{JSON.parse(r.responseText).ok?ok++:fail++}catch{fail++}done()},
             onerror:()=>{fail++;done()}
           });
         }
       }, i*500);
     });
+  }
+
+  function buildPushMessage(tweetData, convertedUrl) {
+    const parts = [];
+    const author = [tweetData.displayName, tweetData.author].filter(Boolean).join(" ");
+    if (tweetData.vip?.label) parts.push(`重点关注: ${tweetData.vip.label}`);
+    if (tweetData.note) parts.push(`备注: ${tweetData.note}`);
+    if (author) parts.push(`作者: ${author}`);
+    if (tweetData.text) parts.push(`内容: ${truncateFor(tweetData.text, 900)}`);
+    parts.push(convertedUrl || tweetData.url || location.href);
+    return parts.join("\n");
+  }
+
+  function truncateFor(text, maxLen) {
+    const value = String(text || "");
+    return value.length > maxLen ? value.slice(0, maxLen - 1) + "…" : value;
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -636,10 +763,10 @@
     const modal = document.createElement("div"); modal.id = "gq-settings-modal";
 
     modal.innerHTML = `
-      <div class="gq-modal-header"><span>${t("settings_title")} <small>v3.0</small><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
+      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.1</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
       <div class="gq-modal-body">
         <!-- 语言 & 模式 -->
-        <div class="gq-section-card"><div class="gq-section-header">⚙️ ${t("lang")} & ${t("send_mode_label")}</div><div class="gq-section-body">
+        <div class="gq-section-card"><div class="gq-section-header">⚙️ ${t("lang_label")} & ${t("send_mode_label")}</div><div class="gq-section-body">
           <div class="gq-form-row"><label class="gq-form-label">${t("lang_label")}</label>
             <select id="gq-lang-select" class="gq-input-text">
               <option value="auto" ${draft.lang==="auto"?"selected":""}>${t("lang_auto")}</option>
@@ -689,7 +816,7 @@
         const k = inp.dataset.key; if(draft[k]) draft[k].label = inp.value;
       });
       // 保存推送
-      savePushConfig(collectPushConfig());
+      savePushConfig(collectPushConfig(pc));
       saveConfig(draft); showToast(t("alert_saved")); closeSettings();
     };
 
@@ -698,7 +825,7 @@
       draft.autoSend = document.getElementById("gq-autosend-chk").checked;
       draft.privateMode = document.getElementById("gq-private-chk").checked;
       collectTemplateValues(draft);
-      const data = JSON.stringify(draft, null, 2);
+      const data = JSON.stringify({ ...draft, push: collectPushConfig(pc) }, null, 2);
       const blob = new Blob([data], {type:"application/json"});
       const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
       a.download = `grok-quick-v3-${Date.now()}.json`; a.click();
@@ -718,6 +845,10 @@
           if(typeof imported.autoSend==="boolean") draft.autoSend = imported.autoSend;
           if(typeof imported.privateMode==="boolean") draft.privateMode = imported.privateMode;
           if(imported.lang) draft.lang = imported.lang;
+          if(imported.push && typeof imported.push === "object") {
+            Object.assign(pc, normalizePushConfig(imported.push));
+            renderPushSection(document.getElementById("gq-push-container"), pc);
+          }
           document.getElementById("gq-autosend-chk").checked = draft.autoSend;
           document.getElementById("gq-private-chk").checked = draft.privateMode;
           renderTemplateEditors(document.getElementById("gq-template-container"), draft);
@@ -786,10 +917,10 @@
 
     // URL 转换器
     const ucRow = document.createElement("div"); ucRow.className = "gq-form-row";
+    const selectedDomain = pc.urlConverter || "x.com";
+    const domainOptions = URL_CONVERTER_DOMAINS.map(domain => `<option value="${domain}" ${selectedDomain===domain?"selected":""}>${domain}</option>`).join("");
     ucRow.innerHTML = `<label class="gq-form-label">${t("push_url_format")}</label>
-      <select id="gq-url-sel" class="gq-input-text"><option value="x.com" ${(!pc.urlConverter||pc.urlConverter==="x.com")?"selected":""}>x.com</option>
-        <option value="vxtwitter.com" ${pc.urlConverter==="vxtwitter.com"?"selected":""}>vxtwitter.com</option>
-        <option value="fxtwitter.com" ${pc.urlConverter==="fxtwitter.com"?"selected":""}>fxtwitter.com</option></select>`;
+      <select id="gq-url-sel" class="gq-input-text">${domainOptions}</select>`;
     container.appendChild(ucRow);
 
     // Discord
@@ -819,7 +950,7 @@
     if (!(pc.telegram||[]).length) { const empty = document.createElement("div"); empty.style.cssText = "font-size:11px;color:#3d4a55;padding:4px 0;"; empty.textContent = t("push_add")+" →"; container.appendChild(empty); }
 
     // 绑定 URL 选择器变化
-    container.querySelector("#gq-url-sel")?.addEventListener("change", (e) => { pc.urlConverter = e.target.value; savePushConfig(pc); });
+    container.querySelector("#gq-url-sel")?.addEventListener("change", (e) => { pc.urlConverter = e.target.value; });
   }
 
   function createPushEntry(type, entry, idx, pc) {
@@ -852,48 +983,16 @@
     return div;
   }
 
-  function collectPushConfig() {
+  function collectPushConfig(pc) {
     const sel = document.getElementById("gq-url-sel");
+    const current = normalizePushConfig(pc || loadPushConfig());
     return {
-      discord: document.gqDraftDiscord || (loadPushConfig().discord || []),
-      telegram: document.gqDraftTelegram || (loadPushConfig().telegram || []),
-      skipConfirm: loadPushConfig().skipConfirm,
+      discord: current.discord,
+      telegram: current.telegram,
+      skipConfirm: current.skipConfirm,
       urlConverter: sel ? sel.value : "x.com",
     };
   }
-
-  // 临时保存推送草稿
-  const origRender = renderPushSection;
-  renderPushSection = function(container, pc) {
-    document.gqDraftDiscord = JSON.parse(JSON.stringify(pc.discord || []));
-    document.gqDraftTelegram = JSON.parse(JSON.stringify(pc.telegram || []));
-
-    origRender(container, pc);
-
-    // 重新绑定事件后收集最新值
-    container.querySelectorAll(".gq-push-entry").forEach(entryDiv => {
-      // 收集输入框变化
-      entryDiv.querySelectorAll("input:not(:checkbox)").forEach(inp => {
-        const oldOnInput = inp.oninput;
-        inp.oninput = function(...args) {
-          // 同步更新草稿数组
-          const entries = entryDiv.closest(".gq-push-entry")?.previousElementSibling?.textContent === t("push_discord")
-            ? document.gqDraftDiscord : document.gqDraftTelegram;
-          const arr = entries || [];
-          // 通过 DOM 顺序找到对应索引
-          const allEntries = container.querySelectorAll(".gq-push-entry");
-          let targetIdx = -1; allEntries.forEach((e,i)=>{ if(e===entryDiv) targetIdx=i; });
-          if (targetIdx>=0 && arr[targetIdx]) {
-            if (inp.placeholder.includes("Webhook")) arr[targetIdx].url = inp.value;
-            else if (inp.placeholder.includes("Token")) arr[targetIdx].token = inp.value;
-            else if (inp.placeholder.includes("Chat")) arr[targetIdx].chat = inp.value;
-            else if (!inp.placeholder.includes("Channel")) arr[targetIdx].label = inp.value;
-          }
-          if (oldOnInput) oldOnInput.apply(this, args);
-        };
-      });
-    });
-  };
 
   function closeSettings() { document.getElementById("gq-settings-overlay")?.remove(); }
 
@@ -973,7 +1072,7 @@
     .gq-section-body{padding:14px 15px;display:flex;flex-direction:column;gap:10px}
     .gq-form-row{display:flex;flex-direction:column;gap:5px}
     .gq-form-label{font-size:12px;color:var(--gq-muted,#71767B);font-weight:500}
-    .gq-input-text,.gq-input-select{background:var(--gq-input-bg,#0d1117);border:1px solid var(--gq-border,#2f3336);border-radius:10px;color:var(--gq-text,#E7E9EA);font-size:13.5px;padding:9px 12px;outline:none;transition:border-color .15s,width:100%;box-sizing:border-box;font-family:inherit}
+    .gq-input-text,.gq-input-select{background:var(--gq-input-bg,#0d1117);border:1px solid var(--gq-border,#2f3336);border-radius:10px;color:var(--gq-text,#E7E9EA);font-size:13.5px;padding:9px 12px;outline:none;transition:border-color .15s,box-shadow .15s;width:100%;box-sizing:border-box;font-family:inherit}
     .gq-input-text:focus,.gq-input-select:focus{border-color:#FF1493;box-shadow:0 0 0 3px rgba(255,20,147,.15)}
     .gq-input-textarea{background:var(--gq-input-bg,#0d1117);border:1px solid var(--gq-border,#2f3336);border-radius:10px;color:var(--gq-text,#E7E9EA);font-size:13.5px;padding:9px 12px;outline:none;resize:vertical;min-height:72px;font-family:inherit;line-height:1.55;width:100%;box-sizing:border-box;transition:border-color .15s}
     .gq-input-textarea:focus{border-color:#FF1493;box-shadow:0 0 0 3px rgba(255,20,147,.15)}
@@ -1029,5 +1128,5 @@
   window.addEventListener("scroll", () => { if (scrollTimer) return; scrollTimer = setTimeout(() => { scrollTimer = null; scheduleHijack(); }, 200); }, { passive: true });
 
   GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3 \u8BBE\u7F6E", openSettings);
-  console.log("[Grok Quick] v3.0 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
+  console.log("[Grok Quick] v3.1 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
 })();
