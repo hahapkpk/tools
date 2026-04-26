@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.2.3
+// @version      3.2.4
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -564,14 +564,8 @@
       }
     }
 
-    // 未找到可用 composer：触发原生 Grok 按钮打开侧边栏，再轮询注入
-    const sourceBtn = tweetData?.sourceGrokButton;
-    if (sourceBtn && sourceBtn.isConnected) {
-      triggerNativeGrokButton(sourceBtn);
-      startInjection();
-      return;
-    }
-
+    // 未找到可用 composer：触发全局 Grok 导航按钮（不触发推文原生分析），再轮询注入
+    // 注意：不再使用 sourceBtn（推文专属按钮），因为它会触发 X.com 的原生「分析帖子」行为
     const globalBtn = findGlobalGrokButton();
     if (globalBtn) { triggerClick(globalBtn); startInjection(); }
     else showToast(t("alert_no_grok"));
@@ -616,7 +610,10 @@
     while (attempts < INJECT_MAX_ATTEMPTS) {
       attempts++;
       const composer = getVisibleComposer();
-      if (composer && (isLikelyGrokSurface(composer) || (!isTweetComposer(composer) && attempts > 10))) { startInjectionDirect(composer); return; }
+      if (composer && (isLikelyGrokSurface(composer) || (!isTweetComposer(composer) && attempts > 10))) {
+        if (stopGrokGeneration()) await sleep(350);
+        startInjectionDirect(composer); return;
+      }
       await sleep(INJECT_INTERVAL_MS);
     }
     showToast(t("alert_no_grok")); resetGlobalState();
@@ -631,6 +628,18 @@
         setTimeout(() => { if (_pendingTask?.targetInput) setComposerValue(_pendingTask.targetInput, ""); resetGlobalState(); }, 500);
       } else resetGlobalState();
     }, 200);
+  }
+
+  function stopGrokGeneration() {
+    for (const btn of document.querySelectorAll("button")) {
+      if (btn.offsetParent === null) continue;
+      if (btn.closest("article,.gq-btn,#gq-menu,#gq-settings-overlay,#gq-push-overlay")) continue;
+      const label = (btn.getAttribute("aria-label") || btn.getAttribute("data-testid") || "").toLowerCase();
+      if (/\bstop\b|\bcancel\b|停止/.test(label) && !/repost|follow|unfollow/.test(label)) {
+        triggerClick(btn); return true;
+      }
+    }
+    return false;
   }
 
   function findSendButton() {
