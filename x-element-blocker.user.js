@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Element Blocker
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.4.0
+// @version      1.4.1
 // @description  在 X.com 上通过点选元素来屏蔽不想要的区域，类似 uBlock 的自定义屏蔽功能
 // @author       hahapkpk
 // @match        https://x.com/*
@@ -32,6 +32,7 @@
   let pendingSelectors = []; // 待确认的选择器列表
   let highlightedEl = null;
   let selectedEls = []; // 多选暂存
+  let applyTimer = null;
 
   function normalizeRules(saved) {
     const now = new Date().toISOString();
@@ -383,11 +384,11 @@
   }
 
   // ─── 应用规则（隐藏元素）────────────────────────────────────────────────────
-  function applyRules() {
-    restoreHiddenElements();
+  function applyRules(options = {}) {
+    const restoreFirst = options.restore === true;
+    if (restoreFirst) restoreHiddenElements();
     clearDebugMarks();
     if (paused) {
-      if (panelVisible) renderRules();
       return;
     }
     rules.forEach((rule, index) => {
@@ -410,7 +411,14 @@
         });
       } catch (e) { /* 无效选择器跳过 */ }
     });
-    if (panelVisible) renderRules();
+  }
+
+  function scheduleApplyRules() {
+    if (applyTimer) return;
+    applyTimer = window.setTimeout(() => {
+      applyTimer = null;
+      applyRules();
+    }, 150);
   }
 
   function restoreHiddenElements() {
@@ -440,6 +448,7 @@
       el.dataset.xebOldDisplay = el.style.display || '';
       el.dataset.xebHidden = '1';
     }
+    if (el.style.display === 'none') return;
     el.style.setProperty('display', 'none', 'important');
   }
 
@@ -453,7 +462,15 @@
   }
 
   // MutationObserver 监听 DOM 变化（懒加载 / 动态内容）
-  const observer = new MutationObserver(() => applyRules());
+  const observer = new MutationObserver(mutations => {
+    if (mutations.every(mutation => {
+      const target = mutation.target;
+      return target.closest && (target.closest('#xeb-panel') || target.closest('#xeb-toggle-fab'));
+    })) {
+      return;
+    }
+    scheduleApplyRules();
+  });
   observer.observe(document.body, { childList: true, subtree: true });
 
   // ─── 面板 UI ─────────────────────────────────────────────────────────────────
@@ -624,8 +641,8 @@
       pendingSelectors = [];
       clearSelectedHighlights();
       renderPending();
-      renderRules();
       applyRules();
+      renderRules();
     });
 
     // 取消
@@ -655,7 +672,8 @@
           rules[i].enabled = !rules[i].enabled;
           rules[i].updatedAt = new Date().toISOString();
           saveRules();
-          applyRules();
+          applyRules({ restore: true });
+          renderRules();
         }
         return;
       }
@@ -664,8 +682,8 @@
         const i = parseInt(del.dataset.i);
         rules.splice(i, 1);
         saveRules();
+        applyRules({ restore: true });
         renderRules();
-        applyRules();
       }
     });
 
@@ -698,8 +716,8 @@
               if (!rules.some(item => getSelector(item) === rule.selector)) rules.push(rule);
             });
             saveRules();
+            applyRules({ restore: true });
             renderRules();
-            applyRules();
             alert(`已导入 ${imported.length} 条规则`);
           } catch (e) {
             alert('导入失败：' + e.message);
@@ -782,13 +800,15 @@
   function setPaused(value) {
     paused = value;
     GM_setValue(PAUSED_KEY, paused);
-    applyRules();
+    applyRules({ restore: true });
+    renderRules();
   }
 
   function setDebugMode(value) {
     debugMode = value;
     GM_setValue(DEBUG_KEY, debugMode);
-    applyRules();
+    applyRules({ restore: true });
+    renderRules();
   }
 
   // ─── 面板显隐 ────────────────────────────────────────────────────────────────
