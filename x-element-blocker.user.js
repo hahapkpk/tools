@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Element Blocker
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.5.0
+// @version      1.5.1
 // @description  在 X.com 上通过点选元素来屏蔽不想要的区域，类似 uBlock 的自定义屏蔽功能
 // @author       hahapkpk
 // @match        https://x.com/*
@@ -1094,6 +1094,55 @@
     document.addEventListener('mouseover', onMouseOver, true);
     document.addEventListener('mouseout', onMouseOut, true);
     document.addEventListener('click', onPickClick, true);
+    document.addEventListener('keydown', onShortcutKey, true);
+  }
+
+  function onShortcutKey(e) {
+    if (shouldIgnoreShortcut(e)) return;
+    const key = e.key.toLowerCase();
+    if (e.altKey && !e.ctrlKey && !e.metaKey && key === 'b') {
+      e.preventDefault();
+      e.stopPropagation();
+      togglePanel(!panelVisible);
+      return;
+    }
+    if (e.altKey && !e.ctrlKey && !e.metaKey && key === 'p') {
+      e.preventDefault();
+      e.stopPropagation();
+      setPaused(!paused);
+      return;
+    }
+    if (e.altKey && !e.ctrlKey && !e.metaKey && key === 'd') {
+      e.preventDefault();
+      e.stopPropagation();
+      setDebugMode(!debugMode);
+      return;
+    }
+    if (e.key === 'Escape') {
+      if (pickMode) {
+        e.preventDefault();
+        stopPickMode();
+        return;
+      }
+      if (previewRuleIndex !== null) {
+        e.preventDefault();
+        clearPreview();
+        renderRules();
+        return;
+      }
+      if (panelVisible) {
+        e.preventDefault();
+        togglePanel(false);
+      }
+    }
+  }
+
+  function shouldIgnoreShortcut(e) {
+    const el = e.target;
+    if (!el) return false;
+    const tag = el.tagName ? el.tagName.toLowerCase() : '';
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+    return el.isContentEditable || !!el.closest('[contenteditable="true"]');
   }
 
   // ─── 选取模式鼠标事件 ────────────────────────────────────────────────────────
@@ -1274,13 +1323,13 @@
   }
 
   // ─── 油猴菜单命令 ────────────────────────────────────────────────────────────
-  GM_registerMenuCommand('显示/隐藏 Element Blocker', () => {
+  GM_registerMenuCommand('显示/隐藏 Element Blocker (Alt+B)', () => {
     togglePanel(!panelVisible);
   });
-  GM_registerMenuCommand('暂停/恢复屏蔽', () => {
+  GM_registerMenuCommand('暂停/恢复屏蔽 (Alt+P)', () => {
     setPaused(!paused);
   });
-  GM_registerMenuCommand('开启/关闭调试高亮', () => {
+  GM_registerMenuCommand('开启/关闭调试高亮 (Alt+D)', () => {
     setDebugMode(!debugMode);
   });
 
