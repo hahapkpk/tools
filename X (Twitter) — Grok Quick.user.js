@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.2.1
+// @version      3.2.2
 // @license      MIT
 // @author       Flywind
 // @icon         https://abs.twimg.com/favicons/twitter.3.ico
@@ -323,12 +323,29 @@
     });
   }
 
-  function setReactValue(el, value) {
-    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set
-                    || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
-    if (nativeSetter) nativeSetter.call(el, value);
-    else el.value = value;
-    el.dispatchEvent(new Event("input",  { bubbles: true }));
+  function setComposerValue(el, value) {
+    if (!el) return;
+    const tag = el.tagName?.toLowerCase();
+    if (tag === "textarea" || tag === "input") {
+      const proto = tag === "textarea" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+      const nativeSetter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+      if (nativeSetter) nativeSetter.call(el, value);
+      else el.value = value;
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      return;
+    }
+
+    el.focus();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    if (!document.execCommand("insertText", false, value)) {
+      el.textContent = value;
+    }
+    el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
@@ -340,11 +357,39 @@
     return null;
   }
 
-  function getVisibleTextarea() {
-    for (const ta of document.querySelectorAll("textarea[data-testid='tweetTextarea_0'], textarea")) {
-      if (ta.offsetParent !== null && ta.offsetWidth > 0) return ta;
+  function getVisibleComposer() {
+    const active = document.activeElement;
+    if (isUsableComposer(active)) return active;
+
+    const selectors = [
+      "textarea[aria-label*='Grok' i]",
+      "textarea[placeholder*='Grok' i]",
+      "textarea[data-testid*='grok' i]",
+      "[contenteditable='true'][aria-label*='Grok' i]",
+      "[contenteditable='true'][data-testid*='grok' i]",
+      "[role='textbox'][aria-label*='Grok' i]",
+      "[role='textbox'][contenteditable='true']",
+      "div[contenteditable='true']",
+      "textarea[data-testid='tweetTextarea_0']",
+      "textarea",
+    ];
+    for (const el of document.querySelectorAll(selectors.join(","))) {
+      if (isUsableComposer(el)) return el;
     }
     return null;
+  }
+
+  function isUsableComposer(el) {
+    if (!el || !(el instanceof HTMLElement)) return false;
+    const tag = el.tagName.toLowerCase();
+    const editable = el.isContentEditable || tag === "textarea" || tag === "input" || el.getAttribute("role") === "textbox";
+    if (!editable || el.disabled || el.getAttribute("aria-disabled") === "true") return false;
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 20 || rect.height < 10) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return false;
+    if (el.closest("#gq-menu,#gq-settings-overlay,#gq-push-overlay")) return false;
+    return true;
   }
 
   function extractTweetData(article) {
@@ -485,8 +530,8 @@
     resetGlobalState();
     _pendingTask = { content: fullContent, autoSend: cfg.autoSend === true, textFilled: false, targetInput: null };
 
-    const existingTa = getVisibleTextarea();
-    if (existingTa) { startInjectionDirect(existingTa); return; }
+    const existingComposer = getVisibleComposer();
+    if (existingComposer && isLikelyGrokSurface(existingComposer)) { startInjectionDirect(existingComposer); return; }
 
     if (cfg.privateMode) {
       // 私密模式：跳转到 x.com/i/grok 并携带参数
@@ -514,13 +559,24 @@
     setTimeout(() => _nativeClickBypass.delete(btn), 500);
   }
 
+  function isLikelyGrokSurface(el) {
+    const surface = el.closest("[aria-label*='Grok' i],[data-testid*='grok' i],[role='dialog'],aside,[data-testid='sidebarColumn']");
+    if (!surface) return false;
+    const text = [
+      surface.getAttribute("aria-label"),
+      surface.getAttribute("data-testid"),
+      surface.textContent,
+    ].filter(Boolean).join(" ").toLowerCase();
+    return text.includes("grok") || text.includes("\u95EE grok") || text.includes("\u5411 grok");
+  }
+
   async function startInjectionDirect(targetInput) {
     const task = _pendingTask;
-    if (!task || targetInput.offsetParent === null) { showToast(t("need_reopen")); return; }
+    if (!task || !isUsableComposer(targetInput)) { showToast(t("need_reopen")); return; }
     try {
-      setReactValue(targetInput, "");
+      setComposerValue(targetInput, "");
       await sleep(50);
-      setReactValue(targetInput, task.content);
+      setComposerValue(targetInput, task.content);
       targetInput.focus();
       task.textFilled = true; task.targetInput = targetInput;
       await sleep(150);
@@ -535,7 +591,8 @@
     let attempts = 0;
     while (attempts < INJECT_MAX_ATTEMPTS) {
       attempts++;
-      const ta = getVisibleTextarea(); if (ta) { startInjectionDirect(ta); return; }
+      const composer = getVisibleComposer();
+      if (composer && (isLikelyGrokSurface(composer) || attempts > 25)) { startInjectionDirect(composer); return; }
       await sleep(INJECT_INTERVAL_MS);
     }
     showToast(t("alert_no_grok")); resetGlobalState();
@@ -547,7 +604,7 @@
       const btn = findSendButton();
       if (btn && !btn.disabled && btn.getAttribute("aria-disabled") !== "true") {
         triggerClick(btn);
-        setTimeout(() => { if (_pendingTask?.targetInput) setReactValue(_pendingTask.targetInput, ""); resetGlobalState(); }, 500);
+        setTimeout(() => { if (_pendingTask?.targetInput) setComposerValue(_pendingTask.targetInput, ""); resetGlobalState(); }, 500);
       } else resetGlobalState();
     }, 200);
   }
@@ -794,7 +851,7 @@
     const modal = document.createElement("div"); modal.id = "gq-settings-modal";
 
     modal.innerHTML = `
-      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.2.1</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
+      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.2.2</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
       <div class="gq-modal-body">
         <!-- 语言 & 模式 -->
         <div class="gq-section-card"><div class="gq-section-header">⚙️ ${t("lang_label")} & ${t("send_mode_label")}</div><div class="gq-section-body">
@@ -1068,7 +1125,7 @@
       origBtn.style.color = "#FF1493";
       origBtn.style.cursor = "pointer";
       origBtn.setAttribute("aria-label", "Grok Quick: \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49");
-      origBtn.title = "Grok Quick v3.2.1 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
+      origBtn.title = "Grok Quick v3.2.2 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
 
       origBtn.addEventListener("click", (e) => {
         if (_nativeClickBypass.has(origBtn)) return;
@@ -1173,6 +1230,6 @@
   let scrollTimer = null;
   window.addEventListener("scroll", () => { if (scrollTimer) return; scrollTimer = setTimeout(() => { scrollTimer = null; scheduleHijack(); }, 200); }, { passive: true });
 
-  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.2.1 \u8BBE\u7F6E", openSettings);
-  console.log("[Grok Quick] v3.2.1 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
+  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.2.2 \u8BBE\u7F6E", openSettings);
+  console.log("[Grok Quick] v3.2.2 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
 })();
