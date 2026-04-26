@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Element Blocker
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.4.1
+// @version      1.4.2
 // @description  在 X.com 上通过点选元素来屏蔽不想要的区域，类似 uBlock 的自定义屏蔽功能
 // @author       hahapkpk
 // @match        https://x.com/*
@@ -95,18 +95,20 @@
   GM_addStyle(`
     #xeb-panel {
       position: fixed;
-      top: 80px;
-      right: 20px;
-      width: 340px;
+      top: 72px;
+      right: 16px;
+      width: min(420px, calc(100vw - 24px));
+      max-height: calc(100vh - 96px);
       background: #15202b;
       color: #e7e9ea;
       border: 1px solid #38444d;
-      border-radius: 12px;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+      border-radius: 10px;
+      box-shadow: 0 10px 28px rgba(0,0,0,0.45);
       z-index: 999999;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      font-size: 13px;
+      font-size: 12px;
       user-select: none;
+      overflow: hidden;
     }
     #xeb-panel.xeb-hidden { display: none !important; }
     #xeb-toggle-fab.xeb-hidden { display: none !important; }
@@ -114,12 +116,12 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 12px 14px 10px;
+      padding: 10px 12px;
       border-bottom: 1px solid #38444d;
       cursor: move;
-      border-radius: 12px 12px 0 0;
+      border-radius: 10px 10px 0 0;
     }
-    #xeb-header span { font-weight: 700; font-size: 14px; }
+    #xeb-header span { font-weight: 700; font-size: 13px; }
     #xeb-close {
       cursor: pointer;
       opacity: 0.6;
@@ -128,20 +130,27 @@
       padding: 0 2px;
     }
     #xeb-close:hover { opacity: 1; }
-    #xeb-body { padding: 12px 14px; }
+    #xeb-body {
+      padding: 10px 12px 12px;
+      max-height: calc(100vh - 150px);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
     #xeb-control-row {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 6px;
-      margin-bottom: 8px;
+      gap: 8px;
+      margin-bottom: 10px;
     }
     #xeb-pick-btn {
       width: 100%;
-      padding: 8px;
+      min-height: 36px;
+      padding: 7px 10px;
       background: #1d9bf0;
       color: #fff;
       border: none;
-      border-radius: 8px;
+      border-radius: 7px;
       cursor: pointer;
       font-size: 13px;
       font-weight: 600;
@@ -153,11 +162,12 @@
     #xeb-pick-btn.active { background: #f4212e; }
     #xeb-pick-btn.active:hover { background: #d91c27; }
     #xeb-pause-btn, #xeb-debug-btn {
-      padding: 7px 8px;
+      min-height: 32px;
+      padding: 6px 8px;
       background: #38444d;
       color: #e7e9ea;
       border: none;
-      border-radius: 8px;
+      border-radius: 7px;
       cursor: pointer;
       font-size: 12px;
       font-weight: 600;
@@ -216,51 +226,79 @@
     #xeb-divider {
       border: none;
       border-top: 1px solid #38444d;
-      margin: 8px 0;
+      margin: 8px 0 10px;
     }
     #xeb-rules-title {
       font-size: 11px;
       color: #8899a6;
-      margin-bottom: 6px;
+      margin-bottom: 7px;
       display: flex;
       justify-content: space-between;
       gap: 8px;
+      flex-shrink: 0;
     }
     #xeb-rules-list {
-      max-height: 160px;
+      max-height: clamp(120px, calc(100vh - 330px), 360px);
+      min-height: 96px;
       overflow-y: auto;
+      padding-right: 4px;
+      scrollbar-width: thin;
+      scrollbar-color: #536471 transparent;
     }
+    #xeb-rules-list::-webkit-scrollbar { width: 6px; }
+    #xeb-rules-list::-webkit-scrollbar-thumb { background: #536471; border-radius: 999px; }
+    #xeb-rules-list::-webkit-scrollbar-track { background: transparent; }
     .xeb-rule-item {
-      display: flex;
-      align-items: flex-start;
-      gap: 6px;
-      padding: 4px 6px;
-      border-radius: 6px;
-      margin-bottom: 3px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: start;
+      gap: 8px;
+      padding: 7px 8px;
+      border: 1px solid rgba(83, 100, 113, 0.45);
+      border-radius: 7px;
+      margin-bottom: 6px;
+      background: rgba(30, 45, 61, 0.38);
     }
     .xeb-rule-item.disabled { opacity: 0.55; }
-    .xeb-rule-item:hover { background: #1e2d3d; }
+    .xeb-rule-item:hover { background: rgba(30, 45, 61, 0.78); }
     .xeb-rule-main {
       flex: 1;
       min-width: 0;
     }
     .xeb-rule-item code {
+      display: -webkit-box;
       font-size: 11px;
       color: #7ec8e3;
-      font-family: monospace;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      line-height: 1.35;
       word-break: break-all;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
     }
     .xeb-rule-meta {
-      margin-top: 3px;
+      margin-top: 6px;
       color: #8899a6;
       font-size: 10px;
       line-height: 1.35;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
     }
-    .xeb-rule-hit { color: #00ba7c; }
+    .xeb-rule-hit {
+      color: #00ba7c;
+      background: rgba(0, 186, 124, 0.12);
+      border: 1px solid rgba(0, 186, 124, 0.28);
+      border-radius: 999px;
+      padding: 1px 6px;
+      white-space: nowrap;
+    }
     .xeb-rule-actions {
       display: flex;
       gap: 4px;
       flex-shrink: 0;
+      padding-top: 1px;
     }
     .xeb-rule-toggle, .xeb-rule-del {
       border: none;
@@ -269,8 +307,13 @@
       color: #e7e9ea;
       font-size: 12px;
       line-height: 1;
-      padding: 3px;
+      width: 24px;
+      height: 24px;
+      padding: 0;
       border-radius: 4px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
     }
     .xeb-rule-toggle:hover, .xeb-rule-del:hover { background: #38444d; }
     .xeb-rule-toggle.off { color: #8899a6; }
@@ -278,14 +321,16 @@
     #xeb-empty { color: #536471; font-size: 12px; text-align: center; padding: 8px 0; }
     #xeb-io-row {
       display: flex;
-      gap: 6px;
-      margin-top: 8px;
+      gap: 8px;
+      margin-top: 10px;
+      flex-shrink: 0;
     }
     #xeb-export-btn, #xeb-import-btn {
       flex: 1;
+      min-height: 32px;
       padding: 6px 0;
       border: none;
-      border-radius: 6px;
+      border-radius: 7px;
       cursor: pointer;
       font-size: 12px;
       font-weight: 600;
@@ -553,9 +598,9 @@
       const hitCount = countMatches(sel);
       item.innerHTML = `
         <div class="xeb-rule-main">
-          <code>${escHtml(sel)}</code>
+          <code title="${escHtml(sel)}">${escHtml(sel)}</code>
           <div class="xeb-rule-meta">
-            添加：${escHtml(formatDate(rule.createdAt))}
+            <span>添加：${escHtml(formatDate(rule.createdAt))}</span>
             <span class="xeb-rule-hit">命中 ${hitCount}</span>
           </div>
         </div>
