@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         OCR.wdku.net 次数限制解除
 // @namespace    http://tampermonkey.net/
-// @version      4.0
-// @description  直接劫持submit，检测到限制时自动换Session+重新上传+直接POST后端跳过验证
+// @version      5.0
+// @description  劫持submit，检测限制时换Session→重新上传→用新ID提交，同步jQuery确保和原站一致
 // @author       FlyWind
 // @match        https://ocr.wdku.net/*
 // @match        https://www.wdku.net/*
@@ -13,11 +13,16 @@
 (function() {
     'use strict';
 
-    var LOG = '[OCR解锁 v4.0] ';
-    var MAX_RETRY = 20;    // 最大自动重试次数
+    var LOG = '[OCR解锁 v5.0] ';
+    var MAX_RETRY = 20;
     var retryCount = 0;
+    var _origAlert = window.alert;
 
-    function log(msg) { console.log(LOG + msg); }
+    function logMsg(msg) { console.log(LOG + msg); }
+
+    function escHtml(s) {
+        return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
 
     // ==================== 提示气泡 ====================
     function showTip(msg, color, ms) {
@@ -35,7 +40,6 @@
         el._t = setTimeout(function() { el.style.opacity = '0'; }, ms || 4000);
     }
 
-    // 判断是否为限制消息
     function isLimitMsg(msg) {
         if (typeof msg !== 'string') return false;
         var kws = ['每日提交上限', '付费转换', '次数', '登录后', '今日', '已用完', '超出', 'VIP', '会员', '升级', '消费返还'];
@@ -45,28 +49,34 @@
         return false;
     }
 
-    // ==================== 1. 同步换 Session ====================
+    // ==================== 1. 拦截 alert ====================
+    window.alert = function(m) {
+        if (typeof m === 'string' && isLimitMsg(m)) {
+            logMsg('拦截弹窗: ' + m);
+            return;
+        }
+        return _origAlert.call(window, m);
+    };
+
+    // ==================== 2. 同步换 Session ====================
     function newSession() {
-        // 删旧 cookie
         document.cookie = 'PHPSESSID=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
         document.cookie = 'PHPSESSID=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=.wdku.net;';
         document.cookie = 'PHPSESSID=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=ocr.wdku.net;';
 
-        // 同步请求获取新 session
         var xhr = new XMLHttpRequest();
         xhr.open('GET', '/?_rs=' + Date.now(), false);
         xhr.withCredentials = true;
         try { xhr.send(); } catch(e) {}
 
         var m = document.cookie.match(/PHPSESSID=([^;]+)/);
-        var sess = m ? m[1] : null;
-        log('新Session: ' + sess);
-        return sess;
+        logMsg('新Session: ' + (m ? m[1] : 'null'));
+        return m ? m[1] : null;
     }
 
-    // ==================== 2. 同步重新上传所有文件 ====================
+    // ==================== 3. 同步重新上传所有文件 ====================
     function reUploadFiles() {
-        if (typeof uploader === 'undefined' || !uploader.list) return false;
+        if (typeof uploader === 'undefined' || !uploader.list) return {ok: false, reason: 'no_uploader'};
 
         var tasks = [];
         for (var key in uploader.list) {
@@ -78,22 +88,22 @@
             }
         }
 
-        if (tasks.length === 0) {
-            // 检查是否有扫码上传的文件
-            if (typeof qrcode_ids !== 'undefined' && qrcode_ids && qrcode_ids.length > 0) {
-                log('检测到扫码上传文件，保持 qrcode_ids: ' + qrcode_ids);
-                return true; // 扫码上传的不需要重新上传
-            }
-            log('没有可重新上传的文件');
-            return false;
+        // 扫码上传的情况
+        if (tasks.length === 0 && typeof qrcode_ids !== 'undefined' && qrcode_ids && qrcode_ids.length > 0) {
+            return {ok: true, ids: qrcode_ids, ts: qrcode_ts};
         }
 
-        log('重新上传 ' + tasks.length + ' 个文件...');
+        if (tasks.length === 0) return {ok: false, reason: 'no_files'};
 
-        // 重置计数
+        logMsg('重新上传 ' + tasks.length + ' 个文件...');
+        showTip('🔄 重新上传 ' + tasks.length + ' 个文件中...', '#FF9800', 15000);
+
         try { count_upload_success = 0; count_total_pages = 0; } catch(e) {}
 
         var allOk = true;
+        var newIds = [];
+        var newTs = [];
+
         for (var i = 0; i < tasks.length; i++) {
             var task = tasks[i];
             try {
@@ -112,58 +122,53 @@
                     task.uploadid = data.data.id;
                     task.uploadtime = data.data.time;
                     task.page = parseInt(data.data.page) || 1;
-                    try {
-                        count_upload_success++;
-                        count_total_pages += task.page;
-                    } catch(e) {}
-                    log('重新上传成功: ' + task.name + ' → ' + data.data.id);
+                    newIds.push(data.data.id);
+                    newTs.push(data.data.time);
+                    try { count_upload_success++; count_total_pages += task.page; } catch(e) {}
+                    logMsg('上传成功: ' + task.name + ' → ' + data.data.id);
                 } else {
-                    log('重新上传失败: ' + (data.desc || 'unknown'));
+                    logMsg('上传失败: ' + (data.desc || 'unknown'));
                     allOk = false;
                 }
             } catch(e) {
-                log('重新上传异常: ' + e);
+                logMsg('上传异常: ' + e);
                 allOk = false;
             }
         }
 
-        // 更新 UI
         try {
             $('#label_success_count').html(count_upload_success);
             $('#label_totalpage').html(count_total_pages);
         } catch(e) {}
 
-        return allOk;
+        return {ok: allOk, ids: newIds.join(','), ts: newTs.join(',')};
     }
 
-    // ==================== 3. 直接 POST /index 提交（跳过前端验证）====================
-    function directSubmit(postData, onSuccess, onFail) {
-        var paramStr = '';
-        for (var k in postData) {
-            if (postData.hasOwnProperty(k)) {
-                if (paramStr) paramStr += '&';
-                paramStr += encodeURIComponent(k) + '=' + encodeURIComponent(postData[k]);
-            }
-        }
+    // ==================== 4. 同步 POST /index（用 jQuery 确保兼容）====================
+    function syncSubmit(postData) {
+        var result = null;
+        var error = null;
 
-        var xhr = new XMLHttpRequest();
-        xhr.open('POST', '/index', false); // 同步
-        xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
-        try { xhr.send(paramStr); } catch(e) { onFail(e); return; }
-
-        try {
-            var data = JSON.parse(xhr.responseText);
-            if (data.errno === 0) {
-                onSuccess(data);
-            } else {
-                onFail(data);
+        // 使用 jQuery 同步 ajax，确保参数编码和原站一致
+        jQuery.ajax({
+            type: 'POST',
+            url: '/index',
+            dataType: 'json',
+            data: postData,
+            async: false,  // 同步！
+            success: function(data) {
+                result = data;
+            },
+            error: function(xhr, status, err) {
+                error = {desc: '网络请求异常: ' + status};
             }
-        } catch(e) {
-            onFail({desc: '解析响应失败: ' + e});
-        }
+        });
+
+        if (error) return {errno: -1, desc: error.desc};
+        return result;
     }
 
-    // ==================== 4. 劫持 submit 函数 ====================
+    // ==================== 5. 劫持 submit ====================
     function hookSubmit() {
         if (typeof submit === 'undefined' || typeof get_param === 'undefined') {
             setTimeout(hookSubmit, 300);
@@ -173,10 +178,7 @@
         var _origSubmit = window.submit;
 
         window.submit = function(paytype) {
-            // 前端防重
             if (typeof is_submit !== 'undefined' && is_submit === 1) return false;
-
-            // 检查文件
             if (typeof checkfiles === 'function' && !checkfiles()) {
                 _origAlert('请先上传文档或等待文档上传完成');
                 return false;
@@ -185,7 +187,7 @@
             // 构造参数
             var param;
             try { param = get_param(); } catch(e) {
-                log('get_param 异常: ' + e);
+                logMsg('get_param异常，回退原函数');
                 return _origSubmit.call(window, paytype);
             }
             if (param === false) return false;
@@ -195,7 +197,6 @@
                 ids = glob_ids().join(',') || (typeof qrcode_ids !== 'undefined' ? qrcode_ids : '');
                 ts = glob_ts().join(',') || (typeof qrcode_ts !== 'undefined' ? qrcode_ts : '');
             } catch(e) {
-                log('glob_ids/ts 异常: ' + e);
                 return _origSubmit.call(window, paytype);
             }
 
@@ -205,138 +206,109 @@
                 paytype: paytype
             }, param);
 
-            log('提交参数: ' + JSON.stringify(postData));
+            logMsg('提交: ids=' + ids);
 
-            // 显示"正在提交"状态
+            // 显示"正在提交"
             if (typeof submit_set_process === 'function') submit_set_process('正在努力提交中....');
 
-            // 同步 POST /index
-            directSubmit(postData, function(data) {
+            // 同步提交
+            var resp = syncSubmit(postData);
+
+            if (resp.errno === 0) {
                 // 成功！
                 retryCount = 0;
-                log('提交成功！convid=' + data.id + ' convtime=' + data.time);
+                logMsg('提交成功！id=' + resp.id);
 
-                if (typeof convid !== 'undefined') convid = data.id;
-                if (typeof convtime !== 'undefined') convtime = data.time;
+                if (typeof convid !== 'undefined') convid = resp.id;
+                if (typeof convtime !== 'undefined') convtime = resp.time;
 
-                // 调用 check 开始轮询结果
-                if (typeof check === 'function') {
-                    check(data.id, data.time);
-                }
+                // 调用 check 轮询结果
+                if (typeof check === 'function') check(resp.id, resp.time);
 
-                try {
-                    $('#uploader').removeClass('in');
-                    $('#convparam').removeClass('in');
-                } catch(e) {}
+                try { $('#uploader').removeClass('in'); $('#convparam').removeClass('in'); } catch(e) {}
 
                 showTip('✅ 提交成功，正在转换中...', '#4CAF50', 5000);
 
-            }, function(err) {
+            } else {
                 // 失败
-                var desc = err.desc || '未知错误';
-                log('提交失败: ' + desc);
+                var desc = resp.desc || '未知错误';
+                logMsg('提交失败: ' + desc);
 
                 if (isLimitMsg(desc)) {
-                    // 检测到限制 → 自动重试
-                    if (retryCount < MAX_RETRY) {
-                        retryCount++;
-                        showTip('🔄 第' + retryCount + '次自动绕过限制...<br><small>' + escHtml(desc) + '</small>', '#FF9800', 8000);
-                        doAutoRetry(postData, paytype);
-                    } else {
-                        showTip('❌ 已达最大重试次数(' + MAX_RETRY + ')', '#f44336');
-                        if (typeof submit_set_default === 'function') submit_set_default(desc);
-                    }
+                    doAutoRetry(postData, paytype);
                 } else {
-                    // 非限制错误，恢复状态
                     if (typeof submit_set_default === 'function') submit_set_default(desc);
-                    showTip('❌ 提交失败: ' + escHtml(desc), '#f44336');
+                    showTip('❌ ' + escHtml(desc), '#f44336');
                 }
-            });
+            }
         };
 
-        log('submit 函数已劫持');
+        logMsg('submit 已劫持');
     }
 
-    // ==================== 5. 自动重试：换Session → 重新上传 → 直接提交 ====================
+    // ==================== 6. 自动重试 ====================
     function doAutoRetry(origPostData, paytype) {
+        if (retryCount >= MAX_RETRY) {
+            showTip('❌ 已达最大重试次数(' + MAX_RETRY + ')', '#f44336');
+            if (typeof submit_set_default === 'function') submit_set_default('已达最大重试次数');
+            return;
+        }
+
+        retryCount++;
+        updatePanel();
+        showTip('🔄 第' + retryCount + '次绕过限制...<br><small>换Session → 重新上传 → 重新提交</small>', '#FF9800', 15000);
+
         // Step 1: 换 Session
         var sess = newSession();
         if (!sess) {
-            showTip('❌ 换Session失败', '#f44336');
             if (typeof submit_set_default === 'function') submit_set_default('换Session失败');
             return;
         }
 
         // Step 2: 重新上传文件
-        var uploadOk = reUploadFiles();
-        if (!uploadOk) {
-            showTip('⚠️ 文件重新上传失败，尝试用原始参数提交...', '#FF9800');
-            // 即使重新上传失败，也尝试用原参数提交（可能新session本身就是新用户）
+        var uploadResult = reUploadFiles();
+        if (!uploadResult.ok) {
+            logMsg('重新上传失败: ' + (uploadResult.reason || 'unknown'));
+            showTip('❌ 重新上传失败', '#f44336');
+            if (typeof submit_set_default === 'function') submit_set_default('重新上传失败，请手动操作');
+            return;
         }
 
-        // Step 3: 重新构造提交参数（用新上传的文件 ID）
-        var newIds, newTs;
-        try {
-            newIds = glob_ids().join(',') || (typeof qrcode_ids !== 'undefined' ? qrcode_ids : '');
-            newTs = glob_ts().join(',') || (typeof qrcode_ts !== 'undefined' ? qrcode_ts : '');
-        } catch(e) {
-            newIds = origPostData.ids;
-            newTs = origPostData.ts;
-        }
+        // Step 3: 用新的 ids 和 ts 重新构造提交参数
+        var newPostData = Object.assign({}, origPostData);
+        if (uploadResult.ids) newPostData.ids = uploadResult.ids;
+        if (uploadResult.ts) newPostData.ts = uploadResult.ts;
 
-        var newPostData = Object.assign({}, origPostData, {
-            ids: newIds,
-            ts: newTs
-        });
+        logMsg('重试提交: ids=' + newPostData.ids + ' ts=' + newPostData.ts);
 
-        log('重试提交参数: ids=' + newIds + ' ts=' + newTs);
+        // Step 4: 同步提交
+        var resp = syncSubmit(newPostData);
 
-        // Step 4: 同步 POST /index
-        directSubmit(newPostData, function(data) {
+        if (resp.errno === 0) {
             retryCount = 0;
-            log('重试提交成功！convid=' + data.id);
+            logMsg('重试成功！id=' + resp.id);
 
-            if (typeof convid !== 'undefined') convid = data.id;
-            if (typeof convtime !== 'undefined') convtime = data.time;
+            if (typeof convid !== 'undefined') convid = resp.id;
+            if (typeof convtime !== 'undefined') convtime = resp.time;
+            if (typeof check === 'function') check(resp.id, resp.time);
 
-            if (typeof check === 'function') check(data.id, data.time);
-
-            try {
-                $('#uploader').removeClass('in');
-                $('#convparam').removeClass('in');
-            } catch(e) {}
+            try { $('#uploader').removeClass('in'); $('#convparam').removeClass('in'); } catch(e) {}
 
             showTip('✅ 第' + retryCount + '次重试成功，正在转换中...', '#4CAF50', 5000);
 
-        }, function(err) {
-            var desc = err.desc || '未知错误';
-            log('重试提交失败: ' + desc);
+        } else {
+            var desc = resp.desc || '未知错误';
+            logMsg('重试失败: ' + desc);
 
             if (isLimitMsg(desc) && retryCount < MAX_RETRY) {
                 // 继续重试
-                retryCount++;
-                showTip('🔄 第' + retryCount + '次重试...', '#FF9800', 8000);
                 doAutoRetry(newPostData, paytype);
             } else {
                 if (typeof submit_set_default === 'function') submit_set_default(desc);
                 showTip('❌ 重试失败: ' + escHtml(desc), '#f44336');
             }
-        });
-    }
-
-    function escHtml(s) {
-        return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    }
-
-    // ==================== 6. 拦截 alert 弹窗 ====================
-    var _origAlert = window.alert;
-    window.alert = function(m) {
-        if (typeof m === 'string' && isLimitMsg(m)) {
-            log('拦截弹窗: ' + m);
-            return; // 静默吞掉
         }
-        return _origAlert.call(window, m);
-    };
+    }
 
     // ==================== 7. 控制面板 ====================
     function addPanel() {
@@ -350,38 +322,34 @@
         panel.id = 'ocr-unlock-panel';
         panel.innerHTML =
             '<div style="position:fixed;bottom:20px;right:20px;z-index:99998;background:rgba(40,40,40,0.95);color:#fff;padding:14px 18px;border-radius:10px;font-size:12px;font-family:-apple-system,Arial,sans-serif;box-shadow:0 4px 20px rgba(0,0,0,0.4);min-width:240px;">' +
-            '<div style="font-weight:bold;margin-bottom:10px;font-size:14px;">🔓 OCR次数解锁 <span style="color:#4CAF50">v4.0</span></div>' +
+            '<div style="font-weight:bold;margin-bottom:10px;font-size:14px;">🔓 OCR次数解锁 <span style="color:#4CAF50">v5.0</span></div>' +
             '<div style="margin-bottom:8px;color:#aaa;">已绕过: <span id="ocr-retry-count" style="color:#4CAF50;">0</span> 次</div>' +
             '<button class="bo" onclick="window.__ocrNewSess()">🔄 换Session</button> ' +
-            '<button class="br" onclick="window.__ocrReset()">↺ 重置计数</button>' +
-            '<div style="margin-top:10px;color:#888;font-size:11px;line-height:1.6;">直接劫持submit → 同步POST后端<br>检测限制 → 换Session → 重新上传 → 重提交<br>全程自动，最多' + MAX_RETRY + '次</div>' +
+            '<button class="br" onclick="window.__ocrReset()">↺ 重置</button>' +
+            '<div style="margin-top:10px;color:#888;font-size:11px;line-height:1.6;">换Session → 重新上传 → 用新ID提交<br>同步jQuery确保兼容 | 最多' + MAX_RETRY + '次</div>' +
             '</div>';
         document.body.appendChild(panel);
     }
 
+    function updatePanel() {
+        var el = document.getElementById('ocr-retry-count');
+        if (el) el.textContent = retryCount;
+    }
+
     window.__ocrNewSess = function() {
         var s = newSession();
-        showTip(s ? '✅ 新Session: ' + s.substring(0,8) + '...' : '❌ 换Session失败', s ? '#4CAF50' : '#f44336');
+        showTip(s ? '✅ 新Session: ' + s.substring(0,8) + '...' : '❌ 失败', s ? '#4CAF50' : '#f44336');
     };
     window.__ocrReset = function() {
         retryCount = 0;
-        var el = document.getElementById('ocr-retry-count');
-        if (el) el.textContent = '0';
-        showTip('↺ 计数已归零', '#9C27B0');
-    };
-
-    // 更新面板计数
-    var _origDoAutoRetry = doAutoRetry;
-    doAutoRetry = function(origPostData, paytype) {
-        var el = document.getElementById('ocr-retry-count');
-        if (el) el.textContent = retryCount;
-        _origDoAutoRetry(origPostData, paytype);
+        updatePanel();
+        showTip('↺ 计数归零', '#9C27B0');
     };
 
     // ==================== 初始化 ====================
     hookSubmit();
     addPanel();
-    showTip('🔓 OCR解锁 v4.0 已启动<br>直接劫持submit，自动绕过次数限制', '#4CAF50', 5000);
-    log('脚本已启动 - 劫持submit + 同步后端提交');
+    showTip('🔓 OCR解锁 v5.0 已启动<br>自动换Session + 重新上传 + 用新ID提交', '#4CAF50', 5000);
+    logMsg('脚本启动');
 
 })();
