@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.1.0
+// @version      3.2.0
 // @license      MIT
 // @author       Flywind
 // @icon         https://abs.twimg.com/favicons/twitter.3.ico
@@ -18,7 +18,7 @@
 // @connect      discord.com
 // @connect      api.telegram.org
 // @run-at       document-idle
-// @description  替换每条推文的 Grok 按钮，一键将推文发送到 Grok 侧边栏分析。支持事实核查、深度分析、翻译及 5 个自定义 prompt 槽位。兼容领哥脚本备注/重点关注数据，支持多语言、推送通知（Discord/Telegram）、私密模式。
+// @description  替换每条推文的 Grok 图标，点击后选择总结、解释、翻译或自定义提示词，并自动调出右下角 Grok 聊天窗口进入对话。兼容领哥脚本备注/重点关注数据，支持推送通知和私密模式。
 // ==/UserScript==
 
 (function () {
@@ -29,6 +29,8 @@
   // ════════════════════════════════════════════════════════════════
   const DEFAULT_TEMPLATES = {
     "zh-CN": {
+      summary:   { label: "\u603B\u7ED3\u8FD9\u4E2A\u5E16\u5B50", icon: "\uD83D\uDCDD", prompt: "\u3010\u6307\u4EE4\uFF1A\u603B\u7ED3\u5E16\u5B50\u3011\n\u8BF7\u7528\u7B80\u6D01\u7684\u4E2D\u6587\u603B\u7ED3\u8FD9\u5219\u5E16\u5B50\u7684\u6838\u5FC3\u5185\u5BB9\uFF0C\u5305\u62EC\uFF1A1\uFF09\u4E3B\u8981\u4FE1\u606F\uFF1B2\uFF09\u4F5C\u8005\u60F3\u8868\u8FBE\u7684\u91CD\u70B9\uFF1B3\uFF09\u503C\u5F97\u5173\u6CE8\u7684\u80CC\u666F\u6216\u5F71\u54CD\u3002\n\n" },
+      explain:   { label: "\u89E3\u91CA\u8FD9\u4E2A\u5E16\u5B50", icon: "\uD83D\uDCA1", prompt: "\u3010\u6307\u4EE4\uFF1A\u89E3\u91CA\u5E16\u5B50\u3011\n\u8BF7\u50CF\u7ED9\u4E00\u4E2A\u4E0D\u719F\u6089\u80CC\u666F\u7684\u4EBA\u8BB2\u89E3\u4E00\u6837\uFF0C\u89E3\u91CA\u8FD9\u5219\u5E16\u5B50\u5728\u8BF4\u4EC0\u4E48\u3001\u4E3A\u4EC0\u4E48\u6709\u4EBA\u5173\u6CE8\u3001\u5B83\u53EF\u80FD\u6D89\u53CA\u54EA\u4E9B\u6897\u3001\u4E8B\u4EF6\u6216\u884C\u4E1A\u80CC\u666F\u3002\n\n" },
       factcheck: { label: "\u4E8B\u5B9E\u6838\u67E5", icon: "\uD83D\uDC75\uFE0F", prompt: "\u3010\u6307\u4EE4\uFF1A\u8BF7\u8FDB\u884C\u4E8B\u5B9E\u6838\u67E5\u3011\n\u8BF7\u8BE6\u7EC6\u5206\u6790\u4EE5\u4E0B\u8FD9\u5219\u5E16\u5B50\u7684\u771F\u5B9E\u6027\uFF0C\u6307\u51FA\u53EF\u80FD\u7684\u9519\u8BEF\u3001\u8BEF\u5BFC\u6027\u4FE1\u606F\u6216\u7F3A\u4E4F\u8BC1\u636E\u7684\u5730\u65B9\uFF0C\u5E76\u63D0\u4F9B\u6B63\u786E\u7684\u80CC\u666F\u8109\u7EDC\uFF1A\n\n" },
       analysis:  { label: "\u6DF1\u5EA6\u5206\u6790", icon: "\uD83D\uDCCA", prompt: "\u3010\u6307\u4EE4\uFF1A\u6DF1\u5EA6\u5206\u6790\u3011\n\u8BF7\u62C5\u4EFB\u8D44\u6DF1\u7684\u793E\u7FA4\u89C2\u5BDF\u5BB6\uFF0C\u89E3\u6790\u8FD9\u5219\u63A8\u6587\u3002\u8BF7\u5206\u6790\u5176\u6F5C\u5728\u7684\u8BED\u6C14\u3001\u60C5\u7EEA\u5411\u3001\u76EE\u6807\u53D7\u4F17\uFF0C\u4EE5\u53CA\u53D1\u6587\u8005\u53EF\u80FD\u9690\u542B\u7684\u52A8\u673A\u6216\u7ACB\u573A\uFF1A\n\n" },
       translate: { label: "\u7FFB\u8BD1\u89E3\u91CA", icon: "\uD83C\uDF10", prompt: "\u3010\u6307\u4EE4\uFF1A\u7FFB\u8BD1\u4E0E\u89E3\u91CA\u3011\n\u8BF7\u5C06\u8FD9\u5219\u63A8\u6587\u7FFB\u8BD1\u6210\u901A\u987A\u3001\u5730\u9053\u7684\u7B80\u4F53\u4E2D\u6587\u3002\u5982\u679C\u5185\u5BB9\u5305\u542B\u7F51\u7EDC\u6D41\u884C\u8BED\u3001\u8FF7\uFF08Meme\uFF09\u6216\u6587\u5316\u6897\uFF0C\u8BF7\u52A1\u5FC5\u8865\u5145\u89E3\u91CA\u5176\u80CC\u666F\u542B\u4E49\uFF1A\n\n" },
@@ -36,6 +38,8 @@
       custom2:   { label: "\u81EA\u5B9A\u4E49 2", icon: "\u270F\uFE0F", prompt: "\uFF08\u8FD9\u662F\u53EF\u81EA\u5B9A\u4E49\u7684\u6A21\u5F0F\uFF0C\u8BF7\u5728\u8BBE\u7F6E\u4E2D\u4FEE\u6539\u6807\u9898\u548C\u63D0\u793A\u8BCD\uFF09\n\n\u8BF7\u9488\u5BF9\u8FD9\u5219\u5E16\u5B50\uFF0C\u63D0\u51FA\u4F60\u8BA4\u4E3A\u6700\u6709\u8DA3\u6216\u503C\u5F97\u6DF1\u5165\u63A2\u8BA8\u7684\u95EE\u9898\uFF1A\n\n" },
     },
     en: {
+      summary:   { label: "Summarize Post", icon: "\uD83D\uDCDD", prompt: "[Instruction: Summarize Post]\nSummarize this post clearly and briefly. Include: 1) the main point; 2) what the author is emphasizing; 3) any background or implications worth knowing.\n\n" },
+      explain:   { label: "Explain Post", icon: "\uD83D\uDCA1", prompt: "[Instruction: Explain Post]\nExplain this post for someone who does not know the context. Cover what it means, why people may care, and any memes, events, industry context, or hidden references involved.\n\n" },
       factcheck: { label: "Fact Check", icon: "\uD83D\uDC75\uFE0F", prompt: "[Instruction: Fact Check]\nPlease conduct a detailed fact-check on the following tweet. Point out potential errors, misleading information, or lack of evidence, and provide the correct context:\n\n" },
       analysis:  { label: "Deep Analysis", icon: "\uD83D\uDCCA", prompt: "[Instruction: Deep Analysis]\nAct as a social media observer. Analyze this tweet for its tone, emotional direction, target audience, and any implied motives or stances of the author:\n\n" },
       translate: { label: "Translate", icon: "\uD83C\uDF10", prompt: "[Instruction: Translate]\nPlease translate this tweet into fluent English. If it contains internet slang, memes, or cultural references, please explain their background meaning:\n\n" },
@@ -43,6 +47,8 @@
       custom2:   { label: "Custom 2", icon: "\u270F\uFE0F", prompt: "(This is a customizable mode. Edit the label and prompt in Settings.)\n\nWhat is the most interesting or thought-provoking question raised by this tweet?\n\n" },
     },
     ja: {
+      summary:   { label: "\u6295\u7A3F\u3092\u8981\u7D04", icon: "\uD83D\uDCDD", prompt: "\u3010\u6307\u4EE4\uFF1A\u6295\u7A3F\u306E\u8981\u7D04\u3011\n\u3053\u306E\u6295\u7A3F\u306E\u8981\u70B9\u3092\u7C21\u6F54\u306B\u8981\u7D04\u3057\u3066\u304F\u3060\u3055\u3044\u30021\uFF09\u4E3B\u8981\u306A\u30E1\u30C3\u30BB\u30FC\u30B8\u30012\uFF09\u6295\u7A3F\u8005\u304C\u5F37\u8ABF\u3057\u305F\u3044\u70B9\u30013\uFF09\u77E5\u3063\u3066\u304A\u304F\u3079\u304D\u80CC\u666F\u3084\u5F71\u97FF\u3092\u542B\u3081\u3066\u304F\u3060\u3055\u3044\u3002\n\n" },
+      explain:   { label: "\u6295\u7A3F\u3092\u89E3\u8AAC", icon: "\uD83D\uDCA1", prompt: "\u3010\u6307\u4EE4\uFF1A\u6295\u7A3F\u306E\u89E3\u8AAC\u3011\n\u80CC\u666F\u3092\u77E5\u3089\u306A\u3044\u4EBA\u306B\u8AAC\u660E\u3059\u308B\u3088\u3046\u306B\u3001\u3053\u306E\u6295\u7A3F\u306E\u610F\u5473\u3001\u6CE8\u76EE\u3055\u308C\u308B\u7406\u7531\u3001\u95A2\u9023\u3059\u308B\u30DF\u30FC\u30E0\u3001\u4E8B\u4EF6\u3001\u696D\u754C\u80CC\u666F\u3001\u96A0\u308C\u305F\u53C2\u7167\u3092\u89E3\u8AAC\u3057\u3066\u304F\u3060\u3055\u3044\u3002\n\n" },
       factcheck: { label: "\u30D5\u30A1\u30AF\u30C8\u30C1\u30A7\u30C3\u30AF", icon: "\uD83D\uDC75\uFE0F", prompt: "\u3010\u6307\u4EE4\uFF1A\u30D5\u30A1\u30AF\u30C8\u30C1\u30A7\u30C3\u30AF\u3011\n\u4EE5\u4E0B\u306E\u6295\u7A3F\u306E\u771F\u507D\u3092\u8A73\u7D30\u306B\u5206\u6790\u3057\u3001\u8AA4\u308A\u3084\u8AA4\u89E3\u3092\u62DB\u304D\u60C5\u5831\u306E\u4E0D\u8DB3\u70B9\u3092\u6307\u6458\u3057\u3001\u6B63\u3057\u3044\u80CC\u666F\u60C5\u5831\u3092\u63D0\u4F9B\u3057\u3066\u304F\u3060\u3055\uFF1A\n\n" },
       analysis:  { label: "\u8A73\u7D30\u5206\u6790", icon: "\uD83D\uDCCA", prompt: "\u3010\u6307\u4EE4\uFF1A\u8A73\u7D30\u5206\u6790\u3011\n\u30BD\u30FC\u30B7\u30E3\u30EB\u30E1\u30C7\u30A3\u30A2\u306E\u89B3\u5BDF\u8005E30683068\u3057\u3066\u3001\u3053\u306E\u30C4\u30A4\u30FC\u30C8\u3092\u5206\u6790\u3057\u3066\u304F\u3060\u3055\u3002\u6F5C\u5728\u7684\u30C8\u30FC\u30F3\u3001\u611F\u60C5\u306E\u65B9\u5411\u6027\u3001\u30BF\u30FC\u30B2\u30C3\u30C8\u5C64\u3001\u304A\u3088\u3073\u6295\u7A3F\u8005\u306E\u96A0\u853B\u3055\u308C\u305F\u52D5\u6A5F\u3084\u7ACB\u573A\u3092\u89E3\u6790\u3057\u3066\u304F\u3060\u3055\uFF1A\n\n" },
       translate: { label: "\u7FFB\u8A33\u3068\u89E3\u8AAC", icon: "\uD83C\uDF10", prompt: "\u3010\u6307\u4EE4\uFF1A\u7FFB\u8A33\u3068\u89E3\u8AAC\u3011\n\u3053\u306E\u30C4\u30A4\u30FC\u30C8\u3092\u81EA\u7136\u3067\u6D41\u66A5\u306A\u65E5\u672C\u8A9E\u306B\u7FFB\u8A33\u3057\u3066\u304F\u3060\u3055\u3002\u30CD\u30C3\u30C8\u30B9\u30E9\u30F3\u30B0\u3001\u30DF\u30FC\u30E0\uFF08Meme\uFF09\u307E\u3057\u306F\u6587\u5316\u7684\u30D0\u30C3\u30AF\u30B0\u30E9\u30A6\u30F3\u30C9\u304C\u542B\u307E\u308C\u3066\u3044\u308B\u5834\u5408\u306F\u3001\u305D\u306E\u610F\u5473\u3084\u80CC\u666F\u3082\u5FC5\u305A\u8865\u5145\u8AAC\u660E\u3057\u3066\u304F\u3060\u3055\uFF1A\n\n" },
@@ -64,7 +70,7 @@
     return { ...base, ...EXTRA_CUSTOM_DEFAULTS };
   }
 
-  const TEMPLATE_KEYS = ["factcheck", "analysis", "translate", "custom1", "custom2", "custom3", "custom4", "custom5"];
+  const TEMPLATE_KEYS = ["summary", "explain", "translate", "factcheck", "analysis", "custom1", "custom2", "custom3", "custom4", "custom5"];
 
   // ════════════════════════════════════════════════════════════════
   //  多语言 UI 字典（精简版，核心语言）
@@ -283,12 +289,24 @@
     const d = el.getAttribute("d");
     if (!d) return false;
     if (GROK_PATH_PATTERNS.some(p => d.startsWith(p))) return true;
-    const parentBtn = el.closest("button");
-    if (parentBtn) {
-      const label = (parentBtn.getAttribute("aria-label") || "").toLowerCase();
-      if (label === "grok" || label.includes("grok ") || label.includes("\u64CD\u4F5C")) return true;
-    }
+    const parentBtn = el.closest("button,[role='button']");
+    if (parentBtn && isLikelyGrokButton(parentBtn)) return true;
     return false;
+  }
+
+  function isLikelyGrokButton(el) {
+    if (!el || el.classList?.contains("gq-btn")) return false;
+    const label = [
+      el.getAttribute("aria-label"),
+      el.getAttribute("title"),
+      el.getAttribute("data-testid"),
+      el.textContent,
+    ].filter(Boolean).join(" ").toLowerCase();
+    if (/\bgrok\b/.test(label) || label.includes("\u95EE grok") || label.includes("\u5411 grok") || label.includes("\u64CD\u4F5C")) return true;
+    return [...el.querySelectorAll("path")].some(path => {
+      const d = path.getAttribute("d") || "";
+      return GROK_PATH_PATTERNS.some(p => d.startsWith(p));
+    });
   }
 
   function triggerClick(el) {
@@ -314,10 +332,9 @@
   }
 
   function findGlobalGrokButton() {
-    for (const path of document.querySelectorAll("article path, [data-testid='primaryColumn'] path")) {
-      if (!isGrokIcon(path)) continue;
-      const btn = path.closest("button");
-      if (btn && !btn.closest("article") && !btn.classList.contains("gq-btn") && btn.offsetParent !== null) return btn;
+    for (const btn of document.querySelectorAll("[data-testid='primaryColumn'] button, [data-testid='sidebarColumn'] button, button[aria-label], [role='button'][aria-label]")) {
+      if (btn.closest("article") || btn.classList.contains("gq-btn") || btn.offsetParent === null) continue;
+      if (isLikelyGrokButton(btn)) return btn;
     }
     return null;
   }
@@ -763,7 +780,7 @@
     const modal = document.createElement("div"); modal.id = "gq-settings-modal";
 
     modal.innerHTML = `
-      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.1</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
+      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.2</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
       <div class="gq-modal-body">
         <!-- 语言 & 模式 -->
         <div class="gq-section-card"><div class="gq-section-header">⚙️ ${t("lang_label")} & ${t("send_mode_label")}</div><div class="gq-section-body">
@@ -877,12 +894,14 @@
     });
   }
 
-  function renderTemplateErrors(container, draft) {
+  function renderTemplateEditors(container, draft) {
     container.innerHTML = "";
     const sectionLabels = {
-      factcheck:"\uD83D\uDC75\uFE0F "+t("settings_title").includes("Grok")?"\u4E8B\u5B9E\u6838\u67E5":"Fact Check",
-      analysis:"\uD83D\uDCCA "+(t("settings_title").includes("Quick")?"\u6DF1\u5EA6\u5206\u6790":"Deep Analysis"),
-      translate:"\uD83C\uDF10 "+(t("settings_title").includes("Quick")?"\u7FFB\u8BD1\u89E3\u91CA":"Translate"),
+      summary:"\uD83D\uDCDD \u603B\u7ED3\u8FD9\u4E2A\u5E16\u5B50",
+      explain:"\uD83D\uDCA1 \u89E3\u91CA\u8FD9\u4E2A\u5E16\u5B50",
+      factcheck:"\uD83D\uDC75\uFE0F \u4E8B\u5B9E\u6838\u67E5",
+      analysis:"\uD83D\uDCCA \u6DF1\u5EA6\u5206\u6790",
+      translate:"\uD83C\uDF10 \u7FFB\u8BD1\u89E3\u91CA",
       custom1:"\u270F\uFE0F Custom 1", custom2:"\u270F\uFE0F Custom 2",
       custom3:"\u270F\uFE0F Custom 3", custom4:"\u270F\uFE0F Custom 4", custom5:"\u270F\uFE0F Custom 5",
     };
@@ -903,7 +922,7 @@
       pi.dataset.key = key; pi.value = draft[key]?.prompt || ""; pi.rows = 3;
       pi.oninput = () => { if(draft[key]) draft[key].prompt = pi.value; }; pr.append(pi); body.append(pr);
 
-      if(["factcheck","analysis","translate"].includes(key)) {
+      if(["summary","explain","factcheck","analysis","translate"].includes(key)) {
         const rb = document.createElement("button"); rb.className = "gq-btn-reset"; rb.textContent = "\u62E9\u590D\u9ED8\u8BA4";
         rb.onclick = () => { const lc = resolveLang(draft.lang||"auto"); const defs = getMergedDefaults(lc); draft[key] = {...defs[key]}; li.value=draft[key].label; pi.value=draft[key].prompt; showToast(`✓ ${key} reset`); };
         body.append(rb);
@@ -1007,14 +1026,26 @@
 
   function hijackThrottled() {
     document.querySelectorAll("article").forEach(article => {
-      article.querySelectorAll("path").forEach(path => {
-        if (!isGrokIcon(path)) return;
-        const origBtn = path.closest("button");
+      findArticleGrokButtons(article).forEach(origBtn => {
         if (!origBtn || origBtn.classList.contains("gq-btn") || _hijackedButtons.has(origBtn)) return;
+        if (origBtn.closest("[role='group']") && !isLikelyGrokButton(origBtn)) return;
         const newBtn = replaceWithQuickButton(origBtn);
         if (newBtn) _hijackedButtons.add(newBtn);
       });
     });
+  }
+
+  function findArticleGrokButtons(article) {
+    const found = new Set();
+    article.querySelectorAll("button,[role='button']").forEach(btn => {
+      if (isLikelyGrokButton(btn)) found.add(btn);
+    });
+    article.querySelectorAll("path").forEach(path => {
+      if (!isGrokIcon(path)) return;
+      const btn = path.closest("button,[role='button']");
+      if (btn) found.add(btn);
+    });
+    return [...found].filter(btn => btn.offsetParent !== null);
   }
 
   function replaceWithQuickButton(origBtn) {
@@ -1023,8 +1054,8 @@
       newBtn.classList.add("gq-btn");
       newBtn.style.color = "#FF1493";
       newBtn.style.cursor = "pointer";
-      newBtn.setAttribute("aria-label", "Grok Quick v3");
-      newBtn.title = "Grok Quick v3 \u2014 " + (loadConfig().privateMode ? "\uD83D\uDD12" : "\uD83D\uDE80");
+      newBtn.setAttribute("aria-label", "Grok Quick: \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49");
+      newBtn.title = "Grok Quick v3.2 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
 
       newBtn.onclick = (e) => {
         e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
@@ -1128,5 +1159,5 @@
   window.addEventListener("scroll", () => { if (scrollTimer) return; scrollTimer = setTimeout(() => { scrollTimer = null; scheduleHijack(); }, 200); }, { passive: true });
 
   GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3 \u8BBE\u7F6E", openSettings);
-  console.log("[Grok Quick] v3.1 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
+  console.log("[Grok Quick] v3.2 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
 })();
