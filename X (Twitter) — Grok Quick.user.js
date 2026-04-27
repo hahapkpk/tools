@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.3.11
+// @version      3.3.12
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -1400,7 +1400,7 @@
 
   function collapseGrokWidth(drawer, initW) {
     drawer.dataset.gqExpanded = "0";
-    const narrowW = Math.max(initW, GM_getValue("gq_panel_width", 0));
+    const narrowW = GM_getValue("gq_panel_width", 0) || initW;
     // 保持 position:absolute; right:0 — p0 宽 1480px（全页），
     // 清除 absolute 会导致 drawer 出现在容器左端，叠在导航栏上
     applyGrokPanelWidth(drawer, narrowW);
@@ -1412,7 +1412,7 @@
   }
 
   function expandGrokWidth(drawer, initW) {
-    const narrowW = Math.max(initW, GM_getValue("gq_panel_width", 0));
+    const narrowW = GM_getValue("gq_panel_width", 0) || initW;
     const savedWide = GM_getValue("gq_panel_width_wide", 0);
     const targetW = savedWide > narrowW + 80 ? savedWide : Math.round(narrowW * 1.5);
     drawer.dataset.gqExpanded = "1";
@@ -1443,7 +1443,7 @@
     drawer.dataset.gqPanelHidden = "0";
     // 确保面板使用绝对定位（高度调整需要）
     const initW = parseFloat(drawer.dataset.gqInitW) || 400;
-    const narrowW = Math.max(initW, GM_getValue("gq_panel_width", 0));
+    const narrowW = GM_getValue("gq_panel_width", 0) || initW;
     applyGrokPanelWidth(drawer, narrowW);
   }
 
@@ -1458,8 +1458,13 @@
     const initDrawerH = parseFloat(window.getComputedStyle(drawer).height) || 678;
     const initP0H = parseFloat(window.getComputedStyle(p0).height) || 691;
     const pad = Math.max(0, initP0H - initDrawerH);
-    const initDrawerW = parseFloat(window.getComputedStyle(drawer).width) || 400;
+    const savedW = GM_getValue("gq_panel_width", 0);
+    const nativeW = parseFloat(window.getComputedStyle(drawer).width) || 400;
+    // 优先用用户保存的宽度；否则用 X.com 原生宽度，但封顶 520px 避免全屏宽度被当成窄面板
+    const initDrawerW = savedW > 100 ? savedW : Math.min(nativeW, 520);
     drawer.dataset.gqInitW = String(initDrawerW);
+    // 初始化时立即设定绝对定位，避免面板在 flex 流中占据全宽
+    applyGrokPanelWidth(drawer, initDrawerW);
 
     // 恢复保存的高度
     const savedH = GM_getValue("gq_panel_height", 0);
