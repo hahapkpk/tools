@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.3.6
+// @version      3.3.7
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -1401,7 +1401,13 @@
   function collapseGrokWidth(drawer, initW) {
     drawer.dataset.gqExpanded = "0";
     const narrowW = Math.max(initW, GM_getValue("gq_panel_width", 0));
-    applyGrokPanelWidth(drawer, narrowW);
+    // 还原原生布局，不保留 absolute 定位以免产生残影
+    drawer.style.width = narrowW + "px";
+    drawer.style.maxWidth = narrowW + "px";
+    drawer.style.minWidth = narrowW + "px";
+    drawer.style.position = "";
+    drawer.style.right = "";
+    drawer.style.top = "";
     const wHandle = drawer.querySelector("#gq-panel-resize-w");
     if (wHandle) wHandle.style.display = "none";
     const btn = document.getElementById("gq-panel-toggle");
@@ -1420,9 +1426,14 @@
     const btn = document.getElementById("gq-panel-toggle");
     if (btn) { btn.innerHTML = "&#9664;"; btn.title = "收起面板"; }
     _removeOutsideClickHandler();
-    // capture 阶段监听 document mousedown，点击 drawer 外部时收起
+    // 用 getBoundingClientRect 判断点击是否在面板可视范围外
+    // 比 drawer.contains() 更可靠：X.com 用 React portal 渲染内容，
+    // portal 节点不在 drawer DOM 树内，contains() 会误判为"外部"
     _outsideClickHandler = e => {
-      if (!drawer.contains(e.target)) collapseGrokWidth(drawer, initW);
+      const r = drawer.getBoundingClientRect();
+      if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) {
+        collapseGrokWidth(drawer, initW);
+      }
     };
     setTimeout(() => document.addEventListener("mousedown", _outsideClickHandler, true), 0);
   }
