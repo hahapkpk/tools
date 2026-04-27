@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.2.7
+// @version      3.2.8
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -615,8 +615,8 @@
     for (let i = 0; i < 25; i++) {
       await sleep(80);
       if (!_pendingTask) return;
-      if (stopGrokGeneration()) { await sleep(400); break; }
       if (startNewGrokConversation()) { await sleep(600); break; }
+      if (stopGrokGeneration()) { await sleep(400); break; }
     }
 
     // 阶段 2：轮询等待 textarea 可用，再注入
@@ -645,47 +645,35 @@
   }
 
   function stopGrokGeneration() {
-    const STOP_RE = /\bstop\b|\bcancel\b|停止|停止生成|stop.generat/i;
-    const EXCLUDE_RE = /repost|follow|unfollow|report|block|bookmark/i;
+    // 经 DOM 确认：X.com Grok 停止按钮 aria-label="取消"，SVG 为圆角矩形
+    const STOP_RE = /^取消$|^cancel$|\bstop\b|停止生成/i;
+    const STOP_PATH = "M3 5.5C3 4.12 4.12 3 5.5 3h13C19.88";
     for (const btn of document.querySelectorAll("button,[role='button']")) {
       if (btn.offsetParent === null) continue;
       if (btn.closest("article,.gq-btn,#gq-menu,#gq-settings-overlay,#gq-push-overlay")) continue;
-      const combined = [btn.getAttribute("aria-label"), btn.getAttribute("data-testid"), btn.getAttribute("title")].filter(Boolean).join(" ");
-      if (STOP_RE.test(combined) && !EXCLUDE_RE.test(combined)) {
-        console.log("[GQ] stopGrokGeneration hit:", combined.trim().substring(0, 60));
+      const label = btn.getAttribute("aria-label") || "";
+      if (STOP_RE.test(label.trim())) {
+        console.log("[GQ] stopGrokGeneration hit:", label);
+        triggerClick(btn); return true;
+      }
+      // SVG 指纹兜底（圆角矩形 = ■）
+      const p = btn.querySelector("path");
+      if (p && (p.getAttribute("d") || "").startsWith(STOP_PATH)) {
+        console.log("[GQ] stopGrokGeneration SVG hit");
         triggerClick(btn); return true;
       }
     }
-    // 兜底：侧边栏内单路径 SVG 按钮（停止按钮通常只有一个极简矩形 path）
-    const sidebar = document.querySelector("[data-testid='sidebarColumn'],aside");
-    if (sidebar) {
-      for (const btn of sidebar.querySelectorAll("button")) {
-        if (btn.offsetParent === null || btn.closest("article,.gq-btn")) continue;
-        const paths = [...btn.querySelectorAll("path")];
-        if (paths.length === 1) {
-          const d = paths[0].getAttribute("d") || "";
-          // 矩形 stop 图标：只有 M/H/V/Z 命令，极少参数
-          if (/^[Mm][\d\s.,-]+[Hh][\d\s.,-]+[Vv][\d\s.,-]+[Hh][\d\s.,-]+[Zz]?$/i.test(d.trim())) {
-            console.log("[GQ] stopGrokGeneration SVG hit:", d.substring(0, 40));
-            triggerClick(btn); return true;
-          }
-        }
-      }
-    }
-    console.log("[GQ] stopGrokGeneration: no stop button found");
     return false;
   }
 
   function startNewGrokConversation() {
-    // 点击 Grok 侧边栏头部的「新建对话」按钮（✏️ / compose 图标）
-    const NEW_RE = /new.*(convers|chat)|新.*(对话|会话|建)|compose|撰写/i;
-    const sidebar = document.querySelector("[data-testid='sidebarColumn'],aside");
-    if (!sidebar) return false;
-    for (const btn of sidebar.querySelectorAll("button,[role='button'],a[role='button']")) {
-      if (btn.offsetParent === null || btn.closest("article,.gq-btn")) continue;
-      const combined = [btn.getAttribute("aria-label"), btn.getAttribute("data-testid"), btn.getAttribute("title")].filter(Boolean).join(" ");
-      if (NEW_RE.test(combined)) {
-        console.log("[GQ] startNewGrokConversation hit:", combined.trim().substring(0, 60));
+    // 经 DOM 确认：X.com Grok 新建对话按钮 aria-label="新聊天"
+    // Grok 以 React portal 渲染，需全文档搜索
+    for (const btn of document.querySelectorAll("button,[role='button']")) {
+      if (btn.offsetParent === null || btn.closest("article,.gq-btn,#gq-menu")) continue;
+      const label = btn.getAttribute("aria-label") || "";
+      if (/^新聊天$|^new chat$/i.test(label.trim())) {
+        console.log("[GQ] startNewGrokConversation: 新聊天 clicked");
         triggerClick(btn); return true;
       }
     }
