@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.3.13
+// @version      3.3.14
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -974,7 +974,7 @@
     const modal = document.createElement("div"); modal.id = "gq-settings-modal";
 
     modal.innerHTML = `
-      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.3.13</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
+      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.3.14</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
       <div class="gq-modal-body">
         <!-- 语言 & 模式 -->
         <div class="gq-section-card"><div class="gq-section-header">⚙️ ${t("lang_label")} & ${t("send_mode_label")}</div><div class="gq-section-body">
@@ -1248,7 +1248,7 @@
       origBtn.style.color = "#FF1493";
       origBtn.style.cursor = "pointer";
       origBtn.setAttribute("aria-label", "Grok Quick: \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49");
-      origBtn.title = "Grok Quick v3.3.13 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
+      origBtn.title = "Grok Quick v3.3.14 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
 
       origBtn.addEventListener("click", (e) => {
         if (_nativeClickBypass.has(origBtn)) return;
@@ -1410,12 +1410,20 @@
     );
   }
 
+  function _getGrokNarrowWidth(drawer, initW) {
+    const savedW = Number(GM_getValue("gq_panel_width", 0)) || 0;
+    const nativeW = parseFloat(window.getComputedStyle(drawer).width) || 0;
+    const baseW = savedW > 0 ? savedW : (initW || nativeW || 400);
+    return Math.max(320, Math.min(baseW, 520));
+  }
+
   function collapseGrokWidth(drawer, initW) {
     drawer.dataset.gqExpanded = "0";
-    const narrowW = GM_getValue("gq_panel_width", 0) || initW;
+    const narrowW = _getGrokNarrowWidth(drawer, initW);
     // 保持 position:absolute; right:0 — p0 宽 1480px（全页），
     // 清除 absolute 会导致 drawer 出现在容器左端，叠在导航栏上
     applyGrokPanelWidth(drawer, narrowW);
+    GM_setValue("gq_panel_width", Math.round(narrowW));
     const wHandle = drawer.querySelector("#gq-panel-resize-w");
     if (wHandle) wHandle.style.display = "none";
     const btn = document.getElementById("gq-panel-toggle");
@@ -1424,7 +1432,7 @@
   }
 
   function expandGrokWidth(drawer, initW) {
-    const narrowW = GM_getValue("gq_panel_width", 0) || initW;
+    const narrowW = _getGrokNarrowWidth(drawer, initW);
     const savedWide = GM_getValue("gq_panel_width_wide", 0);
     const targetW = savedWide > narrowW + 80 ? savedWide : Math.round(narrowW * 1.5);
     drawer.dataset.gqExpanded = "1";
@@ -1434,14 +1442,15 @@
     const btn = document.getElementById("gq-panel-toggle");
     if (btn) { btn.innerHTML = "&#9664;"; btn.title = "收起面板"; }
     _removeOutsideClickHandler();
-    // 展开区会覆盖正文，不能用 expanded drawer rect 判断“外部”。
-    // 只保留最右侧 narrowW 作为原始侧边栏；点到它左侧就收回。
+    // 展开区会覆盖正文。只保留最右侧 narrowW 作为原始侧边栏；
+    // 点击该窄栏左侧的页面区域，就自动缩回右侧栏。
     _outsideClickHandler = e => {
       if (!drawer.isConnected || drawer.dataset.gqExpanded !== "1") {
         _removeOutsideClickHandler();
         return;
       }
-      const narrowLeft = _getGrokPanelRightEdge(drawer) - narrowW;
+      const activeNarrowW = _getGrokNarrowWidth(drawer, initW);
+      const narrowLeft = _getGrokPanelRightEdge(drawer) - activeNarrowW;
       if (e.clientX < narrowLeft) collapseGrokWidth(drawer, initW);
     };
     setTimeout(() => {
@@ -1460,7 +1469,7 @@
     drawer.dataset.gqPanelHidden = "0";
     // 确保面板使用绝对定位（高度调整需要）
     const initW = parseFloat(drawer.dataset.gqInitW) || 400;
-    const narrowW = GM_getValue("gq_panel_width", 0) || initW;
+    const narrowW = _getGrokNarrowWidth(drawer, initW);
     applyGrokPanelWidth(drawer, narrowW);
   }
 
@@ -1477,8 +1486,9 @@
     const pad = Math.max(0, initP0H - initDrawerH);
     const savedW = GM_getValue("gq_panel_width", 0);
     const nativeW = parseFloat(window.getComputedStyle(drawer).width) || 400;
-    // 优先用用户保存的宽度；否则用 X.com 原生宽度，但封顶 520px 避免全屏宽度被当成窄面板
-    const initDrawerW = savedW > 100 ? savedW : Math.min(nativeW, 520);
+    // 优先用用户保存的合理窄栏宽度；过大的旧值按污染状态处理，避免全屏宽度被当成窄面板
+    const initDrawerW = savedW >= 320 && savedW <= 520 ? savedW : Math.max(320, Math.min(nativeW, 520));
+    GM_setValue("gq_panel_width", Math.round(initDrawerW));
     drawer.dataset.gqInitW = String(initDrawerW);
     // 初始化时立即设定绝对定位，避免面板在 flex 流中占据全宽
     applyGrokPanelWidth(drawer, initDrawerW);
@@ -1551,7 +1561,7 @@
       const onUp = () => {
         const finalW = Math.round(parseFloat(drawer.style.width) || initDrawerW);
         if (drawer.dataset.gqExpanded === "1") GM_setValue("gq_panel_width_wide", finalW);
-        else GM_setValue("gq_panel_width", finalW);
+        else GM_setValue("gq_panel_width", Math.max(320, Math.min(finalW, 520)));
         document.removeEventListener("mousemove", onMove);
         document.removeEventListener("mouseup", onUp);
       };
@@ -1578,6 +1588,6 @@
   let scrollTimer = null;
   window.addEventListener("scroll", () => { if (scrollTimer) return; scrollTimer = setTimeout(() => { scrollTimer = null; scheduleHijack(); }, 200); }, { passive: true });
 
-  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.3.13 \u8BBE\u7F6E", openSettings);
-  console.log("[Grok Quick] v3.3.13 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
+  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.3.14 \u8BBE\u7F6E", openSettings);
+  console.log("[Grok Quick] v3.3.14 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
 })();
