@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.3.14
+// @version      3.3.15
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -974,7 +974,7 @@
     const modal = document.createElement("div"); modal.id = "gq-settings-modal";
 
     modal.innerHTML = `
-      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.3.14</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
+      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.3.15</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
       <div class="gq-modal-body">
         <!-- 语言 & 模式 -->
         <div class="gq-section-card"><div class="gq-section-header">⚙️ ${t("lang_label")} & ${t("send_mode_label")}</div><div class="gq-section-body">
@@ -1248,7 +1248,7 @@
       origBtn.style.color = "#FF1493";
       origBtn.style.cursor = "pointer";
       origBtn.setAttribute("aria-label", "Grok Quick: \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49");
-      origBtn.title = "Grok Quick v3.3.14 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
+      origBtn.title = "Grok Quick v3.3.15 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
 
       origBtn.addEventListener("click", (e) => {
         if (_nativeClickBypass.has(origBtn)) return;
@@ -1342,12 +1342,14 @@
     #gq-panel-resize:hover{background:rgba(255,20,147,.25)}
     #gq-panel-resize::after{content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:40px;height:3px;background:rgba(255,255,255,.15);border-radius:2px;transition:background .2s}
     #gq-panel-resize:hover::after{background:rgba(255,20,147,.8)}
-    #gq-panel-resize-w{position:absolute!important;top:0;left:0;bottom:0;width:8px;cursor:ew-resize;z-index:9999;pointer-events:all;border-radius:4px 0 0 4px;transition:background .2s;user-select:none}
-    #gq-panel-resize-w:hover{background:rgba(255,20,147,.25)}
-    #gq-panel-resize-w::after{content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:3px;height:40px;background:rgba(255,255,255,.15);border-radius:2px;transition:background .2s}
+    #gq-panel-resize-w{position:absolute!important;top:0;left:0;bottom:0;width:18px;cursor:ew-resize;z-index:10000;pointer-events:all;border-radius:4px 0 0 4px;transition:background .2s;user-select:none;touch-action:none}
+    #gq-panel-resize-w:hover,#gq-panel-resize-w.gq-resizing{background:rgba(255,20,147,.25)}
+    #gq-panel-resize-w::after{content:'';position:absolute;top:50%;left:7px;transform:translateY(-50%);width:4px;height:64px;background:rgba(255,255,255,.28);border-radius:2px;transition:background .2s}
     #gq-panel-resize-w:hover::after{background:rgba(255,20,147,.8)}
     #gq-panel-toggle{cursor:pointer;pointer-events:all;user-select:none;color:rgba(255,255,255,.75);font-size:16px;padding:0 12px 0 8px;display:flex;align-items:center;justify-content:center;height:100%;min-width:32px;flex-shrink:0;transition:color .15s}
     #gq-panel-toggle:hover{color:#FF1493}
+    #gq-panel-collapse{position:absolute!important;top:16px;left:22px;z-index:10001;display:none;align-items:center;gap:6px;height:32px;padding:0 12px;border:1px solid rgba(255,255,255,.18);border-radius:999px;background:rgba(15,20,28,.88);color:#fff;font-size:13px;font-weight:600;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;cursor:pointer;pointer-events:all;user-select:none;box-shadow:0 8px 24px rgba(0,0,0,.35);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+    #gq-panel-collapse:hover{border-color:#FF1493;color:#FF1493;background:rgba(15,20,28,.96)}
 
     /* Light theme */
     @media(prefers-color-scheme:light){
@@ -1363,7 +1365,7 @@
   //  Grok 面板高度调整
   // ════════════════════════════════════════════════════════════════
   function _getGrokContentDiv(drawer) {
-    return [...drawer.children].find(c => c.id !== "gq-panel-resize" && c.id !== "gq-panel-resize-w");
+    return [...drawer.children].find(c => !["gq-panel-resize", "gq-panel-resize-w", "gq-panel-collapse"].includes(c.id));
   }
 
   function applyGrokPanelHeight(drawer, p0, p1, h, pad) {
@@ -1426,6 +1428,8 @@
     GM_setValue("gq_panel_width", Math.round(narrowW));
     const wHandle = drawer.querySelector("#gq-panel-resize-w");
     if (wHandle) wHandle.style.display = "none";
+    const collapseBtn = drawer.querySelector("#gq-panel-collapse");
+    if (collapseBtn) collapseBtn.style.display = "none";
     const btn = document.getElementById("gq-panel-toggle");
     if (btn) { btn.innerHTML = "&#9654;"; btn.title = "展开面板"; }
     _removeOutsideClickHandler();
@@ -1438,7 +1442,9 @@
     drawer.dataset.gqExpanded = "1";
     applyGrokPanelWidth(drawer, targetW);
     const wHandle = drawer.querySelector("#gq-panel-resize-w");
-    if (wHandle) wHandle.style.display = "";
+    if (wHandle) wHandle.style.display = "block";
+    const collapseBtn = drawer.querySelector("#gq-panel-collapse");
+    if (collapseBtn) collapseBtn.style.display = "flex";
     const btn = document.getElementById("gq-panel-toggle");
     if (btn) { btn.innerHTML = "&#9664;"; btn.title = "收起面板"; }
     _removeOutsideClickHandler();
@@ -1521,6 +1527,22 @@
       toolbar.insertBefore(btn, toolbar.firstChild);
     }
 
+    if (!drawer.querySelector("#gq-panel-collapse")) {
+      const collapseBtn = document.createElement("button");
+      collapseBtn.id = "gq-panel-collapse";
+      collapseBtn.type = "button";
+      collapseBtn.innerHTML = "&#9664; 收起";
+      collapseBtn.title = "收起到右侧边栏";
+      collapseBtn.addEventListener("mousedown", e => e.stopPropagation(), true);
+      collapseBtn.addEventListener("pointerdown", e => e.stopPropagation(), true);
+      collapseBtn.addEventListener("click", e => {
+        e.preventDefault();
+        e.stopPropagation();
+        collapseGrokWidth(drawer, initDrawerW);
+      });
+      drawer.appendChild(collapseBtn);
+    }
+
     // ── 顶部拖拽条（高度） ──
     const handle = document.createElement("div");
     handle.id = "gq-panel-resize";
@@ -1551,14 +1573,16 @@
 
     wHandle.addEventListener("mousedown", e => {
       e.preventDefault(); e.stopPropagation();
+      wHandle.classList.add("gq-resizing");
       const startX = e.clientX;
       const startW = parseFloat(drawer.style.width) || initDrawerW;
-      const isExpanded = drawer.dataset.gqExpanded === "1";
       const onMove = ev => {
-        const newW = Math.max(initDrawerW, Math.min(window.innerWidth - 200, startW + startX - ev.clientX));
+        const minW = _getGrokNarrowWidth(drawer, initDrawerW);
+        const newW = Math.max(minW, Math.min(window.innerWidth - 80, startW + startX - ev.clientX));
         applyGrokPanelWidth(drawer, newW);
       };
       const onUp = () => {
+        wHandle.classList.remove("gq-resizing");
         const finalW = Math.round(parseFloat(drawer.style.width) || initDrawerW);
         if (drawer.dataset.gqExpanded === "1") GM_setValue("gq_panel_width_wide", finalW);
         else GM_setValue("gq_panel_width", Math.max(320, Math.min(finalW, 520)));
@@ -1588,6 +1612,6 @@
   let scrollTimer = null;
   window.addEventListener("scroll", () => { if (scrollTimer) return; scrollTimer = setTimeout(() => { scrollTimer = null; scheduleHijack(); }, 200); }, { passive: true });
 
-  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.3.14 \u8BBE\u7F6E", openSettings);
-  console.log("[Grok Quick] v3.3.14 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
+  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.3.15 \u8BBE\u7F6E", openSettings);
+  console.log("[Grok Quick] v3.3.15 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
 })();
