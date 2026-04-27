@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>本地 OCR 工具 - 无限制</title>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, 'Microsoft YaHei', Arial, sans-serif; background: #1a1a2e; color: #e0e0e0; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+        h1 { font-size: 24px; margin-bottom: 4px; color: #fff; }
+        .sub { color: #888; font-size: 13px; margin-bottom: 20px; }
+        .main { width: 100%; max-width: 900px; display: flex; gap: 16px; flex-wrap: wrap; }
+        .left, .right { flex: 1; min-width: 300px; }
+        .card { background: #16213e; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+        .card h2 { font-size: 15px; color: #0f3460; background: #e94560; display: inline-block; padding: 3px 12px; border-radius: 20px; margin-bottom: 12px; }
+        .drop-zone { border: 2px dashed #444; border-radius: 12px; padding: 40px 20px; text-align: center; cursor: pointer; transition: all 0.3s; color: #888; font-size: 15px; }
+        .drop-zone:hover, .drop-zone.drag-over { border-color: #e94560; background: rgba(233,69,96,0.08); color: #e94560; }
+        .drop-zone.has-image { padding: 10px; }
+        .drop-zone img { max-width: 100%; max-height: 300px; border-radius: 8px; }
+        .preview-area { margin-top: 10px; }
+        .file-info { font-size: 12px; color: #888; margin-top: 6px; }
+        select, button { font-family: inherit; }
+        select { background: #0f3460; color: #e0e0e0; border: none; padding: 8px 14px; border-radius: 6px; font-size: 13px; width: 100%; margin-bottom: 10px; }
+        .btn { width: 100%; padding: 12px; border: none; border-radius: 8px; font-size: 15px; font-weight: bold; cursor: pointer; transition: opacity 0.2s; }
+        .btn:hover { opacity: 0.85; }
+        .btn-primary { background: linear-gradient(135deg, #e94560, #0f3460); color: #fff; }
+        .btn-copy { background: #4CAF50; color: #fff; }
+        .btn-dl { background: #2196F3; color: #fff; }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .progress { background: #0f3460; border-radius: 8px; overflow: hidden; height: 8px; margin: 10px 0; display: none; }
+        .progress-bar { height: 100%; background: linear-gradient(90deg, #e94560, #4CAF50); transition: width 0.3s; width: 0%; border-radius: 8px; }
+        .status { text-align: center; font-size: 13px; color: #e94560; min-height: 20px; }
+        #result { width: 100%; min-height: 200px; background: #0a0a1a; color: #e0e0e0; border: 1px solid #333; border-radius: 8px; padding: 16px; font-size: 14px; line-height: 1.8; resize: vertical; font-family: inherit; }
+        .stats { display: flex; gap: 12px; margin: 10px 0; flex-wrap: wrap; }
+        .stat { background: #0f3460; padding: 6px 14px; border-radius: 20px; font-size: 12px; }
+        .stat b { color: #e94560; }
+        .tip { font-size: 11px; color: #555; margin-top: 8px; }
+        .btn-group { display: flex; gap: 8px; margin-top: 10px; }
+        .btn-group .btn { flex: 1; }
+        @media (max-width: 640px) { .main { flex-direction: column; } }
+    </style>
+</head>
+<body>
+    <h1>🔍 本地 OCR 工具</h1>
+    <p class="sub">Tesseract.js 纯浏览器识别 · 无需联网 · 无次数限制 · 隐私安全</p>
+
+    <div class="main">
+        <div class="left">
+            <div class="card">
+                <h2>📷 图片输入</h2>
+                <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+                    <div id="dropText">拖放图片到这里<br>或 点击选择文件<br><span style="font-size:12px;color:#555;">支持 Ctrl+V 粘贴截图</span></div>
+                    <div id="previewArea" class="preview-area" style="display:none;"></div>
+                </div>
+                <input type="file" id="fileInput" accept="image/*" style="display:none;">
+                <div class="file-info" id="fileInfo"></div>
+            </div>
+
+            <div class="card">
+                <h2>⚙️ 设置</h2>
+                <select id="langSelect">
+                    <option value="chi_sim+eng">中英混合（推荐）</option>
+                    <option value="chi_sim">仅中文</option>
+                    <option value="eng">仅英文</option>
+                    <option value="chi_sim+eng+jpn">中日英</option>
+                    <option value="chi_sim+eng+kor">中韩英</option>
+                </select>
+                <button class="btn btn-primary" id="btnOCR" onclick="runOCR()">🧠 开始识别</button>
+                <div class="progress" id="progress"><div class="progress-bar" id="progressBar"></div></div>
+                <div class="status" id="status"></div>
+            </div>
+        </div>
+
+        <div class="right">
+            <div class="card">
+                <h2>📄 识别结果</h2>
+                <div class="stats" id="stats" style="display:none;">
+                    <div class="stat">置信度: <b id="confVal">-</b></div>
+                    <div class="stat">耗时: <b id="timeVal">-</b></div>
+                    <div class="stat">字符数: <b id="charVal">-</b></div>
+                </div>
+                <textarea id="result" placeholder="识别结果将显示在这里..."></textarea>
+                <div class="btn-group">
+                    <button class="btn btn-copy" onclick="copyResult()">📋 复制</button>
+                    <button class="btn btn-dl" onclick="downloadResult()">💾 下载TXT</button>
+                </div>
+                <p class="tip">💡 首次识别需下载语言包（~20MB），之后自动缓存</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        var currentFile = null;
+        var dropZone = document.getElementById('dropZone');
+        var fileInput = document.getElementById('fileInput');
+
+        // 拖放
+        dropZone.addEventListener('dragover', function(e) { e.preventDefault(); this.classList.add('drag-over'); });
+        dropZone.addEventListener('dragleave', function() { this.classList.remove('drag-over'); });
+        dropZone.addEventListener('drop', function(e) {
+            e.preventDefault();
+            this.classList.remove('drag-over');
+            if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+        });
+
+        // 文件选择
+        fileInput.addEventListener('change', function() {
+            if (this.files.length) handleFile(this.files[0]);
+        });
+
+        // Ctrl+V 粘贴
+        document.addEventListener('paste', function(e) {
+            var items = e.clipboardData.items;
+            for (var i = 0; i < items.length; i++) {
+                if (items[i].type.indexOf('image') !== -1) {
+                    handleFile(items[i].getAsFile());
+                    break;
+                }
+            }
+        });
+
+        function handleFile(file) {
+            if (!file || file.type.indexOf('image') === -1) {
+                document.getElementById('status').textContent = '❌ 请选择图片文件';
+                return;
+            }
+            currentFile = file;
+            
+            // 显示预览
+            var reader = new FileReader();
+            reader.onload = function(e) {
+                var preview = document.getElementById('previewArea');
+                preview.innerHTML = '<img src="' + e.target.result + '">';
+                preview.style.display = 'block';
+                document.getElementById('dropText').style.display = 'none';
+                dropZone.classList.add('has-image');
+            };
+            reader.readAsDataURL(file);
+
+            var sizeKB = (file.size / 1024).toFixed(1);
+            document.getElementById('fileInfo').textContent = file.name + ' · ' + sizeKB + 'KB';
+            document.getElementById('status').textContent = '';
+        }
+
+        async function runOCR() {
+            if (!currentFile) {
+                document.getElementById('status').textContent = '❌ 请先选择图片';
+                return;
+            }
+            if (typeof Tesseract === 'undefined') {
+                document.getElementById('status').textContent = '❌ Tesseract.js 未加载';
+                return;
+            }
+
+            var btn = document.getElementById('btnOCR');
+            var prog = document.getElementById('progress');
+            var bar = document.getElementById('progressBar');
+            var statusEl = document.getElementById('status');
+
+            btn.disabled = true;
+            prog.style.display = 'block';
+            bar.style.width = '0%';
+            statusEl.textContent = '⏳ 初始化 Worker...';
+
+            try {
+                var lang = document.getElementById('langSelect').value;
+                var startAll = Date.now();
+
+                var initStart = Date.now();
+                var worker = await Tesseract.createWorker(lang);
+                var initTime = ((Date.now() - initStart) / 1000).toFixed(1);
+                statusEl.textContent = '⏳ Worker 就绪 (' + initTime + 's)，识别中...';
+
+                var result = await worker.recognize(currentFile, {
+                    logger: function(m) {
+                        if (m.status === 'recognizing text') {
+                            var pct = Math.round((m.progress || 0) * 100);
+                            bar.style.width = pct + '%';
+                            statusEl.textContent = '🔍 识别中... ' + pct + '%';
+                        } else if (m.status === 'loading language traineddata') {
+                            var pct = Math.round((m.progress || 0) * 100);
+                            statusEl.textContent = '📦 下载语言包... ' + pct + '%';
+                        }
+                    }
+                });
+
+                var totalTime = ((Date.now() - startAll) / 1000).toFixed(1);
+
+                await worker.terminate();
+
+                // 显示结果
+                var text = result.data.text.trim();
+                document.getElementById('result').value = text;
+                document.getElementById('stats').style.display = 'flex';
+                document.getElementById('confVal').textContent = result.data.confidence.toFixed(1) + '%';
+                document.getElementById('timeVal').textContent = totalTime + 's';
+                document.getElementById('charVal').textContent = text.length;
+                bar.style.width = '100%';
+                statusEl.textContent = '✅ 识别完成！';
+
+            } catch(e) {
+                statusEl.textContent = '❌ 错误: ' + e.message;
+                bar.style.width = '0%';
+            }
+
+            btn.disabled = false;
+            setTimeout(function() { prog.style.display = 'none'; }, 2000);
+        }
+
+        function copyResult() {
+            var text = document.getElementById('result').value;
+            if (!text) return;
+            navigator.clipboard.writeText(text).then(function() {
+                document.getElementById('status').textContent = '✅ 已复制到剪贴板';
+            });
+        }
+
+        function downloadResult() {
+            var text = document.getElementById('result').value;
+            if (!text) return;
+            var blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = 'ocr_' + new Date().toISOString().slice(0,10) + '.txt';
+            a.click();
+            URL.revokeObjectURL(url);
+            document.getElementById('status').textContent = '✅ 已下载';
+        }
+    </script>
+</body>
+</html>
