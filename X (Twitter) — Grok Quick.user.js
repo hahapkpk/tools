@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.3.5
+// @version      3.3.6
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -1348,7 +1348,6 @@
     #gq-panel-resize-w:hover::after{background:rgba(255,20,147,.8)}
     #gq-panel-toggle{cursor:pointer;pointer-events:all;user-select:none;color:rgba(255,255,255,.75);font-size:16px;padding:0 12px 0 8px;display:flex;align-items:center;justify-content:center;height:100%;min-width:32px;flex-shrink:0;transition:color .15s}
     #gq-panel-toggle:hover{color:#FF1493}
-    #gq-panel-overlay{position:fixed;inset:0;z-index:9997;pointer-events:all;background:transparent}
 
     /* Light theme */
     @media(prefers-color-scheme:light){
@@ -1390,18 +1389,24 @@
     drawer.style.top = "0";
   }
 
-  function _removeGrokOverlay() { document.getElementById("gq-panel-overlay")?.remove(); }
+  let _outsideClickHandler = null;
+
+  function _removeOutsideClickHandler() {
+    if (_outsideClickHandler) {
+      document.removeEventListener("mousedown", _outsideClickHandler, true);
+      _outsideClickHandler = null;
+    }
+  }
 
   function collapseGrokWidth(drawer, initW) {
     drawer.dataset.gqExpanded = "0";
-    // 回到用户设定的侧边栏宽度（而非原生默认值）
     const narrowW = Math.max(initW, GM_getValue("gq_panel_width", 0));
     applyGrokPanelWidth(drawer, narrowW);
     const wHandle = drawer.querySelector("#gq-panel-resize-w");
     if (wHandle) wHandle.style.display = "none";
     const btn = document.getElementById("gq-panel-toggle");
     if (btn) { btn.innerHTML = "&#9654;"; btn.title = "展开面板"; }
-    _removeGrokOverlay();
+    _removeOutsideClickHandler();
   }
 
   function expandGrokWidth(drawer, initW) {
@@ -1414,12 +1419,12 @@
     if (wHandle) wHandle.style.display = "";
     const btn = document.getElementById("gq-panel-toggle");
     if (btn) { btn.innerHTML = "&#9664;"; btn.title = "收起面板"; }
-    // 透明遮罩：点击空白处收起
-    _removeGrokOverlay();
-    const overlay = document.createElement("div");
-    overlay.id = "gq-panel-overlay";
-    overlay.addEventListener("click", () => collapseGrokWidth(drawer, initW));
-    document.body.appendChild(overlay);
+    _removeOutsideClickHandler();
+    // capture 阶段监听 document mousedown，点击 drawer 外部时收起
+    _outsideClickHandler = e => {
+      if (!drawer.contains(e.target)) collapseGrokWidth(drawer, initW);
+    };
+    setTimeout(() => document.addEventListener("mousedown", _outsideClickHandler, true), 0);
   }
 
   // 激活面板（执行命令时调用，移除空闲隐藏）
