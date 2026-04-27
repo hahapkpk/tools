@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.2.8
+// @version      3.2.9
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -1336,6 +1336,12 @@
     .gq-badge.telegram{background:rgba(41,182,246,.2);color:#64c8f5}
     .gq-push-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:14px}
 
+    /* Grok panel resize handle */
+    #gq-panel-resize{width:100%;height:8px;cursor:ns-resize;flex-shrink:0;position:relative;border-radius:4px 4px 0 0;transition:background .2s;user-select:none}
+    #gq-panel-resize:hover{background:rgba(255,20,147,.2)}
+    #gq-panel-resize::after{content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:36px;height:3px;background:rgba(255,255,255,.12);border-radius:2px;transition:background .2s}
+    #gq-panel-resize:hover::after{background:rgba(255,20,147,.7)}
+
     /* Light theme */
     @media(prefers-color-scheme:light){
       :root{--gq-bg:#fff;--gq-text:#0f1419;--gq-muted:#536471;--gq-border:#eff1f3;--gq-divider:rgba(0,0,0,.06);--gq-card-bg:#f7f9fa;--gq-input-bg:#fff;--gq-hover:rgba(0,0,0,.04);--gq-toggle-off:#ccd0d3;--gq-scrollbar:#c4c9cc}
@@ -1347,10 +1353,68 @@
   document.head.appendChild(style);
 
   // ════════════════════════════════════════════════════════════════
+  //  Grok 面板高度调整
+  // ════════════════════════════════════════════════════════════════
+  function applyGrokPanelHeight(drawer, p0, p1, h, pad) {
+    const ch = h + pad;
+    drawer.style.height = h + "px";
+    p0.style.height = ch + "px";
+    p1.style.height = ch + "px";
+    p1.style.top = `-${ch}px`;
+  }
+
+  function injectGrokResizeHandle() {
+    const drawer = document.querySelector("[data-testid='GrokDrawer']");
+    if (!drawer || drawer.dataset.gqResize) return;
+    const p0 = drawer.parentElement;
+    const p1 = p0?.parentElement;
+    if (!p1) return;
+    drawer.dataset.gqResize = "1";
+
+    const initDrawerH = parseFloat(window.getComputedStyle(drawer).height) || 678;
+    const initP0H = parseFloat(window.getComputedStyle(p0).height) || 691;
+    const pad = Math.max(0, initP0H - initDrawerH);
+
+    const savedH = GM_getValue("gq_panel_height", 0);
+    if (savedH >= 300 && savedH <= window.innerHeight - 60) {
+      applyGrokPanelHeight(drawer, p0, p1, savedH, pad);
+    }
+
+    const handle = document.createElement("div");
+    handle.id = "gq-panel-resize";
+    drawer.insertBefore(handle, drawer.firstChild);
+
+    handle.addEventListener("mousedown", e => {
+      e.preventDefault(); e.stopPropagation();
+      const startY = e.clientY;
+      const startH = parseFloat(drawer.style.height) || initDrawerH;
+
+      const onMove = ev => {
+        const newH = Math.max(300, Math.min(window.innerHeight - 60, startH + startY - ev.clientY));
+        applyGrokPanelHeight(drawer, p0, p1, newH, pad);
+      };
+      const onUp = () => {
+        GM_setValue("gq_panel_height", Math.round(parseFloat(drawer.style.height) || initDrawerH));
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+  }
+
+  // ════════════════════════════════════════════════════════════════
   //  启动
   // ════════════════════════════════════════════════════════════════
   const observer = new MutationObserver(scheduleHijack);
   observer.observe(document.body, { childList: true, subtree: true });
+
+  const panelObserver = new MutationObserver(() => {
+    if (document.querySelector("[data-testid='GrokDrawer']:not([data-gq-resize])")) injectGrokResizeHandle();
+  });
+  panelObserver.observe(document.body, { childList: true, subtree: true });
+  injectGrokResizeHandle();
+
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => setTimeout(hijackThrottled, 600));
   else setTimeout(hijackThrottled, 600);
 
@@ -1358,5 +1422,5 @@
   window.addEventListener("scroll", () => { if (scrollTimer) return; scrollTimer = setTimeout(() => { scrollTimer = null; scheduleHijack(); }, 200); }, { passive: true });
 
   GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.2.2 \u8BBE\u7F6E", openSettings);
-  console.log("[Grok Quick] v3.2.2 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
+  console.log("[Grok Quick] v3.2.9 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
 })();
