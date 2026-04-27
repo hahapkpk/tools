@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name         OCR.wdku.net 次数限制解除
 // @namespace    http://tampermonkey.net/
-// @version      7.1
-// @description  paytype=free(10次/日) + IP限制时自动切换Tesseract.js本地OCR(无限制)
+// @version      8.0
+// @description  自动切换Tesseract.js本地OCR(无限制)+docx/txt/pdf输出;IP受限时自动接管
 // @author       FlyWind
 // @match        https://ocr.wdku.net/*
 // @match        https://www.wdku.net/*
 // @require      https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js
+// @require      https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.min.js
 // @grant        GM_xmlhttpRequest
 // @connect      api.ocr.space
 // @run-at       document-start
@@ -15,7 +16,7 @@
 (function() {
     'use strict';
 
-    var LOG = '[OCR解锁 v7.1] ';
+    var LOG = '[OCR解锁 v8.0] ';
     var _origAlert = window.alert;
     var limitDetected = false;
     var tesseractReady = false;
@@ -64,8 +65,7 @@
     async function tesseractOCR(file, lang) {
         logMsg('Tesseract.js 开始识别: ' + file.name);
 
-        // lang 映射：网站用数字(1=中文,2=英文)，Tesseract 用 eng/chi_sim
-        var tessLang = 'chi_sim+eng';  // 默认中英文
+        var tessLang = 'chi_sim+eng';
         if (lang === '1') tessLang = 'chi_sim';
         else if (lang === '2') tessLang = 'eng';
 
@@ -78,50 +78,75 @@
                     }
                 }
             });
-            return result.data.text;
+            return result.data;
         } catch(e) {
             logMsg('Tesseract 错误: ' + e);
             throw e;
         }
     }
 
-    // ==================== 3. OCR.space 备用 API ====================
-    function ocrSpaceRecognize(file, lang) {
-        return new Promise(function(resolve, reject) {
-            var fd = new FormData();
-            fd.append('file', file);
-            fd.append('language', lang === '1' ? 'chs' : (lang === '2' ? 'eng' : 'chs'));
-            fd.append('isOverlayRequired', 'false');
-            fd.append('OCREngine', '2');
+    // ==================== 3. DOCX 导出 ====================
+    function exportToDocx(text, filename) {
+        if (typeof docx === 'undefined') {
+            logMsg('docx 库未加载，回退 txt 下载');
+            downloadText(text, filename.replace('.docx', '.txt'));
+            return;
+        }
 
-            if (typeof GM_xmlhttpRequest !== 'undefined') {
-                GM_xmlhttpRequest({
-                    method: 'POST',
-                    url: 'https://api.ocr.space/parse/image',
-                    data: fd,
-                    responseType: 'json',
-                    onload: function(resp) {
-                        try {
-                            var data = typeof resp.response === 'string' ? JSON.parse(resp.response) : resp.response;
-                            if (data.ParsedResults && data.ParsedResults.length > 0) {
-                                resolve(data.ParsedResults.map(function(r) { return r.ParsedText || ''; }).join('\n\n'));
-                            } else {
-                                reject(new Error('OCR.space 无结果: ' + (data.ErrorMessage || 'unknown')));
-                            }
-                        } catch(e) {
-                            reject(new Error('OCR.space 解析失败: ' + e));
-                        }
-                    },
-                    onerror: function(err) { reject(new Error('OCR.space 请求失败')); }
+        try {
+            var paragraphs = text.split('\n').map(function(line) {
+                return new docx.Paragraph({
+                    children: [new docx.TextRun({ text: line, font: 'Microsoft YaHei', size: 24 })]
                 });
-            } else {
-                reject(new Error('GM_xmlhttpRequest 不可用'));
-            }
-        });
+            });
+
+            var doc = new docx.Document({
+                sections: [{
+                    properties: {},
+                    children: paragraphs
+                }]
+            });
+
+            docx.Packer.toBlob(doc).then(function(blob) {
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                a.click();
+                URL.revokeObjectURL(url);
+                showTip('✅ DOCX 已下载: ' + filename, '#4CAF50', 3000);
+            });
+        } catch(e) {
+            logMsg('DOCX 导出失败: ' + e);
+            downloadText(text, filename.replace('.docx', '.txt'));
+        }
     }
 
-    // ==================== 4. 显示 OCR 结果面板 ====================
-    function showOCRResult(text, source) {
+    // ==================== 4. TXT 导出 ====================
+    function downloadText(text, filename) {
+        var blob = new Blob([text], {type: 'text/plain;charset=utf-8'});
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+        showTip('✅ TXT 已下载: ' + filename, '#4CAF50', 3000);
+    }
+
+    // ==================== 5. PDF 导出（简化版，用浏览器打印） ====================
+    function exportToPDF(text, filename) {
+        var win = window.open('', '_blank');
+        win.document.write('<html><head><title>' + escHtml(filename) + '</title>');
+        win.document.write('<style>body{font-family:"Microsoft YaHei",Arial,sans-serif;font-size:14px;line-height:1.8;padding:40px;white-space:pre-wrap;}</style>');
+        win.document.write('</head><body>' + escHtml(text) + '</body></html>');
+        win.document.close();
+        setTimeout(function() { win.print(); }, 500);
+        showTip('✅ PDF 打印窗口已打开', '#4CAF50', 3000);
+    }
+
+    // ==================== 6. 显示 OCR 结果面板（增强版） ====================
+    function showOCRResult(text, source, confidence) {
         var old = document.getElementById('ocr-result-panel');
         if (old) old.remove();
         var oldOv = document.getElementById('ocr-overlay');
@@ -133,15 +158,19 @@
 
         var panel = document.createElement('div');
         panel.id = 'ocr-result-panel';
-        panel.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:100000;width:85%;max-width:750px;max-height:80vh;background:#fff;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.3);display:flex;flex-direction:column;font-family:-apple-system,Arial,sans-serif;';
+        panel.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:100000;width:85%;max-width:800px;max-height:85vh;background:#fff;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.3);display:flex;flex-direction:column;font-family:-apple-system,Arial,sans-serif;';
+
+        var confLabel = confidence ? (' · 置信度 ' + confidence.toFixed(1) + '%') : '';
 
         panel.innerHTML =
             '<div style="padding:16px 20px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center;">' +
-            '<div style="font-size:16px;font-weight:bold;color:#333;">📄 OCR识别结果 <span style="font-size:12px;color:#888;">(' + escHtml(source) + ')</span></div>' +
-            '<div>' +
-            '<button id="ocr-copy-btn" style="padding:6px 14px;border:none;border-radius:4px;background:#4CAF50;color:#fff;cursor:pointer;font-size:13px;margin-right:6px;">📋 复制</button>' +
-            '<button id="ocr-dl-btn" style="padding:6px 14px;border:none;border-radius:4px;background:#2196F3;color:#fff;cursor:pointer;font-size:13px;margin-right:6px;">💾 下载TXT</button>' +
-            '<button id="ocr-close-btn" style="padding:6px 14px;border:none;border-radius:4px;background:#f44336;color:#fff;cursor:pointer;font-size:13px;">✕ 关闭</button>' +
+            '<div style="font-size:16px;font-weight:bold;color:#333;">📄 OCR识别结果 <span style="font-size:12px;color:#888;">(' + escHtml(source) + confLabel + ')</span></div>' +
+            '<div style="display:flex;gap:6px;">' +
+            '<button id="ocr-copy-btn" style="padding:6px 12px;border:none;border-radius:4px;background:#4CAF50;color:#fff;cursor:pointer;font-size:12px;">📋 复制</button>' +
+            '<button id="ocr-txt-btn" style="padding:6px 12px;border:none;border-radius:4px;background:#2196F3;color:#fff;cursor:pointer;font-size:12px;">📝 TXT</button>' +
+            '<button id="ocr-docx-btn" style="padding:6px 12px;border:none;border-radius:4px;background:#FF9800;color:#fff;cursor:pointer;font-size:12px;">📄 Word</button>' +
+            '<button id="ocr-pdf-btn" style="padding:6px 12px;border:none;border-radius:4px;background:#9C27B0;color:#fff;cursor:pointer;font-size:12px;">📕 PDF</button>' +
+            '<button id="ocr-close-btn" style="padding:6px 12px;border:none;border-radius:4px;background:#f44336;color:#fff;cursor:pointer;font-size:12px;">✕</button>' +
             '</div></div>' +
             '<div style="padding:20px;overflow-y:auto;flex:1;">' +
             '<pre id="ocr-result-text" style="white-space:pre-wrap;word-break:break-all;font-size:14px;line-height:1.8;color:#333;margin:0;">' + escHtml(text) + '</pre>' +
@@ -151,33 +180,21 @@
         document.body.appendChild(overlay);
         document.body.appendChild(panel);
 
-        document.getElementById('ocr-close-btn').onclick = function() {
-            panel.remove(); overlay.remove();
-        };
+        var textContent = text;
+        var baseName = 'ocr_result_' + Date.now();
 
+        document.getElementById('ocr-close-btn').onclick = function() { panel.remove(); overlay.remove(); };
         document.getElementById('ocr-copy-btn').onclick = function() {
-            var textEl = document.getElementById('ocr-result-text');
-            navigator.clipboard.writeText(textEl.textContent).then(function() {
-                showTip('✅ 已复制到剪贴板', '#4CAF50', 2000);
-            });
+            navigator.clipboard.writeText(textContent).then(function() { showTip('✅ 已复制', '#4CAF50', 2000); });
         };
-
-        document.getElementById('ocr-dl-btn').onclick = function() {
-            var textEl = document.getElementById('ocr-result-text');
-            var blob = new Blob([textEl.textContent], {type: 'text/plain;charset=utf-8'});
-            var url = URL.createObjectURL(blob);
-            var a = document.createElement('a');
-            a.href = url;
-            a.download = 'ocr_result_' + Date.now() + '.txt';
-            a.click();
-            URL.revokeObjectURL(url);
-            showTip('✅ 已下载', '#4CAF50', 2000);
-        };
+        document.getElementById('ocr-txt-btn').onclick = function() { downloadText(textContent, baseName + '.txt'); };
+        document.getElementById('ocr-docx-btn').onclick = function() { exportToDocx(textContent, baseName + '.docx'); };
+        document.getElementById('ocr-pdf-btn').onclick = function() { exportToPDF(textContent, baseName + '.pdf'); };
     }
 
-    // ==================== 5. 用备用引擎处理所有已上传文件 ====================
-    async function processWithBackupEngine(engine) {
-        showTip('🔄 切换到' + (engine === 'tesseract' ? 'Tesseract.js 本地引擎' : 'OCR.space 云端引擎') + '...', '#FF9800', 15000);
+    // ==================== 7. 用 Tesseract.js 处理所有已上传文件 ====================
+    async function processWithTesseract() {
+        showTip('🔄 切换到 Tesseract.js 本地引擎...', '#FF9800', 15000);
 
         if (typeof uploader === 'undefined' || !uploader.list) {
             showTip('❌ 未检测到上传文件', '#f44336');
@@ -199,31 +216,53 @@
             return;
         }
 
+        // 获取当前选择的语言
+        var lang = 'chi_sim+eng';
+        var langRadios = document.querySelectorAll('input[name="lang"]');
+        var hasChinese = false, hasEnglish = false;
+        langRadios.forEach(function(r) { if (r.checked) { if (r.value === '1') hasChinese = true; if (r.value === '2') hasEnglish = true; } });
+        if (hasChinese && hasEnglish) lang = 'chi_sim+eng';
+        else if (hasChinese) lang = 'chi_sim';
+        else if (hasEnglish) lang = 'eng';
+
+        // 获取选择的输出格式
+        var saveformat = 'txt';
+        var formatRadios = document.querySelectorAll('input[name="saveformat"]');
+        formatRadios.forEach(function(r) { if (r.checked) saveformat = r.value; });
+
         var allText = [];
-        var sourceName = engine === 'tesseract' ? 'Tesseract.js 本地引擎' : 'OCR.space 云端引擎';
+        var totalConf = 0;
 
         for (var i = 0; i < files.length; i++) {
             try {
                 showTip('🔄 识别: ' + escHtml(files[i].name) + ' (' + (i+1) + '/' + files.length + ')', '#2196F3', 30000);
-
-                var text;
-                if (engine === 'tesseract') {
-                    text = await tesseractOCR(files[i].file);
-                } else {
-                    text = await ocrSpaceRecognize(files[i].file);
-                }
-
-                allText.push('=== ' + files[i].name + ' ===\n' + text);
+                var data = await tesseractOCR(files[i].file, lang === 'chi_sim+eng' ? '1,2' : (lang === 'chi_sim' ? '1' : '2'));
+                allText.push('=== ' + files[i].name + ' ===\n' + data.text);
+                totalConf += data.confidence;
             } catch(e) {
                 allText.push('=== ' + files[i].name + ' ===\n[识别失败: ' + e.message + ']');
             }
         }
 
-        showOCRResult(allText.join('\n\n'), sourceName);
-        showTip('✅ ' + sourceName + '识别完成！', '#4CAF50', 3000);
+        var avgConf = files.length > 0 ? totalConf / files.length : 0;
+        var fullText = allText.join('\n\n');
+
+        showOCRResult(fullText, 'Tesseract.js 本地引擎', avgConf);
+
+        // 根据选择的格式自动导出
+        var baseName = 'ocr_result_' + Date.now();
+        if (saveformat === 'docx' || saveformat === 'word') {
+            exportToDocx(fullText, baseName + '.docx');
+        } else if (saveformat === 'txt') {
+            downloadText(fullText, baseName + '.txt');
+        } else if (saveformat === 'pdf') {
+            exportToPDF(fullText, baseName + '.pdf');
+        }
+
+        showTip('✅ Tesseract.js 识别完成！已按 ' + saveformat + ' 格式导出', '#4CAF50', 3000);
     }
 
-    // ==================== 6. Hook request_load_base ====================
+    // ==================== 8. Hook request_load_base ====================
     function hookRequestLoadBase() {
         var timer = setInterval(function() {
             if (typeof jQuery === 'undefined' || typeof request_load_base === 'undefined') return;
@@ -232,7 +271,6 @@
             var _origRequestLoadBase = window.request_load_base;
 
             window.request_load_base = function(url, post_data, callback_success, callback_error) {
-                // 修正 paytype 参数
                 if (url === '/index' && post_data) {
                     if (post_data.paytype === '0' || !post_data.paytype) {
                         post_data.paytype = 'free';
@@ -247,10 +285,12 @@
                             limitDetected = true;
 
                             var label = document.getElementById('ocr-engine-label');
-                            if (label) { label.textContent = 'Tesseract.js (本地)'; label.style.color = '#FF9800'; }
+                            if (label) { label.textContent = 'Tesseract.js (本地·无限)'; label.style.color = '#FF9800'; }
 
-                            showTip('⚠️ 本站已达IP限制，自动切换Tesseract.js本地引擎', '#FF9800', 5000);
-                            processWithBackupEngine('tesseract');
+                            showTip('⚠️ IP限制已触发，自动切换Tesseract.js本地引擎', '#FF9800', 5000);
+
+                            // 自动用 Tesseract 识别
+                            processWithTesseract();
                             return;
                         }
                         if (typeof origError === 'function') {
@@ -268,7 +308,7 @@
         }, 200);
     }
 
-    // ==================== 7. Hook submit 修正 paytype ====================
+    // ==================== 9. Hook submit 修正 paytype ====================
     function hookSubmit() {
         var timer = setInterval(function() {
             if (typeof submit === 'undefined' || typeof get_param === 'undefined') return;
@@ -285,7 +325,7 @@
         }, 200);
     }
 
-    // ==================== 8. 控制面板 ====================
+    // ==================== 10. 控制面板 ====================
     function addPanel() {
         var checkPanel = setInterval(function() {
             if (!document.body) return;
@@ -293,36 +333,62 @@
             if (document.getElementById('ocr-unlock-panel')) return;
 
             var style = document.createElement('style');
-            style.textContent = '#ocr-unlock-panel button{cursor:pointer;border:none;padding:5px 10px;border-radius:4px;font-size:12px;color:#fff;margin:2px}#ocr-unlock-panel .bg{background:#4CAF50}#ocr-unlock-panel .bo{background:#FF9800}#ocr-unlock-panel .br{background:#9C27B0}#ocr-unlock-panel .bd{background:#2196F3}#ocr-unlock-panel button:hover{opacity:0.85}';
+            style.textContent = '#ocr-unlock-panel button{cursor:pointer;border:none;padding:6px 12px;border-radius:4px;font-size:12px;color:#fff;margin:2px}#ocr-unlock-panel .bg{background:#4CAF50}#ocr-unlock-panel .bo{background:#FF9800}#ocr-unlock-panel .br{background:#9C27B0}#ocr-unlock-panel .bd{background:#2196F3}#ocr-unlock-panel .bw{background:#FF9800}#ocr-unlock-panel button:hover{opacity:0.85}';
             document.head.appendChild(style);
 
             var panel = document.createElement('div');
             panel.id = 'ocr-unlock-panel';
             panel.innerHTML =
-                '<div style="position:fixed;bottom:20px;right:20px;z-index:99998;background:rgba(40,40,40,0.95);color:#fff;padding:14px 18px;border-radius:10px;font-size:12px;font-family:-apple-system,Arial,sans-serif;box-shadow:0 4px 20px rgba(0,0,0,0.4);min-width:300px;">' +
-                '<div style="font-weight:bold;margin-bottom:10px;font-size:14px;">🔓 OCR次数解锁 <span style="color:#4CAF50">v7.1</span></div>' +
+                '<div style="position:fixed;bottom:20px;right:20px;z-index:99998;background:rgba(40,40,40,0.95);color:#fff;padding:14px 18px;border-radius:10px;font-size:12px;font-family:-apple-system,Arial,sans-serif;box-shadow:0 4px 20px rgba(0,0,0,0.4);min-width:320px;">' +
+                '<div style="font-weight:bold;margin-bottom:10px;font-size:14px;">🔓 OCR次数解锁 <span style="color:#4CAF50">v8.0</span></div>' +
                 '<div style="margin-bottom:8px;color:#aaa;">主引擎: <span id="ocr-engine-label" style="color:#4CAF50;">wdku (10次/日/IP)</span></div>' +
                 '<div style="margin-bottom:8px;">' +
                 '<button class="bo" onclick="window.__ocrTesseract()">🧠 Tesseract本地识别</button> ' +
-                '<button class="bd" onclick="window.__ocrOcrSpace()">☁️ OCR.space云端</button> ' +
-                '<button class="br" onclick="window.__ocrReset()">↺</button>' +
+                '<button class="bw" onclick="window.__ocrTesseractDocx()">📄 Tesseract→Word</button> ' +
                 '</div>' +
-                '<div style="margin-top:8px;color:#888;font-size:11px;line-height:1.6;">v7.1: paytype=free(10次) + 本地Tesseract.js(无限)<br>IP限制时自动切本地引擎 | 无需联网</div>' +
+                '<div style="margin-bottom:8px;">' +
+                '<button class="br" onclick="window.__ocrReset()">↺ 重置状态</button> ' +
+                '<span id="ocr-tess-status" style="font-size:11px;color:#888;">Tesseract: 检测中...</span>' +
+                '</div>' +
+                '<div style="margin-top:8px;color:#888;font-size:11px;line-height:1.6;">v8.0: paytype=free(10次) + Tesseract.js(无限)<br>✨ 新增: Word/PDF导出 | IP限制自动切换</div>' +
                 '</div>';
             document.body.appendChild(panel);
         }, 500);
     }
 
-    window.__ocrTesseract = function() {
-        processWithBackupEngine('tesseract');
-    };
+    window.__ocrTesseract = function() { processWithTesseract(); };
+    window.__ocrTesseractDocx = async function() {
+        if (typeof uploader === 'undefined' || !uploader.list) {
+            showTip('❌ 未检测到上传文件', '#f44336');
+            return;
+        }
+        var files = [];
+        for (var key in uploader.list) {
+            if (uploader.list.hasOwnProperty(key)) {
+                var t = uploader.list[key];
+                if ((!t.is_delete || t.is_delete !== 1) && t.file) files.push(t);
+            }
+        }
+        if (files.length === 0) { showTip('❌ 请先上传文件', '#f44336'); return; }
 
-    window.__ocrOcrSpace = function() {
-        processWithBackupEngine('ocrspace');
+        var allText = [];
+        for (var i = 0; i < files.length; i++) {
+            try {
+                showTip('🔄 识别: ' + escHtml(files[i].name), '#2196F3', 30000);
+                var data = await tesseractOCR(files[i].file, '1,2');
+                allText.push(data.text);
+            } catch(e) {
+                allText.push('[识别失败: ' + e.message + ']');
+            }
+        }
+        var fullText = allText.join('\n\n');
+        showOCRResult(fullText, 'Tesseract.js → Word', 0);
+        exportToDocx(fullText, 'ocr_result_' + Date.now() + '.docx');
     };
-
     window.__ocrReset = function() {
         limitDetected = false;
+        var label = document.getElementById('ocr-engine-label');
+        if (label) { label.textContent = 'wdku (10次/日/IP)'; label.style.color = '#4CAF50'; }
         showTip('↺ 状态重置', '#9C27B0');
     };
 
@@ -331,24 +397,36 @@
     hookSubmit();
     addPanel();
 
-    // 检查 Tesseract.js 是否加载成功
+    // 检查 Tesseract.js 和 docx 库加载
     var tessCheck = setInterval(function() {
         if (typeof Tesseract !== 'undefined') {
             clearInterval(tessCheck);
             tesseractReady = true;
             logMsg('Tesseract.js 已加载');
+            var s = document.getElementById('ocr-tess-status');
+            if (s) s.textContent = 'Tesseract: ✅ 就绪';
         }
     }, 1000);
 
-    // 5 秒后如果还没加载就警告
-    setTimeout(function() {
-        if (!tesseractReady) {
-            logMsg('⚠️ Tesseract.js 未加载，本地OCR不可用');
+    var docxCheck = setInterval(function() {
+        if (typeof docx !== 'undefined') {
+            clearInterval(docxCheck);
+            logMsg('docx 库已加载');
+            var s = document.getElementById('ocr-tess-status');
+            if (s) s.textContent = 'Tesseract: ✅ 就绪 | Word: ✅ 就绪';
         }
-    }, 5000);
+    }, 1000);
 
     setTimeout(function() {
-        showTip('🔓 OCR解锁 v7.1 已启动<br>paytype=free(10次) + Tesseract.js本地引擎(无限)', '#4CAF50', 5000);
+        if (!tesseractReady) {
+            logMsg('⚠️ Tesseract.js 未加载');
+            var s = document.getElementById('ocr-tess-status');
+            if (s) { s.textContent = 'Tesseract: ❌ 未加载'; s.style.color = '#f44336'; }
+        }
+    }, 8000);
+
+    setTimeout(function() {
+        showTip('🔓 OCR解锁 v8.0 已启动<br>paytype=free(10次) + Tesseract.js本地引擎(无限)<br>✨ 支持 Word/PDF 导出', '#4CAF50', 5000);
     }, 1000);
 
     logMsg('脚本启动');
