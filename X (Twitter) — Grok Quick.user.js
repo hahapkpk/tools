@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.2.6
+// @version      3.2.7
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -240,6 +240,7 @@
       cfg.autoSend = saved.autoSend ?? false;
       cfg.privateMode = saved.privateMode ?? false;
       cfg.lang = saved.lang || "auto";
+      cfg.templateOrder = Array.isArray(saved.templateOrder) ? saved.templateOrder : null;
       return cfg;
     } catch (e) {
       console.warn("[Grok Quick] Config load error:", e);
@@ -253,6 +254,7 @@
       // 只保存需要持久化的字段
       const toSave = { autoSend: cfg.autoSend, privateMode: cfg.privateMode, lang: cfg.lang };
       TEMPLATE_KEYS.forEach(k => { toSave[k] = { label: cfg[k]?.label, prompt: cfg[k]?.prompt }; });
+      if (Array.isArray(cfg.templateOrder)) toSave.templateOrder = cfg.templateOrder;
       GM_setValue("gq_config_v3", JSON.stringify(toSave));
     } catch (e) {
       console.warn("[Grok Quick] Config save error:", e);
@@ -737,14 +739,65 @@
     const menu = document.createElement("div"); menu.id = "gq-menu"; menu.setAttribute("role","menu");
 
     _menuItems = [];
+    let _dragSrcKey = null;
+
     orderedKeys.forEach((key, idx) => {
       const tpl = cfg[key]; if (!tpl?.label) return;
       const item = document.createElement("div"); item.className = "gq-menu-item"; item.setAttribute("role","menuitem"); item.tabIndex = 0;
-      item.innerHTML = `<span class="gq-menu-icon">${tpl.icon||"\u270F\uFE0F"}</span><span class="gq-menu-label">${escapeHtml(tpl.label)}</span>`;
+      item.draggable = false;
+      item.innerHTML = `<span class="gq-drag-handle" title="\u62D6\u52A8\u6392\u5E8F">\u28FF</span><span class="gq-menu-icon">${tpl.icon||"\u270F\uFE0F"}</span><span class="gq-menu-label">${escapeHtml(tpl.label)}</span>`;
       item.dataset.key = key;
-      item.onmouseenter = () => highlightMenuItem(idx);
-      item.onclick = () => { closeMenu(); executeCommand(tpl.prompt, tweetData); };
+
+      item.onmouseenter = () => {
+        menu.querySelectorAll(".gq-menu-item").forEach(el => el.classList.remove("gq-menu-item-active"));
+        item.classList.add("gq-menu-item-active");
+        _menuActiveIndex = _menuItems.indexOf(item);
+      };
+      item.onclick = (e) => { if (e.target.closest(".gq-drag-handle")) return; closeMenu(); executeCommand(tpl.prompt, tweetData); };
       item.onkeydown = handleMenuKeydown(idx, tpl.prompt, tweetData);
+
+      item.querySelector(".gq-drag-handle").addEventListener("mousedown", () => { item.draggable = true; });
+
+      item.addEventListener("dragstart", e => {
+        _dragSrcKey = key;
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", key);
+        requestAnimationFrame(() => item.classList.add("gq-dragging"));
+      });
+
+      item.addEventListener("dragend", () => {
+        item.draggable = false;
+        item.classList.remove("gq-dragging");
+        menu.querySelectorAll(".gq-drag-over-top,.gq-drag-over-bot").forEach(el => el.classList.remove("gq-drag-over-top","gq-drag-over-bot"));
+        _dragSrcKey = null;
+      });
+
+      item.addEventListener("dragover", e => {
+        if (!_dragSrcKey || _dragSrcKey === key) return;
+        e.preventDefault(); e.dataTransfer.dropEffect = "move";
+        const rect = item.getBoundingClientRect();
+        const isTop = e.clientY < rect.top + rect.height / 2;
+        menu.querySelectorAll(".gq-drag-over-top,.gq-drag-over-bot").forEach(el => { if (el !== item) el.classList.remove("gq-drag-over-top","gq-drag-over-bot"); });
+        item.classList.toggle("gq-drag-over-top", isTop);
+        item.classList.toggle("gq-drag-over-bot", !isTop);
+      });
+
+      item.addEventListener("dragleave", e => {
+        if (!item.contains(e.relatedTarget)) item.classList.remove("gq-drag-over-top","gq-drag-over-bot");
+      });
+
+      item.addEventListener("drop", e => {
+        e.preventDefault();
+        if (!_dragSrcKey || _dragSrcKey === key) return;
+        item.classList.remove("gq-drag-over-top","gq-drag-over-bot");
+        const srcItem = menu.querySelector(`.gq-menu-item[data-key="${_dragSrcKey}"]`);
+        if (!srcItem) return;
+        const insertBefore = e.clientY < item.getBoundingClientRect().top + item.getBoundingClientRect().height / 2;
+        if (insertBefore) menu.insertBefore(srcItem, item); else item.after(srcItem);
+        _menuItems = [...menu.querySelectorAll(".gq-menu-item")];
+        const newCfg = loadConfig(); newCfg.templateOrder = _menuItems.map(el => el.dataset.key); saveConfig(newCfg);
+      });
+
       _menuItems.push(item); menu.appendChild(item);
     });
 
@@ -1232,6 +1285,11 @@
     .gq-menu-item:hover,.gq-menu-item.gq-menu-item-active{background:linear-gradient(135deg,#FF1493 0%,#E0458A 100%);color:#fff;transform:scale(1.01)}
     .gq-menu-icon{font-size:17px;flex-shrink:0}
     .gq-menu-label{flex:1;line-height:1.3}
+    .gq-drag-handle{cursor:grab;font-size:12px;flex-shrink:0;color:var(--gq-muted,#71767B);opacity:0;transition:opacity .15s;padding:0 2px;letter-spacing:-.5px}
+    .gq-menu-item:hover .gq-drag-handle{opacity:.6;cursor:grab}
+    .gq-menu-item.gq-dragging{opacity:.3}
+    .gq-menu-item.gq-drag-over-top{border-top:2px solid #FF1493}
+    .gq-menu-item.gq-drag-over-bot{border-bottom:2px solid #FF1493}
     .gq-menu-footer{border-top:1px solid var(--gq-divider,rgba(255,255,255,.08));padding:6px 8px 4px;margin-top:4px;display:flex;justify-content:space-around;align-items:center}
     .gq-footer-btn{padding:5px 9px;font-size:16px;cursor:pointer;color:var(--gq-muted,#71767B);border-radius:8px;user-select:none;transition:all .15s;outline:none}
     .gq-footer-btn:hover{background:var(--gq-hover,rgba(255,255,255,.08));color:#fff;transform:scale(1.1)}
