@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.3.1
+// @version      3.3.2
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -1364,7 +1364,11 @@
     // 同步内层可视面板（position:absolute，高度独立于 drawer）
     const handle = drawer.querySelector("#gq-panel-resize");
     const contentDiv = [...drawer.children].find(c => c !== handle);
-    if (contentDiv) contentDiv.style.height = h + "px";
+    if (contentDiv) {
+      contentDiv.style.height = h + "px";
+      contentDiv.style.maxHeight = h + "px";
+      contentDiv.style.minHeight = h + "px";
+    }
   }
 
   function injectGrokResizeHandle() {
@@ -1426,5 +1430,5 @@
   window.addEventListener("scroll", () => { if (scrollTimer) return; scrollTimer = setTimeout(() => { scrollTimer = null; scheduleHijack(); }, 200); }, { passive: true });
 
   GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.2.2 \u8BBE\u7F6E", openSettings);
-  console.log("[Grok Quick] v3.3.1 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
+  console.log("[Grok Quick] v3.3.2 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
 })();
