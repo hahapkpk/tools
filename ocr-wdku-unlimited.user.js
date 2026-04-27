@@ -1,23 +1,22 @@
 // ==UserScript==
 // @name         OCR.wdku.net 次数限制解除
 // @namespace    http://tampermonkey.net/
-// @version      6.0
-// @description  清除所有Cookie变匿名→换Session→重新上传→用新ID提交，增加诊断和IP限制检测
+// @version      7.0
+// @description  修复paytype=free正确参数 + IP限制时自动切换OCR.space免费API双引擎
 // @author       FlyWind
 // @match        https://ocr.wdku.net/*
 // @match        https://www.wdku.net/*
-// @grant        none
-// @run-at       document-idle
+// @grant        GM_xmlhttpRequest
+// @connect      api.ocr.space
+// @run-at       document-start
 // ==/UserScript==
 
 (function() {
     'use strict';
 
-    var LOG = '[OCR解锁 v6.0] ';
-    var MAX_RETRY = 10;
-    var RETRY_DELAY = 800;  // 重试间隔 ms
-    var retryCount = 0;
+    var LOG = '[OCR解锁 v7.0] ';
     var _origAlert = window.alert;
+    var limitDetected = false;
 
     function logMsg(msg) { console.log(LOG + msg); }
 
@@ -43,7 +42,7 @@
 
     function isLimitMsg(msg) {
         if (typeof msg !== 'string') return false;
-        var kws = ['每日提交上限', '付费转换', '次数', '登录后', '今日', '已用完', '超出', 'VIP', '会员', '升级', '消费返还'];
+        var kws = ['每日提交上限', '付费转换', '今日', '已用完', '超出'];
         for (var i = 0; i < kws.length; i++) {
             if (msg.indexOf(kws[i]) !== -1) return true;
         }
@@ -59,383 +58,261 @@
         return _origAlert.call(window, m);
     };
 
-    // ==================== 2. 清除所有 Cookie ====================
-    function clearAllCookies() {
-        var cookies = document.cookie.split(';');
-        var cleared = [];
-        for (var i = 0; i < cookies.length; i++) {
-            var name = cookies[i].split('=')[0].trim();
-            if (!name) continue;
-            // 尝试多个 path 和 domain 组合
-            var domains = ['', '; domain=.wdku.net', '; domain=ocr.wdku.net', '; domain=www.wdku.net'];
-            var paths = ['; path=/', ''];
-            for (var d = 0; d < domains.length; d++) {
-                for (var p = 0; p < paths.length; p++) {
-                    document.cookie = name + '=; expires=Thu, 01 Jan 1970 00:00:00 UTC' + paths[p] + domains[d] + ';';
-                }
+    // ==================== 2. OCR.space 免费 API 备用引擎 ====================
+    function ocrSpaceRecognize(file, lang) {
+        return new Promise(function(resolve, reject) {
+            var fd = new FormData();
+            fd.append('file', file);
+            fd.append('language', lang || 'chs');  // chs=简体中文
+            fd.append('isOverlayRequired', 'false');
+            fd.append('OCREngine', '2');  // Engine 2 更好
+
+            // 优先用 GM_xmlhttpRequest（跨域），否则用 fetch + 代理
+            if (typeof GM_xmlhttpRequest !== 'undefined') {
+                GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: 'https://api.ocr.space/parse/image',
+                    data: fd,
+                    responseType: 'json',
+                    onload: function(resp) {
+                        try {
+                            var data = typeof resp.response === 'string' ? JSON.parse(resp.response) : resp.response;
+                            if (data.ParsedResults && data.ParsedResults.length > 0) {
+                                var text = data.ParsedResults.map(function(r) { return r.ParsedText || ''; }).join('\n\n');
+                                resolve(text);
+                            } else {
+                                reject(new Error('OCR.space 无结果: ' + (data.ErrorMessage || 'unknown')));
+                            }
+                        } catch(e) {
+                            reject(new Error('OCR.space 响应解析失败: ' + e));
+                        }
+                    },
+                    onerror: function(err) {
+                        reject(new Error('OCR.space 请求失败: ' + err));
+                    }
+                });
+            } else {
+                // Fallback: 用 fetch（可能被 CORS 阻止）
+                fetch('https://api.ocr.space/parse/image', {
+                    method: 'POST',
+                    body: fd
+                }).then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (data.ParsedResults && data.ParsedResults.length > 0) {
+                        var text = data.ParsedResults.map(function(r) { return r.ParsedText || ''; }).join('\n\n');
+                        resolve(text);
+                    } else {
+                        reject(new Error('OCR.space 无结果'));
+                    }
+                }).catch(reject);
             }
-            cleared.push(name);
+        });
+    }
+
+    // ==================== 3. 文件转 DataURL ====================
+    function fileToDataURL(file) {
+        return new Promise(function(resolve) {
+            var reader = new FileReader();
+            reader.onload = function(e) { resolve(e.target.result); };
+            reader.readAsDataURL(file);
+        });
+    }
+
+    // ==================== 4. 显示 OCR 结果面板 ====================
+    function showOCRResult(text, source) {
+        // 移除旧面板
+        var old = document.getElementById('ocr-result-panel');
+        if (old) old.remove();
+
+        var panel = document.createElement('div');
+        panel.id = 'ocr-result-panel';
+        panel.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:100000;width:80%;max-width:700px;max-height:80vh;background:#fff;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.3);display:flex;flex-direction:column;font-family:-apple-system,Arial,sans-serif;';
+
+        panel.innerHTML =
+            '<div style="padding:16px 20px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center;">' +
+            '<div style="font-size:16px;font-weight:bold;color:#333;">📄 OCR识别结果 <span style="font-size:12px;color:#888;">(' + escHtml(source) + ')</span></div>' +
+            '<div>' +
+            '<button id="ocr-copy-btn" style="padding:6px 14px;border:none;border-radius:4px;background:#4CAF50;color:#fff;cursor:pointer;font-size:13px;margin-right:6px;">📋 复制</button>' +
+            '<button id="ocr-close-btn" style="padding:6px 14px;border:none;border-radius:4px;background:#f44336;color:#fff;cursor:pointer;font-size:13px;">✕ 关闭</button>' +
+            '</div></div>' +
+            '<div style="padding:20px;overflow-y:auto;flex:1;">' +
+            '<pre id="ocr-result-text" style="white-space:pre-wrap;word-break:break-all;font-size:14px;line-height:1.8;color:#333;margin:0;">' + escHtml(text) + '</pre>' +
+            '</div>';
+
+        // 背景遮罩
+        var overlay = document.createElement('div');
+        overlay.id = 'ocr-overlay';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.4);z-index:99999;';
+        overlay.onclick = function() { panel.remove(); overlay.remove(); };
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(panel);
+
+        document.getElementById('ocr-close-btn').onclick = function() {
+            panel.remove(); overlay.remove();
+        };
+
+        document.getElementById('ocr-copy-btn').onclick = function() {
+            var textEl = document.getElementById('ocr-result-text');
+            navigator.clipboard.writeText(textEl.textContent).then(function() {
+                showTip('✅ 已复制到剪贴板', '#4CAF50', 2000);
+            });
+        };
+    }
+
+    // ==================== 5. 用备用引擎处理所有已上传文件 ====================
+    async function processWithBackupEngine() {
+        showTip('🔄 本站已达IP限制，切换到备用OCR引擎...', '#FF9800', 15000);
+
+        if (typeof uploader === 'undefined' || !uploader.list) {
+            showTip('❌ 未检测到上传文件', '#f44336');
+            return;
         }
-        logMsg('已清除所有Cookies: [' + cleared.join(', ') + ']');
-        logMsg('清除后Cookie: "' + document.cookie + '"');
-    }
 
-    // ==================== 3. 清除本地存储 ====================
-    function clearAllStorage() {
-        try { localStorage.clear(); logMsg('localStorage 已清除'); } catch(e) {}
-        try { sessionStorage.clear(); logMsg('sessionStorage 已清除'); } catch(e) {}
-    }
-
-    // ==================== 4. 换 Session（完全匿名）====================
-    function newSession() {
-        // Step 1: 清除所有追踪信息
-        clearAllCookies();
-        clearAllStorage();
-
-        // Step 2: 请求新 Session
-        var xhr = new XMLHttpRequest();
-        xhr.open('GET', '/?_rs=' + Date.now(), false);
-        xhr.withCredentials = true;
-        try { xhr.send(); } catch(e) { logMsg('获取新Session异常: ' + e); }
-
-        // Step 3: 验证新 Session
-        var m = document.cookie.match(/PHPSESSID=([^;]+)/);
-        var newSess = m ? m[1] : null;
-        logMsg('新Session: ' + (newSess ? newSess.substring(0, 12) + '...' : 'null'));
-        logMsg('当前Cookies: ' + document.cookie);
-
-        // Step 4: 检查是否还是登录状态
-        var isLogin = typeof is_login !== 'undefined' ? is_login : 'unknown';
-        logMsg('is_login 状态: ' + isLogin);
-
-        return newSess;
-    }
-
-    // ==================== 5. 同步重新上传所有文件 ====================
-    function reUploadFiles() {
-        if (typeof uploader === 'undefined' || !uploader.list) return {ok: false, reason: 'no_uploader'};
-
-        var tasks = [];
+        var files = [];
         for (var key in uploader.list) {
             if (uploader.list.hasOwnProperty(key)) {
                 var t = uploader.list[key];
                 if ((!t.is_delete || t.is_delete !== 1) && t.file) {
-                    tasks.push(t);
+                    files.push(t);
                 }
             }
         }
 
-        // 扫码上传的情况
-        if (tasks.length === 0 && typeof qrcode_ids !== 'undefined' && qrcode_ids && qrcode_ids.length > 0) {
-            return {ok: true, ids: qrcode_ids, ts: qrcode_ts};
+        if (files.length === 0) {
+            showTip('❌ 没有可识别的文件', '#f44336');
+            return;
         }
 
-        if (tasks.length === 0) return {ok: false, reason: 'no_files'};
+        var allText = [];
 
-        logMsg('重新上传 ' + tasks.length + ' 个文件...');
-        showTip('🔄 重新上传 ' + tasks.length + ' 个文件中...', '#FF9800', 15000);
-
-        try { count_upload_success = 0; count_total_pages = 0; } catch(e) {}
-
-        var allOk = true;
-        var newIds = [];
-        var newTs = [];
-
-        for (var i = 0; i < tasks.length; i++) {
-            var task = tasks[i];
+        for (var i = 0; i < files.length; i++) {
             try {
-                var fd = new FormData();
-                fd.append('user', 'default');
-                fd.append('name', task.name + '_' + Date.now());
-                fd.append('from', 'reupload');
-                fd.append('file', task.file);
-
-                var xhr = new XMLHttpRequest();
-                xhr.open('POST', '/upload?convtype=ocr', false);
-                xhr.withCredentials = true;
-                xhr.send(fd);
-
-                logMsg('上传响应: ' + xhr.responseText.substring(0, 200));
-                var data = JSON.parse(xhr.responseText);
-                if (data.errno === 0 && data.data && data.data.id) {
-                    task.uploadid = data.data.id;
-                    task.uploadtime = data.data.time;
-                    task.page = parseInt(data.data.page) || 1;
-                    newIds.push(data.data.id);
-                    newTs.push(data.data.time);
-                    try { count_upload_success++; count_total_pages += task.page; } catch(e) {}
-                    logMsg('上传成功: ' + task.name + ' → ' + data.data.id);
-                } else {
-                    logMsg('上传失败: ' + (data.desc || data.errmsg || JSON.stringify(data)));
-                    allOk = false;
-                }
+                showTip('🔄 识别中: ' + escHtml(files[i].name) + ' (' + (i+1) + '/' + files.length + ')', '#2196F3', 15000);
+                var text = await ocrSpaceRecognize(files[i].file);
+                allText.push('=== ' + files[i].name + ' ===\n' + text);
             } catch(e) {
-                logMsg('上传异常: ' + e);
-                allOk = false;
+                allText.push('=== ' + files[i].name + ' ===\n[识别失败: ' + e.message + ']');
             }
         }
 
-        try {
-            $('#label_success_count').html(count_upload_success);
-            $('#label_totalpage').html(count_total_pages);
-        } catch(e) {}
-
-        return {ok: allOk, ids: newIds.join(','), ts: newTs.join(',')};
+        showOCRResult(allText.join('\n\n'), 'OCR.space 备用引擎');
+        showTip('✅ 备用引擎识别完成！', '#4CAF50', 3000);
     }
 
-    // ==================== 6. 同步 POST /index（用 jQuery 确保兼容）====================
-    function syncSubmit(postData) {
-        var result = null;
-        var error = null;
+    // ==================== 6. Hook request_load_base ====================
+    function hookRequestLoadBase() {
+        // 等待 jQuery 和函数加载
+        var timer = setInterval(function() {
+            if (typeof jQuery === 'undefined' || typeof request_load_base === 'undefined') return;
+            clearInterval(timer);
 
-        logMsg('提交参数: ' + JSON.stringify(postData));
+            var _origRequestLoadBase = window.request_load_base;
 
-        jQuery.ajax({
-            type: 'POST',
-            url: '/index',
-            dataType: 'json',
-            data: postData,
-            async: false,
-            success: function(data) {
-                result = data;
-                logMsg('提交响应: ' + JSON.stringify(data).substring(0, 300));
-            },
-            error: function(xhr, status, err) {
-                error = {desc: '网络请求异常: ' + status};
-                logMsg('提交异常: ' + status + ' ' + err);
-            }
-        });
+            window.request_load_base = function(url, post_data, callback_success, callback_error) {
+                // 修正 paytype 参数
+                if (url === '/index' && post_data) {
+                    if (post_data.paytype === '0' || !post_data.paytype) {
+                        post_data.paytype = 'free';
+                        logMsg('修正 paytype: 0 → free');
+                    }
 
-        if (error) return {errno: -1, desc: error.desc};
-        return result;
+                    // 拦截错误回调
+                    var origError = callback_error || '';
+
+                    callback_error = function(data) {
+                        if (data && data.desc && isLimitMsg(data.desc)) {
+                            logMsg('检测到IP限制: ' + data.desc);
+                            limitDetected = true;
+
+                            // 自动切换到备用引擎
+                            showTip('⚠️ 本站已达到IP限制，自动切换备用OCR引擎', '#FF9800', 5000);
+                            processWithBackupEngine();
+                            return;
+                        }
+                        // 非限制错误，走原逻辑
+                        if (typeof origError === 'function') {
+                            origError(data);
+                        } else {
+                            _origAlert(data.desc);
+                        }
+                    };
+                }
+
+                return _origRequestLoadBase.call(window, url, post_data, callback_success, callback_error);
+            };
+
+            logMsg('request_load_base 已 Hook');
+        }, 200);
     }
 
-    // ==================== 7. 劫持 submit ====================
+    // ==================== 7. Hook submit 修正 paytype ====================
     function hookSubmit() {
-        if (typeof submit === 'undefined' || typeof get_param === 'undefined') {
-            setTimeout(hookSubmit, 300);
-            return;
-        }
+        var timer = setInterval(function() {
+            if (typeof submit === 'undefined' || typeof get_param === 'undefined') return;
+            clearInterval(timer);
 
-        var _origSubmit = window.submit;
+            var _origSubmit = window.submit;
 
-        window.submit = function(paytype) {
-            if (typeof is_submit !== 'undefined' && is_submit === 1) return false;
-            if (typeof checkfiles === 'function' && !checkfiles()) {
-                _origAlert('请先上传文档或等待文档上传完成');
-                return false;
-            }
+            window.submit = function(paytype) {
+                // 强制 paytype 为 'free'（不传 '0'）
+                logMsg('submit 被调用, 原paytype=' + paytype + ' → free');
 
-            var param;
-            try { param = get_param(); } catch(e) {
-                logMsg('get_param异常，回退原函数');
-                return _origSubmit.call(window, paytype);
-            }
-            if (param === false) return false;
+                // 调用原函数但修正 paytype
+                return _origSubmit.call(window, 'free');
+            };
 
-            var ids, ts;
-            try {
-                ids = glob_ids().join(',') || (typeof qrcode_ids !== 'undefined' ? qrcode_ids : '');
-                ts = glob_ts().join(',') || (typeof qrcode_ts !== 'undefined' ? qrcode_ts : '');
-            } catch(e) {
-                return _origSubmit.call(window, paytype);
-            }
-
-            var postData = Object.assign({
-                ids: ids,
-                ts: ts,
-                paytype: paytype
-            }, param);
-
-            logMsg('首次提交: ids=' + ids);
-
-            if (typeof submit_set_process === 'function') submit_set_process('正在努力提交中....');
-
-            var resp = syncSubmit(postData);
-
-            if (resp.errno === 0) {
-                retryCount = 0;
-                logMsg('提交成功！id=' + resp.id);
-                handleSuccess(resp);
-            } else {
-                var desc = resp.desc || '未知错误';
-                logMsg('提交失败: ' + desc);
-                logMsg('完整响应: ' + JSON.stringify(resp));
-
-                if (isLimitMsg(desc)) {
-                    doAutoRetry(postData, paytype);
-                } else {
-                    if (typeof submit_set_default === 'function') submit_set_default(desc);
-                    showTip('❌ ' + escHtml(desc), '#f44336');
-                }
-            }
-        };
-
-        logMsg('submit 已劫持');
+            logMsg('submit 已 Hook (paytype → free)');
+        }, 200);
     }
 
-    // ==================== 8. 处理成功 ====================
-    function handleSuccess(resp) {
-        if (typeof convid !== 'undefined') convid = resp.id;
-        if (typeof convtime !== 'undefined') convtime = resp.time;
-        if (typeof check === 'function') check(resp.id, resp.time);
-        try { $('#uploader').removeClass('in'); $('#convparam').removeClass('in'); } catch(e) {}
-        showTip('✅ 提交成功，正在转换中...', '#4CAF50', 5000);
-    }
-
-    // ==================== 9. 自动重试（带延迟）====================
-    function doAutoRetry(origPostData, paytype) {
-        if (retryCount >= MAX_RETRY) {
-            showTip('❌ 已达最大重试次数(' + MAX_RETRY + ')<br><small>可能被IP限制，建议：<br>1. 刷新页面重试<br>2. 更换网络/使用VPN<br>3. 稍后再试</small>', '#f44336', 15000);
-            if (typeof submit_set_default === 'function') submit_set_default('已达最大重试次数，可能被IP限制');
-            return;
-        }
-
-        retryCount++;
-        updatePanel();
-        showTip('🔄 第' + retryCount + '/' + MAX_RETRY + '次绕过限制...<br><small>清Cookie → 换Session → 重新上传 → 提交</small>', '#FF9800', 15000);
-
-        // 延迟执行，避免快速连续请求
-        setTimeout(function() {
-            // Step 1: 换 Session（会清除所有Cookie和Storage）
-            var sess = newSession();
-            if (!sess) {
-                showTip('❌ 换Session失败', '#f44336');
-                if (typeof submit_set_default === 'function') submit_set_default('换Session失败');
-                return;
-            }
-
-            // Step 2: 重新上传文件
-            var uploadResult = reUploadFiles();
-            if (!uploadResult.ok) {
-                logMsg('重新上传失败: ' + (uploadResult.reason || 'unknown'));
-                showTip('❌ 重新上传失败: ' + escHtml(uploadResult.reason || ''), '#f44336');
-                if (typeof submit_set_default === 'function') submit_set_default('重新上传失败');
-                return;
-            }
-
-            // Step 3: 用新的 ids 和 ts 重新构造提交参数
-            var newPostData = Object.assign({}, origPostData);
-            if (uploadResult.ids) newPostData.ids = uploadResult.ids;
-            if (uploadResult.ts) newPostData.ts = uploadResult.ts;
-
-            logMsg('重试提交: ids=' + newPostData.ids + ' ts=' + newPostData.ts);
-
-            // Step 4: 同步提交
-            var resp = syncSubmit(newPostData);
-
-            if (resp.errno === 0) {
-                retryCount = 0;
-                logMsg('重试成功！id=' + resp.id);
-                handleSuccess(resp);
-                showTip('✅ 第' + retryCount + '次重试成功，正在转换中...', '#4CAF50', 5000);
-            } else {
-                var desc = resp.desc || '未知错误';
-                logMsg('重试失败(' + retryCount + '/' + MAX_RETRY + '): ' + desc);
-                logMsg('完整响应: ' + JSON.stringify(resp));
-
-                if (isLimitMsg(desc) && retryCount < MAX_RETRY) {
-                    // 继续重试（递归，但带延迟）
-                    doAutoRetry(newPostData, paytype);
-                } else {
-                    if (typeof submit_set_default === 'function') submit_set_default(desc);
-                    showTip('❌ 重试失败: ' + escHtml(desc) + '<br><small>如持续失败可能被IP限制，建议更换网络或稍后再试</small>', '#f44336', 10000);
-                }
-            }
-        }, RETRY_DELAY);
-    }
-
-    // ==================== 10. 控制面板 ====================
+    // ==================== 8. 控制面板 ====================
     function addPanel() {
-        if (document.getElementById('ocr-unlock-panel')) return;
+        var checkPanel = setInterval(function() {
+            if (!document.body) return;
+            clearInterval(checkPanel);
 
-        var style = document.createElement('style');
-        style.textContent = '#ocr-unlock-panel button{cursor:pointer;border:none;padding:5px 10px;border-radius:4px;font-size:12px;color:#fff;margin:2px}#ocr-unlock-panel .bg{background:#4CAF50}#ocr-unlock-panel .bo{background:#FF9800}#ocr-unlock-panel .br{background:#9C27B0}#ocr-unlock-panel .bd{background:#2196F3}#ocr-unlock-panel button:hover{opacity:0.85}';
-        document.head.appendChild(style);
+            if (document.getElementById('ocr-unlock-panel')) return;
 
-        var panel = document.createElement('div');
-        panel.id = 'ocr-unlock-panel';
-        panel.innerHTML =
-            '<div style="position:fixed;bottom:20px;right:20px;z-index:99998;background:rgba(40,40,40,0.95);color:#fff;padding:14px 18px;border-radius:10px;font-size:12px;font-family:-apple-system,Arial,sans-serif;box-shadow:0 4px 20px rgba(0,0,0,0.4);min-width:260px;">' +
-            '<div style="font-weight:bold;margin-bottom:10px;font-size:14px;">🔓 OCR次数解锁 <span style="color:#4CAF50">v6.0</span></div>' +
-            '<div style="margin-bottom:8px;color:#aaa;">已绕过: <span id="ocr-retry-count" style="color:#4CAF50;">0</span> 次 | 重试上限: ' + MAX_RETRY + '</div>' +
-            '<div style="margin-bottom:8px;">' +
-            '<button class="bo" onclick="window.__ocrNewSess()">🔄 换Session</button> ' +
-            '<button class="bd" onclick="window.__ocrDiag()">🔍 诊断</button> ' +
-            '<button class="br" onclick="window.__ocrReset()">↺ 重置</button>' +
-            '</div>' +
-            '<div id="ocr-diag-info" style="display:none;margin-top:8px;padding:8px;background:rgba(0,0,0,0.3);border-radius:4px;font-size:11px;color:#ccc;max-height:150px;overflow-y:auto;word-break:break-all;"></div>' +
-            '<div style="margin-top:8px;color:#888;font-size:11px;line-height:1.6;">v6.0: 清除全部Cookie变匿名 + 延迟重试<br>如持续失败可能被IP限制，需换网络</div>' +
-            '</div>';
-        document.body.appendChild(panel);
+            var style = document.createElement('style');
+            style.textContent = '#ocr-unlock-panel button{cursor:pointer;border:none;padding:5px 10px;border-radius:4px;font-size:12px;color:#fff;margin:2px}#ocr-unlock-panel .bg{background:#4CAF50}#ocr-unlock-panel .bo{background:#FF9800}#ocr-unlock-panel .br{background:#9C27B0}#ocr-unlock-panel .bd{background:#2196F3}#ocr-unlock-panel button:hover{opacity:0.85}';
+            document.head.appendChild(style);
+
+            var panel = document.createElement('div');
+            panel.id = 'ocr-unlock-panel';
+            panel.innerHTML =
+                '<div style="position:fixed;bottom:20px;right:20px;z-index:99998;background:rgba(40,40,40,0.95);color:#fff;padding:14px 18px;border-radius:10px;font-size:12px;font-family:-apple-system,Arial,sans-serif;box-shadow:0 4px 20px rgba(0,0,0,0.4);min-width:280px;">' +
+                '<div style="font-weight:bold;margin-bottom:10px;font-size:14px;">🔓 OCR次数解锁 <span style="color:#4CAF50">v7.0</span></div>' +
+                '<div style="margin-bottom:8px;color:#aaa;">引擎: <span id="ocr-engine-label" style="color:#4CAF50;">wdku (免费10次/日/IP)</span></div>' +
+                '<div style="margin-bottom:8px;">' +
+                '<button class="bd" onclick="window.__ocrBackup()">🚀 备用引擎识别</button> ' +
+                '<button class="br" onclick="window.__ocrReset()">↺ 重置</button>' +
+                '</div>' +
+                '<div style="margin-top:8px;color:#888;font-size:11px;line-height:1.6;">v7.0: paytype=free + IP限制时自动切OCR.space<br>每个IP每天可免费10次，超限自动用备用引擎</div>' +
+                '</div>';
+            document.body.appendChild(panel);
+        }, 500);
     }
 
-    function updatePanel() {
-        var el = document.getElementById('ocr-retry-count');
-        if (el) el.textContent = retryCount;
-    }
-
-    window.__ocrNewSess = function() {
-        var s = newSession();
-        showTip(s ? '✅ 新Session: ' + s.substring(0,8) + '...' : '❌ 失败', s ? '#4CAF50' : '#f44336');
-    };
-
-    window.__ocrDiag = function() {
-        var info = document.getElementById('ocr-diag-info');
-        if (!info) return;
-        var visible = info.style.display !== 'none';
-        if (visible) {
-            info.style.display = 'none';
-            return;
-        }
-
-        var html = '<b>=== 诊断信息 ===</b><br>';
-        html += 'Cookies: ' + escHtml(document.cookie || '(空)') + '<br>';
-        html += 'is_login: ' + (typeof is_login !== 'undefined' ? is_login : 'undefined') + '<br>';
-        html += 'retryCount: ' + retryCount + '<br>';
-
-        // 检查 PHPSESSID
-        var pm = document.cookie.match(/PHPSESSID=([^;]+)/);
-        html += 'PHPSESSID: ' + (pm ? pm[1].substring(0,12) + '...' : '无') + '<br>';
-
-        // 检查是否有登录相关Cookie
-        var loginCookies = document.cookie.split(';').filter(function(c) {
-            var n = c.split('=')[0].trim().toLowerCase();
-            return n.indexOf('user') !== -1 || n.indexOf('login') !== -1 || n.indexOf('token') !== -1 || n.indexOf('auth') !== -1;
-        });
-        html += '登录相关Cookie: ' + (loginCookies.length > 0 ? escHtml(loginCookies.join('; ')) : '(无)') + '<br>';
-
-        // 检查 uploader 状态
-        var fileCount = 0;
-        if (typeof uploader !== 'undefined' && uploader.list) {
-            for (var k in uploader.list) {
-                if (uploader.list.hasOwnProperty(k) && (!uploader.list[k].is_delete || uploader.list[k].is_delete !== 1)) {
-                    fileCount++;
-                }
-            }
-        }
-        html += '待上传文件数: ' + fileCount + '<br>';
-
-        // localStorage
-        try {
-            var lsKeys = Object.keys(localStorage);
-            html += 'localStorage项: ' + lsKeys.length + (lsKeys.length > 0 ? ' [' + lsKeys.join(',') + ']' : '') + '<br>';
-        } catch(e) { html += 'localStorage: 无法访问<br>'; }
-
-        info.innerHTML = html;
-        info.style.display = 'block';
+    window.__ocrBackup = function() {
+        processWithBackupEngine();
     };
 
     window.__ocrReset = function() {
-        retryCount = 0;
-        updatePanel();
-        showTip('↺ 计数归零', '#9C27B0');
+        limitDetected = false;
+        showTip('↺ 状态重置', '#9C27B0');
     };
 
     // ==================== 初始化 ====================
+    hookRequestLoadBase();
     hookSubmit();
     addPanel();
-    showTip('🔓 OCR解锁 v6.0 已启动<br>清除全部Cookie变匿名 + 延迟重试 | 点🔍诊断', '#4CAF50', 5000);
+
+    // 延迟显示启动提示
+    setTimeout(function() {
+        showTip('🔓 OCR解锁 v7.0 已启动<br>paytype=free + IP限制自动切备用引擎', '#4CAF50', 5000);
+    }, 1000);
+
     logMsg('脚本启动');
 
 })();
