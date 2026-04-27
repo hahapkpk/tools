@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.3.8
+// @version      3.3.9
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -1422,14 +1422,14 @@
     const btn = document.getElementById("gq-panel-toggle");
     if (btn) { btn.innerHTML = "&#9664;"; btn.title = "收起面板"; }
     _removeOutsideClickHandler();
-    // 用 getBoundingClientRect 判断点击是否在面板可视范围外
-    // 比 drawer.contains() 更可靠：X.com 用 React portal 渲染内容，
-    // portal 节点不在 drawer DOM 树内，contains() 会误判为"外部"
+    // 以 narrow 状态的左边界为阈值：展开后 drawer 宽度可能超出左边界（rect.left<0），
+    // 用展开后的 rect 判断会导致整个视口都被视为"面板内部"，外部点击永远不触发。
+    // 改用 p0.right - narrowW 计算 narrow 左边界，点击该点左侧即视为"外部"。
+    const p0rect = drawer.parentElement.getBoundingClientRect();
+    const narrowW = Math.max(initW, GM_getValue("gq_panel_width", 0));
+    const narrowLeft = p0rect.right - narrowW;
     _outsideClickHandler = e => {
-      const r = drawer.getBoundingClientRect();
-      if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) {
-        collapseGrokWidth(drawer, initW);
-      }
+      if (e.clientX < narrowLeft) collapseGrokWidth(drawer, initW);
     };
     setTimeout(() => document.addEventListener("mousedown", _outsideClickHandler, true), 0);
   }
