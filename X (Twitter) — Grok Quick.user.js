@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.2.9
+// @version      3.3.0
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -1337,10 +1337,10 @@
     .gq-push-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:14px}
 
     /* Grok panel resize handle */
-    #gq-panel-resize{width:100%;height:8px;cursor:ns-resize;flex-shrink:0;position:relative;border-radius:4px 4px 0 0;transition:background .2s;user-select:none}
-    #gq-panel-resize:hover{background:rgba(255,20,147,.2)}
-    #gq-panel-resize::after{content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:36px;height:3px;background:rgba(255,255,255,.12);border-radius:2px;transition:background .2s}
-    #gq-panel-resize:hover::after{background:rgba(255,20,147,.7)}
+    #gq-panel-resize{position:absolute!important;top:0;left:0;right:0;height:12px;cursor:ns-resize;z-index:9999;pointer-events:all;border-radius:4px 4px 0 0;transition:background .2s;user-select:none}
+    #gq-panel-resize:hover{background:rgba(255,20,147,.25)}
+    #gq-panel-resize::after{content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:40px;height:3px;background:rgba(255,255,255,.15);border-radius:2px;transition:background .2s}
+    #gq-panel-resize:hover::after{background:rgba(255,20,147,.8)}
 
     /* Light theme */
     @media(prefers-color-scheme:light){
@@ -1422,5 +1422,5 @@
   window.addEventListener("scroll", () => { if (scrollTimer) return; scrollTimer = setTimeout(() => { scrollTimer = null; scheduleHijack(); }, 200); }, { passive: true });
 
   GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.2.2 \u8BBE\u7F6E", openSettings);
-  console.log("[Grok Quick] v3.2.9 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
+  console.log("[Grok Quick] v3.3.0 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
 })();
