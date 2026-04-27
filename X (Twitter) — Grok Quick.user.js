@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.3.3
+// @version      3.3.4
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -1345,6 +1345,8 @@
     #gq-panel-resize-w:hover{background:rgba(255,20,147,.25)}
     #gq-panel-resize-w::after{content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:3px;height:40px;background:rgba(255,255,255,.15);border-radius:2px;transition:background .2s}
     #gq-panel-resize-w:hover::after{background:rgba(255,20,147,.8)}
+    #gq-panel-toggle{cursor:pointer;pointer-events:all;user-select:none;color:rgba(255,255,255,.5);font-size:13px;padding:0 10px 0 6px;display:flex;align-items:center;height:100%;flex-shrink:0;transition:color .15s}
+    #gq-panel-toggle:hover{color:#FF1493}
 
     /* Light theme */
     @media(prefers-color-scheme:light){
@@ -1359,15 +1361,17 @@
   // ════════════════════════════════════════════════════════════════
   //  Grok 面板高度调整
   // ════════════════════════════════════════════════════════════════
+  function _getGrokContentDiv(drawer) {
+    return [...drawer.children].find(c => c.id !== "gq-panel-resize" && c.id !== "gq-panel-resize-w");
+  }
+
   function applyGrokPanelHeight(drawer, p0, p1, h, pad) {
     const ch = h + pad;
     drawer.style.height = h + "px";
     p0.style.height = ch + "px";
     p1.style.height = ch + "px";
     p1.style.top = `-${ch}px`;
-    // 同步内层可视面板（position:absolute，高度独立于 drawer）
-    const handle = drawer.querySelector("#gq-panel-resize");
-    const contentDiv = [...drawer.children].find(c => c !== handle);
+    const contentDiv = _getGrokContentDiv(drawer);
     if (contentDiv) {
       contentDiv.style.height = h + "px";
       contentDiv.style.maxHeight = h + "px";
@@ -1384,6 +1388,31 @@
     drawer.style.top = "0";
   }
 
+  function collapseGrokWidth(drawer, initW) {
+    drawer.dataset.gqExpanded = "0";
+    drawer.style.position = "";
+    drawer.style.right = "";
+    drawer.style.top = "";
+    drawer.style.width = "";
+    drawer.style.maxWidth = "";
+    drawer.style.minWidth = "";
+    const wHandle = drawer.querySelector("#gq-panel-resize-w");
+    if (wHandle) wHandle.style.display = "none";
+    const btn = document.getElementById("gq-panel-toggle");
+    if (btn) { btn.textContent = "▶"; btn.title = "展开面板"; }
+  }
+
+  function expandGrokWidth(drawer, initW) {
+    const savedW = GM_getValue("gq_panel_width", 0);
+    const targetW = savedW >= initW ? savedW : Math.round(initW * 1.4);
+    drawer.dataset.gqExpanded = "1";
+    applyGrokPanelWidth(drawer, targetW);
+    const wHandle = drawer.querySelector("#gq-panel-resize-w");
+    if (wHandle) wHandle.style.display = "";
+    const btn = document.getElementById("gq-panel-toggle");
+    if (btn) { btn.textContent = "◀"; btn.title = "收起面板"; }
+  }
+
   function injectGrokResizeHandle() {
     const drawer = document.querySelector("[data-testid='GrokDrawer']");
     if (!drawer || drawer.dataset.gqResize) return;
@@ -1397,16 +1426,27 @@
     const pad = Math.max(0, initP0H - initDrawerH);
     const initDrawerW = parseFloat(window.getComputedStyle(drawer).width) || 400;
 
-    // Restore saved height
+    // 恢复保存的高度
     const savedH = GM_getValue("gq_panel_height", 0);
     if (savedH >= 300 && savedH <= window.innerHeight - 60) {
       applyGrokPanelHeight(drawer, p0, p1, savedH, pad);
     }
 
-    // Restore saved width (right-anchor so growth goes leftward)
-    const savedW = GM_getValue("gq_panel_width", 0);
-    if (savedW >= 350) applyGrokPanelWidth(drawer, savedW);
-    else { drawer.style.position = "absolute"; drawer.style.right = "0"; drawer.style.top = "0"; }
+    // 注入折叠/展开按钮到面板顶部工具栏
+    const contentDiv = _getGrokContentDiv(drawer);
+    const toolbar = contentDiv?.children?.[0];
+    if (toolbar && !document.getElementById("gq-panel-toggle")) {
+      const btn = document.createElement("div");
+      btn.id = "gq-panel-toggle";
+      btn.textContent = "▶";
+      btn.title = "展开面板";
+      btn.addEventListener("click", e => {
+        e.stopPropagation();
+        if (drawer.dataset.gqExpanded === "1") collapseGrokWidth(drawer, initDrawerW);
+        else expandGrokWidth(drawer, initDrawerW);
+      });
+      toolbar.insertBefore(btn, toolbar.firstChild);
+    }
 
     // ── 顶部拖拽条（高度） ──
     const handle = document.createElement("div");
@@ -1430,9 +1470,10 @@
       document.addEventListener("mouseup", onUp);
     });
 
-    // ── 左边拖拽条（宽度） ──
+    // ── 左边拖拽条（宽度，展开时才显示） ──
     const wHandle = document.createElement("div");
     wHandle.id = "gq-panel-resize-w";
+    wHandle.style.display = "none";
     drawer.appendChild(wHandle);
 
     wHandle.addEventListener("mousedown", e => {
@@ -1440,7 +1481,7 @@
       const startX = e.clientX;
       const startW = parseFloat(drawer.style.width) || initDrawerW;
       const onMove = ev => {
-        const newW = Math.max(350, Math.min(window.innerWidth - 200, startW + startX - ev.clientX));
+        const newW = Math.max(initDrawerW, Math.min(window.innerWidth - 200, startW + startX - ev.clientX));
         applyGrokPanelWidth(drawer, newW);
       };
       const onUp = () => {
@@ -1472,5 +1513,5 @@
   window.addEventListener("scroll", () => { if (scrollTimer) return; scrollTimer = setTimeout(() => { scrollTimer = null; scheduleHijack(); }, 200); }, { passive: true });
 
   GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.2.2 \u8BBE\u7F6E", openSettings);
-  console.log("[Grok Quick] v3.3.3 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
+  console.log("[Grok Quick] v3.3.4 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
 })();
