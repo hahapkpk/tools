@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.3.2
+// @version      3.3.3
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -1341,6 +1341,10 @@
     #gq-panel-resize:hover{background:rgba(255,20,147,.25)}
     #gq-panel-resize::after{content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:40px;height:3px;background:rgba(255,255,255,.15);border-radius:2px;transition:background .2s}
     #gq-panel-resize:hover::after{background:rgba(255,20,147,.8)}
+    #gq-panel-resize-w{position:absolute!important;top:0;left:0;bottom:0;width:8px;cursor:ew-resize;z-index:9999;pointer-events:all;border-radius:4px 0 0 4px;transition:background .2s;user-select:none}
+    #gq-panel-resize-w:hover{background:rgba(255,20,147,.25)}
+    #gq-panel-resize-w::after{content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:3px;height:40px;background:rgba(255,255,255,.15);border-radius:2px;transition:background .2s}
+    #gq-panel-resize-w:hover::after{background:rgba(255,20,147,.8)}
 
     /* Light theme */
     @media(prefers-color-scheme:light){
@@ -1371,6 +1375,15 @@
     }
   }
 
+  function applyGrokPanelWidth(drawer, w) {
+    drawer.style.width = w + "px";
+    drawer.style.maxWidth = w + "px";
+    drawer.style.minWidth = w + "px";
+    drawer.style.position = "absolute";
+    drawer.style.right = "0";
+    drawer.style.top = "0";
+  }
+
   function injectGrokResizeHandle() {
     const drawer = document.querySelector("[data-testid='GrokDrawer']");
     if (!drawer || drawer.dataset.gqResize) return;
@@ -1382,12 +1395,20 @@
     const initDrawerH = parseFloat(window.getComputedStyle(drawer).height) || 678;
     const initP0H = parseFloat(window.getComputedStyle(p0).height) || 691;
     const pad = Math.max(0, initP0H - initDrawerH);
+    const initDrawerW = parseFloat(window.getComputedStyle(drawer).width) || 400;
 
+    // Restore saved height
     const savedH = GM_getValue("gq_panel_height", 0);
     if (savedH >= 300 && savedH <= window.innerHeight - 60) {
       applyGrokPanelHeight(drawer, p0, p1, savedH, pad);
     }
 
+    // Restore saved width (right-anchor so growth goes leftward)
+    const savedW = GM_getValue("gq_panel_width", 0);
+    if (savedW >= 350) applyGrokPanelWidth(drawer, savedW);
+    else { drawer.style.position = "absolute"; drawer.style.right = "0"; drawer.style.top = "0"; }
+
+    // ── 顶部拖拽条（高度） ──
     const handle = document.createElement("div");
     handle.id = "gq-panel-resize";
     drawer.insertBefore(handle, drawer.firstChild);
@@ -1396,13 +1417,34 @@
       e.preventDefault(); e.stopPropagation();
       const startY = e.clientY;
       const startH = parseFloat(drawer.style.height) || initDrawerH;
-
       const onMove = ev => {
         const newH = Math.max(300, Math.min(window.innerHeight - 60, startH + startY - ev.clientY));
         applyGrokPanelHeight(drawer, p0, p1, newH, pad);
       };
       const onUp = () => {
         GM_setValue("gq_panel_height", Math.round(parseFloat(drawer.style.height) || initDrawerH));
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+
+    // ── 左边拖拽条（宽度） ──
+    const wHandle = document.createElement("div");
+    wHandle.id = "gq-panel-resize-w";
+    drawer.appendChild(wHandle);
+
+    wHandle.addEventListener("mousedown", e => {
+      e.preventDefault(); e.stopPropagation();
+      const startX = e.clientX;
+      const startW = parseFloat(drawer.style.width) || initDrawerW;
+      const onMove = ev => {
+        const newW = Math.max(350, Math.min(window.innerWidth - 200, startW + startX - ev.clientX));
+        applyGrokPanelWidth(drawer, newW);
+      };
+      const onUp = () => {
+        GM_setValue("gq_panel_width", Math.round(parseFloat(drawer.style.width) || initDrawerW));
         document.removeEventListener("mousemove", onMove);
         document.removeEventListener("mouseup", onUp);
       };
@@ -1430,5 +1472,5 @@
   window.addEventListener("scroll", () => { if (scrollTimer) return; scrollTimer = setTimeout(() => { scrollTimer = null; scheduleHijack(); }, 200); }, { passive: true });
 
   GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.2.2 \u8BBE\u7F6E", openSettings);
-  console.log("[Grok Quick] v3.3.2 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
+  console.log("[Grok Quick] v3.3.3 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
 })();
