@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.3.4
+// @version      3.3.5
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -542,6 +542,7 @@
 
     resetGlobalState();
     _pendingTask = { content: fullContent, autoSend: cfg.autoSend === true, textFilled: false, targetInput: null };
+    revealGrokPanel();
 
     if (cfg.privateMode) {
       const encoded = encodeURIComponent(fullContent.slice(0, 2000));
@@ -1345,8 +1346,9 @@
     #gq-panel-resize-w:hover{background:rgba(255,20,147,.25)}
     #gq-panel-resize-w::after{content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:3px;height:40px;background:rgba(255,255,255,.15);border-radius:2px;transition:background .2s}
     #gq-panel-resize-w:hover::after{background:rgba(255,20,147,.8)}
-    #gq-panel-toggle{cursor:pointer;pointer-events:all;user-select:none;color:rgba(255,255,255,.5);font-size:13px;padding:0 10px 0 6px;display:flex;align-items:center;height:100%;flex-shrink:0;transition:color .15s}
+    #gq-panel-toggle{cursor:pointer;pointer-events:all;user-select:none;color:rgba(255,255,255,.75);font-size:16px;padding:0 12px 0 8px;display:flex;align-items:center;justify-content:center;height:100%;min-width:32px;flex-shrink:0;transition:color .15s}
     #gq-panel-toggle:hover{color:#FF1493}
+    #gq-panel-overlay{position:fixed;inset:0;z-index:9997;pointer-events:all;background:transparent}
 
     /* Light theme */
     @media(prefers-color-scheme:light){
@@ -1388,29 +1390,50 @@
     drawer.style.top = "0";
   }
 
+  function _removeGrokOverlay() { document.getElementById("gq-panel-overlay")?.remove(); }
+
   function collapseGrokWidth(drawer, initW) {
     drawer.dataset.gqExpanded = "0";
-    drawer.style.position = "";
-    drawer.style.right = "";
-    drawer.style.top = "";
-    drawer.style.width = "";
-    drawer.style.maxWidth = "";
-    drawer.style.minWidth = "";
+    // 回到用户设定的侧边栏宽度（而非原生默认值）
+    const narrowW = Math.max(initW, GM_getValue("gq_panel_width", 0));
+    applyGrokPanelWidth(drawer, narrowW);
     const wHandle = drawer.querySelector("#gq-panel-resize-w");
     if (wHandle) wHandle.style.display = "none";
     const btn = document.getElementById("gq-panel-toggle");
-    if (btn) { btn.textContent = "▶"; btn.title = "展开面板"; }
+    if (btn) { btn.innerHTML = "&#9654;"; btn.title = "展开面板"; }
+    _removeGrokOverlay();
   }
 
   function expandGrokWidth(drawer, initW) {
-    const savedW = GM_getValue("gq_panel_width", 0);
-    const targetW = savedW >= initW ? savedW : Math.round(initW * 1.4);
+    const narrowW = Math.max(initW, GM_getValue("gq_panel_width", 0));
+    const savedWide = GM_getValue("gq_panel_width_wide", 0);
+    const targetW = savedWide > narrowW + 80 ? savedWide : Math.round(narrowW * 1.5);
     drawer.dataset.gqExpanded = "1";
     applyGrokPanelWidth(drawer, targetW);
     const wHandle = drawer.querySelector("#gq-panel-resize-w");
     if (wHandle) wHandle.style.display = "";
     const btn = document.getElementById("gq-panel-toggle");
-    if (btn) { btn.textContent = "◀"; btn.title = "收起面板"; }
+    if (btn) { btn.innerHTML = "&#9664;"; btn.title = "收起面板"; }
+    // 透明遮罩：点击空白处收起
+    _removeGrokOverlay();
+    const overlay = document.createElement("div");
+    overlay.id = "gq-panel-overlay";
+    overlay.addEventListener("click", () => collapseGrokWidth(drawer, initW));
+    document.body.appendChild(overlay);
+  }
+
+  // 激活面板（执行命令时调用，移除空闲隐藏）
+  function revealGrokPanel() {
+    const drawer = document.querySelector("[data-testid='GrokDrawer']");
+    if (!drawer) return;
+    const contentDiv = _getGrokContentDiv(drawer);
+    if (!contentDiv || contentDiv.style.display !== "none") return;
+    contentDiv.style.display = "";
+    drawer.dataset.gqPanelHidden = "0";
+    // 确保面板使用绝对定位（高度调整需要）
+    const initW = parseFloat(drawer.dataset.gqInitW) || 400;
+    const narrowW = Math.max(initW, GM_getValue("gq_panel_width", 0));
+    applyGrokPanelWidth(drawer, narrowW);
   }
 
   function injectGrokResizeHandle() {
@@ -1425,6 +1448,7 @@
     const initP0H = parseFloat(window.getComputedStyle(p0).height) || 691;
     const pad = Math.max(0, initP0H - initDrawerH);
     const initDrawerW = parseFloat(window.getComputedStyle(drawer).width) || 400;
+    drawer.dataset.gqInitW = String(initDrawerW);
 
     // 恢复保存的高度
     const savedH = GM_getValue("gq_panel_height", 0);
@@ -1432,13 +1456,19 @@
       applyGrokPanelHeight(drawer, p0, p1, savedH, pad);
     }
 
-    // 注入折叠/展开按钮到面板顶部工具栏
+    // 空闲时隐藏面板内容（避免竖条），激活时由 revealGrokPanel 恢复
     const contentDiv = _getGrokContentDiv(drawer);
+    if (contentDiv) {
+      contentDiv.style.display = "none";
+      drawer.dataset.gqPanelHidden = "1";
+    }
+
+    // 折叠/展开按钮注入到工具栏（contentDiv.children[0]）
     const toolbar = contentDiv?.children?.[0];
     if (toolbar && !document.getElementById("gq-panel-toggle")) {
       const btn = document.createElement("div");
       btn.id = "gq-panel-toggle";
-      btn.textContent = "▶";
+      btn.innerHTML = "&#9654;";
       btn.title = "展开面板";
       btn.addEventListener("click", e => {
         e.stopPropagation();
@@ -1470,7 +1500,7 @@
       document.addEventListener("mouseup", onUp);
     });
 
-    // ── 左边拖拽条（宽度，展开时才显示） ──
+    // ── 左边拖拽条（宽度，展开时显示） ──
     const wHandle = document.createElement("div");
     wHandle.id = "gq-panel-resize-w";
     wHandle.style.display = "none";
@@ -1480,12 +1510,15 @@
       e.preventDefault(); e.stopPropagation();
       const startX = e.clientX;
       const startW = parseFloat(drawer.style.width) || initDrawerW;
+      const isExpanded = drawer.dataset.gqExpanded === "1";
       const onMove = ev => {
         const newW = Math.max(initDrawerW, Math.min(window.innerWidth - 200, startW + startX - ev.clientX));
         applyGrokPanelWidth(drawer, newW);
       };
       const onUp = () => {
-        GM_setValue("gq_panel_width", Math.round(parseFloat(drawer.style.width) || initDrawerW));
+        const finalW = Math.round(parseFloat(drawer.style.width) || initDrawerW);
+        if (drawer.dataset.gqExpanded === "1") GM_setValue("gq_panel_width_wide", finalW);
+        else GM_setValue("gq_panel_width", finalW);
         document.removeEventListener("mousemove", onMove);
         document.removeEventListener("mouseup", onUp);
       };
