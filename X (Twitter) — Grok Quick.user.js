@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.3.10
+// @version      3.3.11
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -344,6 +344,7 @@
     const range = document.createRange();
     range.selectNodeContents(el);
     const selection = window.getSelection();
+    if (!selection) return;
     selection.removeAllRanges();
     selection.addRange(range);
     if (!document.execCommand("insertText", false, value)) {
@@ -635,7 +636,6 @@
   }
 
   function doSend(ta) {
-    simulateEnterKey(ta);
     setTimeout(() => {
       const btn = findSendButton();
       if (btn && !btn.disabled && btn.getAttribute("aria-disabled") !== "true") {
