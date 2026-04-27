@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.3.7
+// @version      3.3.8
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -1401,13 +1401,9 @@
   function collapseGrokWidth(drawer, initW) {
     drawer.dataset.gqExpanded = "0";
     const narrowW = Math.max(initW, GM_getValue("gq_panel_width", 0));
-    // 还原原生布局，不保留 absolute 定位以免产生残影
-    drawer.style.width = narrowW + "px";
-    drawer.style.maxWidth = narrowW + "px";
-    drawer.style.minWidth = narrowW + "px";
-    drawer.style.position = "";
-    drawer.style.right = "";
-    drawer.style.top = "";
+    // 保持 position:absolute; right:0 — p0 宽 1480px（全页），
+    // 清除 absolute 会导致 drawer 出现在容器左端，叠在导航栏上
+    applyGrokPanelWidth(drawer, narrowW);
     const wHandle = drawer.querySelector("#gq-panel-resize-w");
     if (wHandle) wHandle.style.display = "none";
     const btn = document.getElementById("gq-panel-toggle");
