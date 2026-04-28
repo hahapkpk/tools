@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.3.22
+// @version      3.3.23
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -993,7 +993,7 @@
     const modal = document.createElement("div"); modal.id = "gq-settings-modal";
 
     modal.innerHTML = `
-      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.3.22</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
+      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.3.23</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
       <div class="gq-modal-body">
         <!-- 语言 & 模式 -->
         <div class="gq-section-card"><div class="gq-section-header">⚙️ ${t("lang_label")} & ${t("send_mode_label")}</div><div class="gq-section-body">
@@ -1267,7 +1267,7 @@
       origBtn.style.color = "#FF1493";
       origBtn.style.cursor = "pointer";
       origBtn.setAttribute("aria-label", "Grok Quick: \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49");
-      origBtn.title = "Grok Quick v3.3.22 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
+      origBtn.title = "Grok Quick v3.3.23 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
 
       origBtn.addEventListener("click", (e) => {
         if (_nativeClickBypass.has(origBtn)) return;
@@ -1501,10 +1501,14 @@
         _removeOutsideClickHandler();
         return;
       }
-      if (e.target?.closest?.("#gq-panel-resize-w,#gq-panel-resize,#gq-panel-collapse,#gq-panel-expand,#gq-panel-dock-hit")) return;
-      const activeNarrowW = _getGrokNarrowWidth(drawer, initW);
-      const narrowLeft = _getGrokPanelRightEdge(drawer) - activeNarrowW;
-      if (e.clientX < narrowLeft) collapseGrokWidth(drawer, initW);
+      if (e.composedPath?.().includes(drawer)) return;
+      const rect = drawer.getBoundingClientRect();
+      const outsideDrawer =
+        e.clientX < rect.left ||
+        e.clientX > rect.right ||
+        e.clientY < rect.top ||
+        e.clientY > rect.bottom;
+      if (outsideDrawer) collapseGrokWidth(drawer, initW);
     };
     setTimeout(() => {
       document.addEventListener("pointerdown", _outsideClickHandler, true);
@@ -1730,7 +1734,7 @@
   let scrollTimer = null;
   window.addEventListener("scroll", () => { if (scrollTimer) return; scrollTimer = setTimeout(() => { scrollTimer = null; scheduleHijack(); }, 200); }, { passive: true });
 
-  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.3.22 \u8BBE\u7F6E", openSettings);
+  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.3.23 \u8BBE\u7F6E", openSettings);
   GM_registerMenuCommand("\u21BA \u91CD\u7F6E Grok \u9762\u677F\u5E03\u5C40", resetGrokPanelLayout);
-  console.log("[Grok Quick] v3.3.22 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
+  console.log("[Grok Quick] v3.3.23 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
 })();
