@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.3.19
+// @version      3.3.20
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -974,7 +974,7 @@
     const modal = document.createElement("div"); modal.id = "gq-settings-modal";
 
     modal.innerHTML = `
-      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.3.19</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
+      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.3.20</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
       <div class="gq-modal-body">
         <!-- 语言 & 模式 -->
         <div class="gq-section-card"><div class="gq-section-header">⚙️ ${t("lang_label")} & ${t("send_mode_label")}</div><div class="gq-section-body">
@@ -1248,7 +1248,7 @@
       origBtn.style.color = "#FF1493";
       origBtn.style.cursor = "pointer";
       origBtn.setAttribute("aria-label", "Grok Quick: \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49");
-      origBtn.title = "Grok Quick v3.3.19 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
+      origBtn.title = "Grok Quick v3.3.20 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
 
       origBtn.addEventListener("click", (e) => {
         if (_nativeClickBypass.has(origBtn)) return;
@@ -1342,6 +1342,7 @@
     #gq-panel-resize:hover{background:rgba(255,20,147,.25)}
     #gq-panel-resize::after{content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:40px;height:3px;background:rgba(255,255,255,.15);border-radius:2px;transition:background .2s}
     #gq-panel-resize:hover::after{background:rgba(255,20,147,.8)}
+    [data-testid='GrokDrawer'].gq-panel-anim{transition:width .18s cubic-bezier(.2,.8,.2,1),max-width .18s cubic-bezier(.2,.8,.2,1),min-width .18s cubic-bezier(.2,.8,.2,1)}
     #gq-panel-resize-w{position:absolute!important;top:72px;left:0;bottom:18px;width:10px;cursor:ew-resize;z-index:10;pointer-events:all;border-radius:4px 0 0 4px;transition:background .2s;user-select:none;touch-action:none}
     #gq-panel-resize-w:hover,#gq-panel-resize-w.gq-resizing{background:rgba(255,20,147,.25)}
     #gq-panel-resize-w::after{content:'';position:absolute;top:50%;left:7px;transform:translateY(-50%);width:4px;height:64px;background:rgba(255,255,255,.22);border-radius:2px;transition:background .2s}
@@ -1351,7 +1352,9 @@
     .gq-panel-floating-btn{position:absolute!important;top:58px;left:22px;z-index:20;display:none;align-items:center;justify-content:center;gap:5px;height:28px;padding:0 10px;border:1px solid rgba(255,255,255,.16);border-radius:999px;background:rgba(15,20,28,.86);color:#fff;font-size:12px;font-weight:650;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;cursor:pointer;pointer-events:all;user-select:none;box-shadow:0 6px 18px rgba(0,0,0,.28);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
     .gq-panel-floating-btn:hover{border-color:#FF1493;color:#FF1493;background:rgba(15,20,28,.98)}
     #gq-panel-expand{top:38px;left:50%;transform:translateX(-50%);width:46px;height:46px;padding:0;border-radius:16px;font-size:0;border-color:rgba(255,255,255,.22);background:radial-gradient(circle at 34% 28%,rgba(255,255,255,.18),rgba(255,255,255,0) 34%),linear-gradient(145deg,rgba(20,26,34,.96),rgba(5,8,12,.96));box-shadow:0 10px 28px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.12)}
-    #gq-panel-expand::before{content:'▶';display:flex;align-items:center;justify-content:center;width:24px;height:24px;margin-left:2px;border-radius:999px;background:rgba(255,255,255,.92);color:#07090d;font-size:14px;line-height:1;box-shadow:0 0 18px rgba(255,255,255,.16)}
+    #gq-panel-expand .gq-grok-mark{position:relative;display:block;width:25px;height:25px;border:3px solid rgba(255,255,255,.92);border-radius:999px;box-sizing:border-box;filter:drop-shadow(0 0 12px rgba(255,255,255,.12))}
+    #gq-panel-expand .gq-grok-mark::before{content:'';position:absolute;left:50%;top:-7px;width:3px;height:36px;border-radius:999px;background:rgba(255,255,255,.95);transform:translateX(-50%) rotate(43deg);transform-origin:center}
+    #gq-panel-expand .gq-grok-mark::after{content:'';position:absolute;right:-5px;top:1px;width:11px;height:11px;border-top:3px solid rgba(255,255,255,.95);border-right:3px solid rgba(255,255,255,.95);transform:rotate(-5deg);border-radius:2px}
     #gq-panel-expand::after{content:'Grok';position:absolute;top:53px;left:50%;transform:translateX(-50%);font-size:11px;color:rgba(255,255,255,.68);font-weight:700;letter-spacing:.02em;white-space:nowrap;text-shadow:0 1px 8px rgba(0,0,0,.65)}
     #gq-panel-expand:hover{border-color:rgba(255,20,147,.72);box-shadow:0 12px 32px rgba(255,20,147,.12),0 10px 28px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.14)}
     #gq-panel-collapse{top:58px;left:20px}
@@ -1450,6 +1453,7 @@
     if (expandBtn) expandBtn.style.display = "flex";
     const dockHit = drawer.querySelector("#gq-panel-dock-hit");
     if (dockHit) dockHit.style.display = "block";
+    GM_setValue("gq_panel_state", "dock");
     _removeOutsideClickHandler();
   }
 
@@ -1469,6 +1473,7 @@
     if (expandBtn) expandBtn.style.display = "none";
     const dockHit = drawer.querySelector("#gq-panel-dock-hit");
     if (dockHit) dockHit.style.display = "none";
+    GM_setValue("gq_panel_state", "expanded");
     _removeOutsideClickHandler();
     // 展开区会覆盖正文。只保留最右侧 narrowW 作为原始侧边栏；
     // 点击该窄栏左侧的页面区域，就自动缩回右侧栏。
@@ -1519,6 +1524,7 @@
     drawer.dataset.gqInitW = String(initDrawerW);
     // 初始化时立即设定绝对定位，避免面板在 flex 流中占据全宽
     applyGrokPanelWidth(drawer, initDrawerW);
+    drawer.classList.add("gq-panel-anim");
 
     // 恢复保存的高度
     const savedH = GM_getValue("gq_panel_height", 0);
@@ -1540,7 +1546,7 @@
       expandBtn.id = "gq-panel-expand";
       expandBtn.className = "gq-panel-floating-btn";
       expandBtn.type = "button";
-      expandBtn.innerHTML = "&#9654;";
+      expandBtn.innerHTML = "<span class=\"gq-grok-mark\" aria-hidden=\"true\"></span>";
       expandBtn.title = "展开面板";
       expandBtn.style.display = "flex";
       expandBtn.addEventListener("mousedown", e => e.stopPropagation(), true);
@@ -1617,6 +1623,7 @@
     wHandle.addEventListener("mousedown", e => {
       e.preventDefault(); e.stopPropagation();
       wHandle.classList.add("gq-resizing");
+      drawer.classList.remove("gq-panel-anim");
       const startX = e.clientX;
       const startW = parseFloat(drawer.style.width) || initDrawerW;
       const wasExpanded = drawer.dataset.gqExpanded === "1";
@@ -1628,6 +1635,7 @@
       };
       const onUp = () => {
         wHandle.classList.remove("gq-resizing");
+        drawer.classList.add("gq-panel-anim");
         const finalW = Math.round(parseFloat(drawer.style.width) || initDrawerW);
         if (wasExpanded) GM_setValue("gq_panel_width_wide", finalW);
         else GM_setValue("gq_panel_width", Math.max(72, Math.min(finalW, 160)));
@@ -1638,6 +1646,40 @@
       document.addEventListener("mousemove", onMove);
       document.addEventListener("mouseup", onUp);
     });
+
+    if (GM_getValue("gq_panel_state", "dock") === "expanded") expandGrokWidth(drawer, initDrawerW);
+    else collapseGrokWidth(drawer, initDrawerW);
+  }
+
+  function resetGrokPanelLayout() {
+    GM_setValue("gq_panel_width", 104);
+    GM_setValue("gq_panel_width_wide", 560);
+    GM_setValue("gq_panel_height", 0);
+    GM_setValue("gq_panel_state", "dock");
+
+    const drawer = document.querySelector("[data-testid='GrokDrawer']");
+    if (drawer) {
+      drawer.classList.add("gq-panel-anim");
+      drawer.style.height = "";
+      drawer.style.maxHeight = "";
+      drawer.style.minHeight = "";
+      const p0 = drawer.parentElement;
+      const p1 = p0?.parentElement;
+      if (p0) p0.style.height = "";
+      if (p1) {
+        p1.style.height = "";
+        p1.style.top = "";
+      }
+      const contentDiv = _getGrokContentDiv(drawer);
+      if (contentDiv) {
+        contentDiv.style.height = "";
+        contentDiv.style.maxHeight = "";
+        contentDiv.style.minHeight = "";
+      }
+      drawer.dataset.gqInitW = "104";
+      collapseGrokWidth(drawer, 104);
+    }
+    showToast("Grok 面板布局已重置");
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -1658,6 +1700,7 @@
   let scrollTimer = null;
   window.addEventListener("scroll", () => { if (scrollTimer) return; scrollTimer = setTimeout(() => { scrollTimer = null; scheduleHijack(); }, 200); }, { passive: true });
 
-  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.3.19 \u8BBE\u7F6E", openSettings);
-  console.log("[Grok Quick] v3.3.19 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
+  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.3.20 \u8BBE\u7F6E", openSettings);
+  GM_registerMenuCommand("\u21BA \u91CD\u7F6E Grok \u9762\u677F\u5E03\u5C40", resetGrokPanelLayout);
+  console.log("[Grok Quick] v3.3.20 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
 })();
