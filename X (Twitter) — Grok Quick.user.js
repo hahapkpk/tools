@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.3.17
+// @version      3.3.18
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -974,7 +974,7 @@
     const modal = document.createElement("div"); modal.id = "gq-settings-modal";
 
     modal.innerHTML = `
-      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.3.17</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
+      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.3.18</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
       <div class="gq-modal-body">
         <!-- 语言 & 模式 -->
         <div class="gq-section-card"><div class="gq-section-header">⚙️ ${t("lang_label")} & ${t("send_mode_label")}</div><div class="gq-section-body">
@@ -1248,7 +1248,7 @@
       origBtn.style.color = "#FF1493";
       origBtn.style.cursor = "pointer";
       origBtn.setAttribute("aria-label", "Grok Quick: \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49");
-      origBtn.title = "Grok Quick v3.3.17 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
+      origBtn.title = "Grok Quick v3.3.18 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
 
       origBtn.addEventListener("click", (e) => {
         if (_nativeClickBypass.has(origBtn)) return;
@@ -1342,13 +1342,19 @@
     #gq-panel-resize:hover{background:rgba(255,20,147,.25)}
     #gq-panel-resize::after{content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:40px;height:3px;background:rgba(255,255,255,.15);border-radius:2px;transition:background .2s}
     #gq-panel-resize:hover::after{background:rgba(255,20,147,.8)}
-    #gq-panel-resize-w{position:absolute!important;top:48px;left:0;bottom:0;width:14px;cursor:ew-resize;z-index:10;pointer-events:all;border-radius:4px 0 0 4px;transition:background .2s;user-select:none;touch-action:none}
+    #gq-panel-resize-w{position:absolute!important;top:72px;left:0;bottom:18px;width:10px;cursor:ew-resize;z-index:10;pointer-events:all;border-radius:4px 0 0 4px;transition:background .2s;user-select:none;touch-action:none}
     #gq-panel-resize-w:hover,#gq-panel-resize-w.gq-resizing{background:rgba(255,20,147,.25)}
     #gq-panel-resize-w::after{content:'';position:absolute;top:50%;left:7px;transform:translateY(-50%);width:4px;height:64px;background:rgba(255,255,255,.22);border-radius:2px;transition:background .2s}
     #gq-panel-resize-w:hover::after{background:rgba(255,20,147,.8)}
-    #gq-panel-resize-w[data-mode="narrow"]::after{height:36px;background:rgba(255,255,255,.16)}
-    .gq-panel-floating-btn{position:absolute!important;top:52px;left:24px;z-index:20;display:none;align-items:center;gap:6px;height:32px;padding:0 12px;border:1px solid rgba(255,255,255,.18);border-radius:999px;background:rgba(15,20,28,.9);color:#fff;font-size:13px;font-weight:600;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;cursor:pointer;pointer-events:all;user-select:none;box-shadow:0 8px 24px rgba(0,0,0,.35);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+    #gq-panel-resize-w[data-mode="dock"]{top:104px;bottom:104px;width:8px}
+    #gq-panel-resize-w[data-mode="dock"]::after{height:42px;background:rgba(255,255,255,.16)}
+    .gq-panel-floating-btn{position:absolute!important;top:58px;left:22px;z-index:20;display:none;align-items:center;justify-content:center;gap:5px;height:28px;padding:0 10px;border:1px solid rgba(255,255,255,.16);border-radius:999px;background:rgba(15,20,28,.86);color:#fff;font-size:12px;font-weight:650;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;cursor:pointer;pointer-events:all;user-select:none;box-shadow:0 6px 18px rgba(0,0,0,.28);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
     .gq-panel-floating-btn:hover{border-color:#FF1493;color:#FF1493;background:rgba(15,20,28,.98)}
+    #gq-panel-expand{top:44px;left:50%;transform:translateX(-50%);width:42px;height:42px;padding:0;border-radius:14px;font-size:0}
+    #gq-panel-expand::before{content:'▶';font-size:17px;line-height:1}
+    #gq-panel-expand::after{content:'Grok';position:absolute;top:50px;left:50%;transform:translateX(-50%);font-size:11px;color:rgba(255,255,255,.62);font-weight:600;white-space:nowrap}
+    #gq-panel-collapse{top:58px;left:20px}
+    #gq-panel-dock-hit{position:absolute!important;inset:0;z-index:5;display:none;cursor:pointer;background:linear-gradient(90deg,rgba(255,255,255,.04),rgba(255,255,255,0));pointer-events:all}
 
     /* Light theme */
     @media(prefers-color-scheme:light){
@@ -1364,7 +1370,7 @@
   //  Grok 面板高度调整
   // ════════════════════════════════════════════════════════════════
   function _getGrokContentDiv(drawer) {
-    return [...drawer.children].find(c => !["gq-panel-resize", "gq-panel-resize-w", "gq-panel-collapse", "gq-panel-expand"].includes(c.id));
+    return [...drawer.children].find(c => !["gq-panel-resize", "gq-panel-resize-w", "gq-panel-collapse", "gq-panel-expand", "gq-panel-dock-hit"].includes(c.id));
   }
 
   function applyGrokPanelHeight(drawer, p0, p1, h, pad) {
@@ -1413,45 +1419,55 @@
 
   function _getGrokNarrowWidth(drawer, initW) {
     const savedW = Number(GM_getValue("gq_panel_width", 0)) || 0;
-    if (savedW >= 320 && savedW <= 560) return savedW;
-    return Math.max(320, Math.min(initW || 420, 480));
+    if (savedW >= 72 && savedW <= 160) return savedW;
+    return Math.max(84, Math.min(initW || 104, 128));
   }
 
   function _setWidthHandleMode(drawer) {
     const wHandle = drawer.querySelector("#gq-panel-resize-w");
-    if (!wHandle) return;
     const expanded = drawer.dataset.gqExpanded === "1";
+    const hHandle = drawer.querySelector("#gq-panel-resize");
+    if (hHandle) hHandle.style.display = expanded ? "block" : "none";
+    if (!wHandle) return;
     wHandle.style.display = "block";
-    wHandle.dataset.mode = expanded ? "wide" : "narrow";
-    wHandle.title = expanded ? "拖动调整展开宽度" : "拖动设置侧边栏宽度";
+    wHandle.dataset.mode = expanded ? "wide" : "dock";
+    wHandle.title = expanded ? "拖动调整展开宽度" : "拖动设置右侧入口宽度";
   }
 
   function collapseGrokWidth(drawer, initW) {
     drawer.dataset.gqExpanded = "0";
     const narrowW = _getGrokNarrowWidth(drawer, initW);
-    // 保持 position:absolute; right:0 — p0 宽 1480px（全页），
-    // 清除 absolute 会导致 drawer 出现在容器左端，叠在导航栏上
     applyGrokPanelWidth(drawer, narrowW);
     GM_setValue("gq_panel_width", Math.round(narrowW));
+    const contentDiv = _getGrokContentDiv(drawer);
+    if (contentDiv) contentDiv.style.display = "none";
+    drawer.dataset.gqPanelHidden = "1";
     _setWidthHandleMode(drawer);
     const collapseBtn = drawer.querySelector("#gq-panel-collapse");
     if (collapseBtn) collapseBtn.style.display = "none";
     const expandBtn = drawer.querySelector("#gq-panel-expand");
     if (expandBtn) expandBtn.style.display = "flex";
+    const dockHit = drawer.querySelector("#gq-panel-dock-hit");
+    if (dockHit) dockHit.style.display = "block";
     _removeOutsideClickHandler();
   }
 
   function expandGrokWidth(drawer, initW) {
     const narrowW = _getGrokNarrowWidth(drawer, initW);
     const savedWide = GM_getValue("gq_panel_width_wide", 0);
-    const targetW = savedWide > narrowW + 80 ? savedWide : Math.round(narrowW * 1.5);
+    const targetW = savedWide > 360 ? savedWide : 560;
     drawer.dataset.gqExpanded = "1";
+    const contentDiv = _getGrokContentDiv(drawer);
+    if (contentDiv) contentDiv.style.display = "";
+    drawer.dataset.gqPanelHidden = "0";
     applyGrokPanelWidth(drawer, targetW);
     _setWidthHandleMode(drawer);
     const collapseBtn = drawer.querySelector("#gq-panel-collapse");
     if (collapseBtn) collapseBtn.style.display = "flex";
     const expandBtn = drawer.querySelector("#gq-panel-expand");
     if (expandBtn) expandBtn.style.display = "none";
+    const dockHit = drawer.querySelector("#gq-panel-dock-hit");
+    if (dockHit) dockHit.style.display = "none";
     _removeOutsideClickHandler();
     // 展开区会覆盖正文。只保留最右侧 narrowW 作为原始侧边栏；
     // 点击该窄栏左侧的页面区域，就自动缩回右侧栏。
@@ -1480,8 +1496,7 @@
     drawer.dataset.gqPanelHidden = "0";
     // 确保面板使用绝对定位（高度调整需要）
     const initW = parseFloat(drawer.dataset.gqInitW) || 400;
-    const narrowW = _getGrokNarrowWidth(drawer, initW);
-    applyGrokPanelWidth(drawer, narrowW);
+    expandGrokWidth(drawer, initW);
   }
 
   function injectGrokResizeHandle() {
@@ -1496,8 +1511,8 @@
     const initP0H = parseFloat(window.getComputedStyle(p0).height) || 691;
     const pad = Math.max(0, initP0H - initDrawerH);
     const savedW = Number(GM_getValue("gq_panel_width", 0)) || 0;
-    // 侧边栏宽度和展开宽度独立记忆；旧版误保存的大值会回落到 420px。
-    const initDrawerW = savedW >= 320 && savedW <= 560 ? savedW : 420;
+    // 右侧 dock 宽度和展开宽度独立记忆；旧版误保存的大值会回落到 104px。
+    const initDrawerW = savedW >= 72 && savedW <= 160 ? savedW : 104;
     GM_setValue("gq_panel_width", Math.round(initDrawerW));
     drawer.dataset.gqInitW = String(initDrawerW);
     // 初始化时立即设定绝对定位，避免面板在 flex 流中占据全宽
@@ -1536,6 +1551,20 @@
       drawer.appendChild(expandBtn);
     }
 
+    if (!drawer.querySelector("#gq-panel-dock-hit")) {
+      const dockHit = document.createElement("div");
+      dockHit.id = "gq-panel-dock-hit";
+      dockHit.title = "展开 Grok 面板";
+      dockHit.addEventListener("mousedown", e => e.stopPropagation(), true);
+      dockHit.addEventListener("pointerdown", e => e.stopPropagation(), true);
+      dockHit.addEventListener("click", e => {
+        e.preventDefault();
+        e.stopPropagation();
+        expandGrokWidth(drawer, initDrawerW);
+      });
+      drawer.appendChild(dockHit);
+    }
+
     if (!drawer.querySelector("#gq-panel-collapse")) {
       const collapseBtn = document.createElement("button");
       collapseBtn.id = "gq-panel-collapse";
@@ -1556,6 +1585,7 @@
     // ── 顶部拖拽条（高度） ──
     const handle = document.createElement("div");
     handle.id = "gq-panel-resize";
+    handle.style.display = "none";
     drawer.insertBefore(handle, drawer.firstChild);
 
     handle.addEventListener("mousedown", e => {
@@ -1579,7 +1609,7 @@
     const wHandle = document.createElement("div");
     wHandle.id = "gq-panel-resize-w";
     wHandle.style.display = "block";
-    wHandle.dataset.mode = "narrow";
+    wHandle.dataset.mode = "dock";
     drawer.appendChild(wHandle);
 
     wHandle.addEventListener("mousedown", e => {
@@ -1589,8 +1619,8 @@
       const startW = parseFloat(drawer.style.width) || initDrawerW;
       const wasExpanded = drawer.dataset.gqExpanded === "1";
       const onMove = ev => {
-        const minW = wasExpanded ? _getGrokNarrowWidth(drawer, initDrawerW) : 320;
-        const maxW = wasExpanded ? window.innerWidth - 80 : 560;
+        const minW = wasExpanded ? 360 : 72;
+        const maxW = wasExpanded ? window.innerWidth - 80 : 160;
         const newW = Math.max(minW, Math.min(maxW, startW + startX - ev.clientX));
         applyGrokPanelWidth(drawer, newW);
       };
@@ -1598,7 +1628,7 @@
         wHandle.classList.remove("gq-resizing");
         const finalW = Math.round(parseFloat(drawer.style.width) || initDrawerW);
         if (wasExpanded) GM_setValue("gq_panel_width_wide", finalW);
-        else GM_setValue("gq_panel_width", Math.max(320, Math.min(finalW, 560)));
+        else GM_setValue("gq_panel_width", Math.max(72, Math.min(finalW, 160)));
         _setWidthHandleMode(drawer);
         document.removeEventListener("mousemove", onMove);
         document.removeEventListener("mouseup", onUp);
@@ -1626,6 +1656,6 @@
   let scrollTimer = null;
   window.addEventListener("scroll", () => { if (scrollTimer) return; scrollTimer = setTimeout(() => { scrollTimer = null; scheduleHijack(); }, 200); }, { passive: true });
 
-  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.3.17 \u8BBE\u7F6E", openSettings);
-  console.log("[Grok Quick] v3.3.17 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
+  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.3.18 \u8BBE\u7F6E", openSettings);
+  console.log("[Grok Quick] v3.3.18 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
 })();
