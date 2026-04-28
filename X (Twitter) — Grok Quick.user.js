@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.3.23
+// @version      3.3.24
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -301,7 +301,7 @@
   }
 
   function isLikelyGrokButton(el) {
-    if (!el || el.classList?.contains("gq-btn")) return false;
+    if (!el || el.classList?.contains("gq-quick-trigger")) return false;
     const label = [
       el.getAttribute("aria-label"),
       el.getAttribute("title"),
@@ -358,7 +358,7 @@
   function findGlobalGrokButton() {
     // 仅在 button/role=button 里找（不用 <a href="/i/grok">，那是全页导航会离开当前页）
     for (const btn of document.querySelectorAll("[data-testid='primaryColumn'] button,[data-testid='sidebarColumn'] button,button[aria-label],[role='button'][aria-label]")) {
-      if (btn.closest("article") || btn.classList.contains("gq-btn") || btn.offsetParent === null) continue;
+      if (btn.closest("article") || btn.classList.contains("gq-quick-trigger") || btn.offsetParent === null) continue;
       if (isLikelyGrokButton(btn)) return btn;
     }
     return null;
@@ -546,7 +546,7 @@
 
   function isNativeGrokOpenTrigger(target) {
     const el = target?.closest?.("a[href*='/i/grok'],a[href*='/grok'],button,[role='button']");
-    if (!el || el.closest?.("#gq-panel-expand,#gq-panel-collapse,#gq-panel-dock-hit,#gq-menu,#gq-settings-overlay")) return false;
+    if (!el || el.closest?.("#gq-panel-expand,#gq-panel-collapse,#gq-panel-dock-hit,#gq-menu,#gq-settings-overlay,.gq-quick-trigger")) return false;
     const href = el.getAttribute?.("href") || "";
     return /\/i\/grok|\/grok/.test(href) || isLikelyGrokButton(el);
   }
@@ -670,7 +670,7 @@
     const STOP_PATH = "M3 5.5C3 4.12 4.12 3 5.5 3h13C19.88";
     for (const btn of document.querySelectorAll("button,[role='button']")) {
       if (btn.offsetParent === null) continue;
-      if (btn.closest("article,.gq-btn,#gq-menu,#gq-settings-overlay,#gq-push-overlay")) continue;
+      if (btn.closest("article,.gq-btn,.gq-quick-trigger,#gq-menu,#gq-settings-overlay,#gq-push-overlay")) continue;
       const label = btn.getAttribute("aria-label") || "";
       if (STOP_RE.test(label.trim())) {
         console.log("[GQ] stopGrokGeneration hit:", label);
@@ -690,7 +690,7 @@
     // 经 DOM 确认：X.com Grok 新建对话按钮 aria-label="新聊天"
     // Grok 以 React portal 渲染，需全文档搜索
     for (const btn of document.querySelectorAll("button,[role='button']")) {
-      if (btn.offsetParent === null || btn.closest("article,.gq-btn,#gq-menu")) continue;
+      if (btn.offsetParent === null || btn.closest("article,.gq-btn,.gq-quick-trigger,#gq-menu")) continue;
       const label = btn.getAttribute("aria-label") || "";
       if (/^新聊天$|^new chat$/i.test(label.trim())) {
         console.log("[GQ] startNewGrokConversation: 新聊天 clicked");
@@ -993,7 +993,7 @@
     const modal = document.createElement("div"); modal.id = "gq-settings-modal";
 
     modal.innerHTML = `
-      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.3.23</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
+      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.3.24</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
       <div class="gq-modal-body">
         <!-- 语言 & 模式 -->
         <div class="gq-section-card"><div class="gq-section-header">⚙️ ${t("lang_label")} & ${t("send_mode_label")}</div><div class="gq-section-body">
@@ -1240,7 +1240,7 @@
   function hijackThrottled() {
     document.querySelectorAll("article").forEach(article => {
       findArticleGrokButtons(article).forEach(origBtn => {
-        if (!origBtn || origBtn.classList.contains("gq-btn") || _hijackedButtons.has(origBtn)) return;
+        if (!origBtn || origBtn.classList.contains("gq-quick-trigger") || _hijackedButtons.has(origBtn)) return;
         if (origBtn.closest("[role='group']") && !isLikelyGrokButton(origBtn)) return;
         const newBtn = replaceWithQuickButton(origBtn);
         if (newBtn) _hijackedButtons.add(newBtn);
@@ -1263,11 +1263,12 @@
 
   function replaceWithQuickButton(origBtn) {
     try {
-      origBtn.classList.add("gq-btn");
+      origBtn.classList.remove("gq-btn");
+      origBtn.classList.add("gq-quick-trigger");
       origBtn.style.color = "#FF1493";
       origBtn.style.cursor = "pointer";
       origBtn.setAttribute("aria-label", "Grok Quick: \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49");
-      origBtn.title = "Grok Quick v3.3.23 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
+      origBtn.title = "Grok Quick v3.3.24 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
 
       origBtn.addEventListener("click", (e) => {
         if (_nativeClickBypass.has(origBtn)) return;
@@ -1343,6 +1344,8 @@
     .gq-btn-sm{padding:6px 14px;font-size:12.5px;border-radius:10px}
     .gq-btn-outline{background:transparent;color:var(--gq-text,#E7E9EA);border:1px solid var(--gq-border,#3d4145)}
     .gq-btn-outline:hover{border-color:#FF1493;color:#FF1493;background:rgba(255,20,147,.06)}
+    .gq-quick-trigger{color:#FF1493!important;cursor:pointer!important}
+    .gq-quick-trigger:hover{color:#ff5bb8!important}
     .gq-push-entry input[type=text]{background:#0d1117!important;border:1px solid #2f3336!important;color:#E7E9EA!important;border-radius:6px!important;font-size:12px!important;padding:4px 8px!important}
     /* Push Select */
     #gq-push-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:2147483641;display:flex;justify-content:center;align-items:center;animation:gqOverlayIn .2s ease}
@@ -1370,11 +1373,12 @@
     #gq-panel-resize-w[data-mode="dock"]::after{height:42px;background:rgba(255,255,255,.16)}
     .gq-panel-floating-btn{position:absolute!important;top:58px;left:22px;z-index:20;display:none;align-items:center;justify-content:center;gap:5px;height:28px;padding:0 10px;border:1px solid rgba(255,255,255,.16);border-radius:999px;background:rgba(15,20,28,.86);color:#fff;font-size:12px;font-weight:650;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;cursor:pointer;pointer-events:all;user-select:none;box-shadow:0 6px 18px rgba(0,0,0,.28);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
     .gq-panel-floating-btn:hover{border-color:#FF1493;color:#FF1493;background:rgba(15,20,28,.98)}
-    #gq-panel-expand{top:38px;left:50%;transform:translateX(-50%);width:46px;height:46px;padding:0;border-radius:16px;font-size:0;border-color:rgba(255,255,255,.22);background:radial-gradient(circle at 34% 28%,rgba(255,255,255,.18),rgba(255,255,255,0) 34%),linear-gradient(145deg,rgba(20,26,34,.96),rgba(5,8,12,.96));box-shadow:0 10px 28px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.12)}
-    #gq-panel-expand .gq-grok-mark{position:relative;display:block;width:25px;height:25px;border:3px solid rgba(255,255,255,.92);border-radius:999px;box-sizing:border-box;filter:drop-shadow(0 0 12px rgba(255,255,255,.12))}
-    #gq-panel-expand .gq-grok-mark::before{content:'';position:absolute;left:50%;top:-7px;width:3px;height:36px;border-radius:999px;background:rgba(255,255,255,.95);transform:translateX(-50%) rotate(43deg);transform-origin:center}
-    #gq-panel-expand .gq-grok-mark::after{content:'';position:absolute;right:-5px;top:1px;width:11px;height:11px;border-top:3px solid rgba(255,255,255,.95);border-right:3px solid rgba(255,255,255,.95);transform:rotate(-5deg);border-radius:2px}
-    #gq-panel-expand::after{content:'Grok';position:absolute;top:53px;left:50%;transform:translateX(-50%);font-size:11px;color:rgba(255,255,255,.68);font-weight:700;letter-spacing:.02em;white-space:nowrap;text-shadow:0 1px 8px rgba(0,0,0,.65)}
+    [data-testid='GrokDrawer'][data-gq-panel-hidden='1']{background:transparent!important;border-color:transparent!important;box-shadow:none!important}
+    #gq-panel-expand{top:42px;left:50%;transform:translateX(-50%);width:42px;height:42px;padding:0;border-radius:15px;font-size:0;border-color:rgba(255,255,255,.22);background:radial-gradient(circle at 34% 28%,rgba(255,255,255,.18),rgba(255,255,255,0) 34%),linear-gradient(145deg,rgba(20,26,34,.96),rgba(5,8,12,.96));box-shadow:0 10px 28px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.12)}
+    #gq-panel-expand .gq-grok-mark{position:relative;display:block;width:23px;height:23px;border:3px solid rgba(255,255,255,.92);border-radius:999px;box-sizing:border-box;filter:drop-shadow(0 0 12px rgba(255,255,255,.12))}
+    #gq-panel-expand .gq-grok-mark::before{content:'';position:absolute;left:50%;top:-7px;width:3px;height:34px;border-radius:999px;background:rgba(255,255,255,.95);transform:translateX(-50%) rotate(43deg);transform-origin:center}
+    #gq-panel-expand .gq-grok-mark::after{content:'';position:absolute;right:-5px;top:1px;width:10px;height:10px;border-top:3px solid rgba(255,255,255,.95);border-right:3px solid rgba(255,255,255,.95);transform:rotate(-5deg);border-radius:2px}
+    #gq-panel-expand::after{content:'Grok';position:absolute;top:49px;left:50%;transform:translateX(-50%);font-size:11px;color:rgba(255,255,255,.68);font-weight:700;letter-spacing:.02em;white-space:nowrap;text-shadow:0 1px 8px rgba(0,0,0,.65)}
     #gq-panel-expand:hover{border-color:rgba(255,20,147,.72);box-shadow:0 12px 32px rgba(255,20,147,.12),0 10px 28px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.14)}
     #gq-panel-collapse{top:58px;left:20px}
     #gq-panel-dock-hit{position:absolute!important;inset:0;z-index:5;display:none;cursor:pointer;background:linear-gradient(90deg,rgba(255,255,255,.04),rgba(255,255,255,0));pointer-events:all}
@@ -1479,7 +1483,8 @@
   function expandGrokWidth(drawer, initW) {
     const narrowW = _getGrokNarrowWidth(drawer, initW);
     const savedWide = GM_getValue("gq_panel_width_wide", 0);
-    const targetW = savedWide > 360 ? savedWide : 560;
+    const maxWide = Math.max(360, Math.min(window.innerWidth - 80, 960));
+    const targetW = Math.max(360, Math.min(savedWide > 360 ? savedWide : 560, maxWide));
     drawer.dataset.gqExpanded = "1";
     const contentDiv = _getGrokContentDiv(drawer);
     if (contentDiv) contentDiv.style.display = "";
@@ -1501,6 +1506,8 @@
         _removeOutsideClickHandler();
         return;
       }
+      const target = e.target;
+      if (target?.closest?.(".gq-quick-trigger,#gq-menu,#gq-overlay,#gq-settings-overlay,#gq-push-overlay,#gq-panel-expand,#gq-panel-collapse,#gq-panel-dock-hit,#gq-panel-resize,#gq-panel-resize-w")) return;
       if (e.composedPath?.().includes(drawer)) return;
       const rect = drawer.getBoundingClientRect();
       const outsideDrawer =
@@ -1734,7 +1741,7 @@
   let scrollTimer = null;
   window.addEventListener("scroll", () => { if (scrollTimer) return; scrollTimer = setTimeout(() => { scrollTimer = null; scheduleHijack(); }, 200); }, { passive: true });
 
-  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.3.23 \u8BBE\u7F6E", openSettings);
+  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.3.24 \u8BBE\u7F6E", openSettings);
   GM_registerMenuCommand("\u21BA \u91CD\u7F6E Grok \u9762\u677F\u5E03\u5C40", resetGrokPanelLayout);
-  console.log("[Grok Quick] v3.3.23 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
+  console.log("[Grok Quick] v3.3.24 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
 })();
