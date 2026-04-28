@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.3.24
+// @version      3.3.25
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -993,7 +993,7 @@
     const modal = document.createElement("div"); modal.id = "gq-settings-modal";
 
     modal.innerHTML = `
-      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.3.24</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
+      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.3.25</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
       <div class="gq-modal-body">
         <!-- 语言 & 模式 -->
         <div class="gq-section-card"><div class="gq-section-header">⚙️ ${t("lang_label")} & ${t("send_mode_label")}</div><div class="gq-section-body">
@@ -1268,7 +1268,7 @@
       origBtn.style.color = "#FF1493";
       origBtn.style.cursor = "pointer";
       origBtn.setAttribute("aria-label", "Grok Quick: \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49");
-      origBtn.title = "Grok Quick v3.3.24 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
+      origBtn.title = "Grok Quick v3.3.25 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
 
       origBtn.addEventListener("click", (e) => {
         if (_nativeClickBypass.has(origBtn)) return;
@@ -1369,19 +1369,21 @@
     #gq-panel-resize-w:hover,#gq-panel-resize-w.gq-resizing{background:rgba(255,20,147,.25)}
     #gq-panel-resize-w::after{content:'';position:absolute;top:50%;left:7px;transform:translateY(-50%);width:4px;height:64px;background:rgba(255,255,255,.22);border-radius:2px;transition:background .2s}
     #gq-panel-resize-w:hover::after{background:rgba(255,20,147,.8)}
-    #gq-panel-resize-w[data-mode="dock"]{top:104px;bottom:104px;width:8px}
-    #gq-panel-resize-w[data-mode="dock"]::after{height:42px;background:rgba(255,255,255,.16)}
+    #gq-panel-resize-w[data-mode="dock"]{top:26px;bottom:26px;width:7px;opacity:0}
+    [data-testid='GrokDrawer'][data-gq-panel-hidden='1']:hover #gq-panel-resize-w[data-mode="dock"]{opacity:.45}
+    #gq-panel-resize-w[data-mode="dock"]::after{height:34px;background:rgba(255,255,255,.18)}
     .gq-panel-floating-btn{position:absolute!important;top:58px;left:22px;z-index:20;display:none;align-items:center;justify-content:center;gap:5px;height:28px;padding:0 10px;border:1px solid rgba(255,255,255,.16);border-radius:999px;background:rgba(15,20,28,.86);color:#fff;font-size:12px;font-weight:650;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;cursor:pointer;pointer-events:all;user-select:none;box-shadow:0 6px 18px rgba(0,0,0,.28);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
     .gq-panel-floating-btn:hover{border-color:#FF1493;color:#FF1493;background:rgba(15,20,28,.98)}
-    [data-testid='GrokDrawer'][data-gq-panel-hidden='1']{background:transparent!important;border-color:transparent!important;box-shadow:none!important}
-    #gq-panel-expand{top:42px;left:50%;transform:translateX(-50%);width:42px;height:42px;padding:0;border-radius:15px;font-size:0;border-color:rgba(255,255,255,.22);background:radial-gradient(circle at 34% 28%,rgba(255,255,255,.18),rgba(255,255,255,0) 34%),linear-gradient(145deg,rgba(20,26,34,.96),rgba(5,8,12,.96));box-shadow:0 10px 28px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.12)}
+    [data-testid='GrokDrawer'][data-gq-panel-hidden='1']{top:64px!important;right:16px!important;width:72px!important;min-width:72px!important;max-width:72px!important;height:118px!important;min-height:118px!important;max-height:118px!important;background:transparent!important;border-color:transparent!important;box-shadow:none!important;overflow:visible!important}
+    [data-testid='GrokDrawer'][data-gq-panel-hidden='1']::before{content:'';position:absolute;inset:0;border-radius:20px;background:linear-gradient(180deg,rgba(15,20,28,.72),rgba(5,8,12,.72));border:1px solid rgba(255,255,255,.12);box-shadow:0 12px 34px rgba(0,0,0,.42),0 0 26px rgba(255,255,255,.05);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);pointer-events:none}
+    #gq-panel-expand{top:18px;left:50%;transform:translateX(-50%);width:42px;height:42px;padding:0;border-radius:15px;font-size:0;border-color:rgba(255,255,255,.22);background:radial-gradient(circle at 34% 28%,rgba(255,255,255,.18),rgba(255,255,255,0) 34%),linear-gradient(145deg,rgba(20,26,34,.96),rgba(5,8,12,.96));box-shadow:0 10px 28px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.12)}
     #gq-panel-expand .gq-grok-mark{position:relative;display:block;width:23px;height:23px;border:3px solid rgba(255,255,255,.92);border-radius:999px;box-sizing:border-box;filter:drop-shadow(0 0 12px rgba(255,255,255,.12))}
     #gq-panel-expand .gq-grok-mark::before{content:'';position:absolute;left:50%;top:-7px;width:3px;height:34px;border-radius:999px;background:rgba(255,255,255,.95);transform:translateX(-50%) rotate(43deg);transform-origin:center}
     #gq-panel-expand .gq-grok-mark::after{content:'';position:absolute;right:-5px;top:1px;width:10px;height:10px;border-top:3px solid rgba(255,255,255,.95);border-right:3px solid rgba(255,255,255,.95);transform:rotate(-5deg);border-radius:2px}
-    #gq-panel-expand::after{content:'Grok';position:absolute;top:49px;left:50%;transform:translateX(-50%);font-size:11px;color:rgba(255,255,255,.68);font-weight:700;letter-spacing:.02em;white-space:nowrap;text-shadow:0 1px 8px rgba(0,0,0,.65)}
+    #gq-panel-expand::after{content:'Grok';position:absolute;top:50px;left:50%;transform:translateX(-50%);font-size:11px;color:rgba(255,255,255,.68);font-weight:700;letter-spacing:.02em;white-space:nowrap;text-shadow:0 1px 8px rgba(0,0,0,.65)}
     #gq-panel-expand:hover{border-color:rgba(255,20,147,.72);box-shadow:0 12px 32px rgba(255,20,147,.12),0 10px 28px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.14)}
     #gq-panel-collapse{top:58px;left:20px}
-    #gq-panel-dock-hit{position:absolute!important;inset:0;z-index:5;display:none;cursor:pointer;background:linear-gradient(90deg,rgba(255,255,255,.04),rgba(255,255,255,0));pointer-events:all}
+    #gq-panel-dock-hit{position:absolute!important;inset:0;z-index:5;display:none;cursor:pointer;background:transparent;pointer-events:all}
 
     /* Light theme */
     @media(prefers-color-scheme:light){
@@ -1741,7 +1743,7 @@
   let scrollTimer = null;
   window.addEventListener("scroll", () => { if (scrollTimer) return; scrollTimer = setTimeout(() => { scrollTimer = null; scheduleHijack(); }, 200); }, { passive: true });
 
-  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.3.24 \u8BBE\u7F6E", openSettings);
+  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.3.25 \u8BBE\u7F6E", openSettings);
   GM_registerMenuCommand("\u21BA \u91CD\u7F6E Grok \u9762\u677F\u5E03\u5C40", resetGrokPanelLayout);
-  console.log("[Grok Quick] v3.3.24 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
+  console.log("[Grok Quick] v3.3.25 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
 })();
