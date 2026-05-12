@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.7.2
-// @description  Adds a paste, drag-and-drop, and quick-pick upload panel to iCloud Photos on the web.
+// @version      1.8.0
+// @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
 // @match        https://www.icloud.com.cn/photos*
@@ -466,6 +466,49 @@
     return null;
   }
 
+  function simulateMouseClick(element) {
+    if (!element) return false;
+    const win = element.ownerDocument && element.ownerDocument.defaultView;
+    const MouseEventCtor = (win && win.MouseEvent) || root.MouseEvent;
+    const rect = typeof element.getBoundingClientRect === 'function'
+      ? element.getBoundingClientRect()
+      : { left: 0, top: 0, width: 1, height: 1 };
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const opts = {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      view: win || undefined,
+      button: 0,
+      buttons: 1,
+      clientX: x,
+      clientY: y,
+    };
+    try {
+      if (typeof MouseEventCtor === 'function') {
+        element.dispatchEvent(new MouseEventCtor('pointerdown', opts));
+        element.dispatchEvent(new MouseEventCtor('mousedown', opts));
+        element.dispatchEvent(new MouseEventCtor('pointerup', opts));
+        element.dispatchEvent(new MouseEventCtor('mouseup', opts));
+        element.dispatchEvent(new MouseEventCtor('click', opts));
+      } else if (typeof element.click === 'function') {
+        element.click();
+      }
+      return true;
+    } catch (error) {
+      try {
+        if (typeof element.click === 'function') {
+          element.click();
+          return true;
+        }
+      } catch (e) {
+        // ignore
+      }
+      return false;
+    }
+  }
+
   async function softRefreshLibraryView(doc, win, options) {
     const opts = options || {};
     const pivotDelay = typeof opts.pivotDelay === 'number' ? opts.pivotDelay : 180;
@@ -491,17 +534,9 @@
     }
     if (!pivot) return false;
 
-    try {
-      pivot.click();
-    } catch (error) {
-      return false;
-    }
+    if (!simulateMouseClick(pivot)) return false;
     await sleep(pivotDelay);
-    try {
-      original.click();
-    } catch (error) {
-      return false;
-    }
+    if (!simulateMouseClick(original)) return false;
     return true;
   }
 
@@ -1130,6 +1165,199 @@
     });
   }
 
+  let zoomPanInstalled = false;
+
+  function installImageZoomPan(doc, win) {
+    if (zoomPanInstalled) return;
+    zoomPanInstalled = true;
+
+    const MIN_PREVIEW_PX = 300;
+    const MIN_SCALE = 1;
+    const MAX_SCALE = 8;
+    const DATA_ATTR = 'data-iu-zoom-active';
+
+    const state = {
+      element: null,
+      scale: 1,
+      tx: 0,
+      ty: 0,
+      dragging: false,
+      startX: 0,
+      startY: 0,
+      origTx: 0,
+      origTy: 0,
+      savedTransform: '',
+      savedTransition: '',
+      savedOrigin: '',
+      savedCursor: '',
+      savedUserSelect: '',
+    };
+
+    function findPreviewImage(target) {
+      let el = target;
+      while (el && el !== doc && el !== doc.body) {
+        if (el.tagName === 'IMG' || el.tagName === 'CANVAS' || el.tagName === 'VIDEO') {
+          if (typeof el.getBoundingClientRect !== 'function') {
+            el = el.parentElement || (el.parentNode && el.parentNode.host) || null;
+            continue;
+          }
+          const rect = el.getBoundingClientRect();
+          if (rect.width >= MIN_PREVIEW_PX && rect.height >= MIN_PREVIEW_PX) {
+            return el;
+          }
+        }
+        el = el.parentElement || (el.parentNode && el.parentNode.host) || null;
+      }
+      return null;
+    }
+
+    function attach(el) {
+      if (state.element === el) return;
+      if (state.element) detach();
+      state.element = el;
+      state.scale = 1;
+      state.tx = 0;
+      state.ty = 0;
+      state.savedTransform = el.style.transform || '';
+      state.savedTransition = el.style.transition || '';
+      state.savedOrigin = el.style.transformOrigin || '';
+      state.savedCursor = el.style.cursor || '';
+      state.savedUserSelect = el.style.userSelect || '';
+      el.setAttribute(DATA_ATTR, '1');
+      el.style.transition = 'transform 40ms linear';
+      el.style.transformOrigin = 'center center';
+      el.style.userSelect = 'none';
+      el.style.willChange = 'transform';
+    }
+
+    function detach() {
+      const el = state.element;
+      if (!el) return;
+      el.style.transform = state.savedTransform;
+      el.style.transition = state.savedTransition;
+      el.style.transformOrigin = state.savedOrigin;
+      el.style.cursor = state.savedCursor;
+      el.style.userSelect = state.savedUserSelect;
+      el.style.willChange = '';
+      el.removeAttribute(DATA_ATTR);
+      state.element = null;
+      state.scale = 1;
+      state.tx = 0;
+      state.ty = 0;
+      state.dragging = false;
+    }
+
+    function applyTransform() {
+      if (!state.element) return;
+      state.element.style.transform =
+        'translate(' + state.tx + 'px, ' + state.ty + 'px) scale(' + state.scale + ')';
+      state.element.style.cursor =
+        state.scale > 1 ? (state.dragging ? 'grabbing' : 'grab') : '';
+    }
+
+    function onWheel(event) {
+      const img = state.element || findPreviewImage(event.target);
+      if (!img) return;
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (state.element !== img) attach(img);
+
+      const rect = img.getBoundingClientRect();
+      // Position of the cursor relative to the image's center.
+      const px = event.clientX - rect.left - rect.width / 2;
+      const py = event.clientY - rect.top - rect.height / 2;
+
+      // Convert wheel delta into a smooth zoom factor.
+      const delta = -event.deltaY;
+      const factor = Math.exp(delta * 0.0015);
+      const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, state.scale * factor));
+      if (newScale === state.scale) return;
+
+      // Keep the cursor position anchored on the image by adjusting translation.
+      const scaleRatio = newScale / state.scale;
+      state.tx = px - (px - state.tx) * scaleRatio;
+      state.ty = py - (py - state.ty) * scaleRatio;
+      state.scale = newScale;
+
+      if (state.scale <= MIN_SCALE + 0.001) {
+        detach();
+        return;
+      }
+      applyTransform();
+    }
+
+    function onMouseDown(event) {
+      if (event.button !== 0) return;
+      const img = state.element;
+      if (!img || state.scale <= MIN_SCALE) return;
+      if (!(img === event.target || (typeof img.contains === 'function' && img.contains(event.target)))) return;
+      state.dragging = true;
+      state.startX = event.clientX;
+      state.startY = event.clientY;
+      state.origTx = state.tx;
+      state.origTy = state.ty;
+      img.style.cursor = 'grabbing';
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
+    function onMouseMove(event) {
+      if (!state.dragging || !state.element) return;
+      state.tx = state.origTx + (event.clientX - state.startX);
+      state.ty = state.origTy + (event.clientY - state.startY);
+      applyTransform();
+      event.preventDefault();
+    }
+
+    function endDrag() {
+      if (!state.dragging) return;
+      state.dragging = false;
+      if (state.element) state.element.style.cursor = 'grab';
+    }
+
+    function onKeyDown(event) {
+      if (!state.element) return;
+      if (event.key === 'Escape' || event.key === '0') {
+        event.preventDefault();
+        detach();
+      }
+    }
+
+    function onDoubleClick(event) {
+      const img = findPreviewImage(event.target);
+      if (!img) return;
+      if (state.element === img && state.scale > MIN_SCALE) {
+        detach();
+      } else {
+        attach(img);
+        state.scale = 2;
+        const rect = img.getBoundingClientRect();
+        state.tx = -(event.clientX - rect.left - rect.width / 2);
+        state.ty = -(event.clientY - rect.top - rect.height / 2);
+        applyTransform();
+        event.preventDefault();
+      }
+    }
+
+    // Capture phase so we run before iCloud's own wheel/drag handlers.
+    const targets = [doc];
+    if (win && win !== doc) targets.unshift(win);
+    targets.forEach(function (target) {
+      try {
+        target.addEventListener('wheel', onWheel, { passive: false, capture: true });
+      } catch (error) {
+        try { target.addEventListener('wheel', onWheel, true); } catch (e) { /* ignore */ }
+      }
+      target.addEventListener('mousedown', onMouseDown, true);
+      target.addEventListener('mousemove', onMouseMove, true);
+      target.addEventListener('mouseup', endDrag, true);
+      target.addEventListener('mouseleave', endDrag, true);
+      target.addEventListener('keydown', onKeyDown, true);
+      target.addEventListener('dblclick', onDoubleClick, true);
+    });
+  }
+
   function isInICloudPhotosAppFrame(win) {    try {
       const loc = win && win.location;
       if (!loc) return false;
@@ -1162,6 +1390,7 @@
     if (doc.body) {
       createPanel(doc, win);
       installPasteListener(doc, win);
+      installImageZoomPan(doc, win);
       observeAndRemount(doc, win);
       return;
     }
@@ -1169,6 +1398,7 @@
       if (!doc.body) return;
       createPanel(doc, win);
       installPasteListener(doc, win);
+      installImageZoomPan(doc, win);
       observeAndRemount(doc, win);
     }, { once: true });
   }
