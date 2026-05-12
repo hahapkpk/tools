@@ -16,7 +16,7 @@ test('creates stable screenshot names from clipboard image blobs', () => {
     new Date('2026-05-12T08:09:10.321Z')
   );
 
-  assert.equal(file.name, 'icloud-screenshot-20260512-080910.png');
+  assert.match(file.name, /^icloud-screenshot-20260512-080910-321-[0-9a-f]{4}\.png$/);
   assert.equal(file.type, 'image/png');
 });
 
@@ -36,7 +36,7 @@ test('filters paste items down to image files', () => {
   const files = helpers.extractImageFilesFromPaste(event, new Date('2026-05-12T08:09:10Z'));
 
   assert.equal(files.length, 1);
-  assert.equal(files[0].name, 'icloud-screenshot-20260512-080910.png');
+  assert.match(files[0].name, /^icloud-screenshot-20260512-080910-000-[0-9a-f]{4}\.png$/);
 });
 
 test('ignores the helper panel file input when searching for iCloud upload input', () => {
@@ -185,6 +185,27 @@ test('uses Simplified Chinese panel labels', () => {
   assert.equal(text.pickButton, '选择图片');
   assert.equal(text.detectButton, '检测');
   assert.equal(text.waiting, '等待图片。');
+});
+
+test('only mounts the panel inside the inner iCloud Photos application frame', () => {
+  assert.equal(
+    helpers.isInICloudPhotosAppFrame({
+      location: { pathname: '/applications/photos3/current/en-us/index.html' },
+    }),
+    true
+  );
+  assert.equal(
+    helpers.isInICloudPhotosAppFrame({
+      location: { pathname: '/applications/photos/current/zh-cn/index.html' },
+    }),
+    true
+  );
+  assert.equal(
+    helpers.isInICloudPhotosAppFrame({ location: { pathname: '/photos/' } }),
+    false
+  );
+  assert.equal(helpers.isInICloudPhotosAppFrame(undefined), false);
+  assert.equal(helpers.isInICloudPhotosAppFrame({}), false);
 });
 
 test('calculates resizable panel size and clamps it inside viewport', () => {
