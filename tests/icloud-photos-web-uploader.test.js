@@ -112,3 +112,19 @@ test('waits for iCloud to create its file input after clicking upload', async ()
   assert.deepEqual(events, ['input', 'change']);
   assert.match(messages.at(-1), /Sent to iCloud upload queue/);
 });
+
+test('calculates draggable panel position and clamps it inside viewport', () => {
+  const position = helpers.calculateDraggedPanelPosition({
+    pointerX: 20,
+    pointerY: 900,
+    offsetX: 50,
+    offsetY: 20,
+    panelWidth: 280,
+    panelHeight: 190,
+    viewportWidth: 320,
+    viewportHeight: 240,
+    margin: 8,
+  });
+
+  assert.deepEqual(position, { left: 8, top: 42 });
+});

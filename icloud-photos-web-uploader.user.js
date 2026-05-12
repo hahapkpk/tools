@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.0.1
+// @version      1.0.2
 // @description  Adds a paste, drag-and-drop, and quick-pick upload panel to iCloud Photos on the web.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -24,6 +24,7 @@
 
   const PANEL_ID = 'icloud-web-uploader-panel';
   const LOG_PREFIX = '[iCloud Photos Web Uploader]';
+  const POSITION_KEY = 'icloud-web-uploader-position';
   const IMAGE_EXTENSIONS = /\.(apng|avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i;
 
   function pad2(value) {
@@ -116,6 +117,20 @@
     if (!files.length) return 'No image files selected.';
     if (files.length === 1) return 'Ready: ' + files[0].name;
     return 'Ready: ' + files.length + ' images';
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+  }
+
+  function calculateDraggedPanelPosition(options) {
+    const margin = typeof options.margin === 'number' ? options.margin : 8;
+    const maxLeft = Math.max(margin, options.viewportWidth - options.panelWidth - margin);
+    const maxTop = Math.max(margin, options.viewportHeight - options.panelHeight - margin);
+    return {
+      left: clamp(options.pointerX - options.offsetX, margin, maxLeft),
+      top: clamp(options.pointerY - options.offsetY, margin, maxTop),
+    };
   }
 
   function queryAllDeep(rootNode, selector) {
@@ -255,9 +270,10 @@
       '#' + PANEL_ID + '{position:fixed;right:18px;bottom:18px;z-index:2147483647;width:280px;',
       'font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#1d1d1f;',
       'background:rgba(255,255,255,.96);border:1px solid rgba(0,0,0,.14);border-radius:10px;',
-      'box-shadow:0 10px 30px rgba(0,0,0,.22);overflow:hidden}',
+      'box-shadow:0 10px 30px rgba(0,0,0,.22);overflow:hidden;touch-action:none}',
+      '#' + PANEL_ID + '.is-moving{user-select:none}',
       '#' + PANEL_ID + ' .iu-head{display:flex;align-items:center;justify-content:space-between;',
-      'padding:10px 12px;background:#f5f5f7;font-weight:700}',
+      'padding:10px 12px;background:#f5f5f7;font-weight:700;cursor:move}',
       '#' + PANEL_ID + ' .iu-body{padding:12px}',
       '#' + PANEL_ID + ' .iu-drop{border:1px dashed #8e8e93;border-radius:8px;padding:14px 10px;',
       'text-align:center;background:#fff;min-height:62px;display:flex;align-items:center;justify-content:center}',
@@ -269,10 +285,110 @@
       '#' + PANEL_ID + ' button.iu-upload{min-width:74px}',
       '#' + PANEL_ID + ' .iu-status{margin-top:10px;color:#515154;word-break:break-word}',
       '#' + PANEL_ID + ' .iu-status.is-error{color:#b00020}',
-      '#' + PANEL_ID + ' .iu-close{border:0;background:transparent;padding:0 4px;font-size:18px;line-height:1}',
+      '#' + PANEL_ID + ' .iu-close{border:0;background:transparent;padding:0 4px;font-size:18px;line-height:1;cursor:pointer}',
       '#' + PANEL_ID + ' input{display:none}',
     ].join('');
     doc.head.appendChild(style);
+  }
+
+  function getPointerPoint(event) {
+    const touch = event.touches && event.touches[0] ? event.touches[0] : null;
+    const changedTouch = event.changedTouches && event.changedTouches[0] ? event.changedTouches[0] : null;
+    const point = touch || changedTouch || event;
+    return {
+      x: point.clientX,
+      y: point.clientY,
+    };
+  }
+
+  function loadSavedPosition(win) {
+    try {
+      const raw = win.localStorage && win.localStorage.getItem(POSITION_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (typeof parsed.left !== 'number' || typeof parsed.top !== 'number') return null;
+      return parsed;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function savePosition(win, position) {
+    try {
+      if (win.localStorage) win.localStorage.setItem(POSITION_KEY, JSON.stringify(position));
+    } catch (error) {
+      // Ignore storage failures; dragging still works for the current page.
+    }
+  }
+
+  function applyPanelPosition(panel, position) {
+    panel.style.left = position.left + 'px';
+    panel.style.top = position.top + 'px';
+    panel.style.right = 'auto';
+    panel.style.bottom = 'auto';
+  }
+
+  function enablePanelDragging(panel, handle, win) {
+    let dragState = null;
+
+    const savedPosition = loadSavedPosition(win);
+    if (savedPosition) applyPanelPosition(panel, savedPosition);
+
+    function move(event) {
+      if (!dragState) return;
+      event.preventDefault();
+      const point = getPointerPoint(event);
+      const position = calculateDraggedPanelPosition({
+        pointerX: point.x,
+        pointerY: point.y,
+        offsetX: dragState.offsetX,
+        offsetY: dragState.offsetY,
+        panelWidth: dragState.panelWidth,
+        panelHeight: dragState.panelHeight,
+        viewportWidth: win.innerWidth || dragState.viewportWidth,
+        viewportHeight: win.innerHeight || dragState.viewportHeight,
+        margin: 8,
+      });
+      applyPanelPosition(panel, position);
+      dragState.lastPosition = position;
+    }
+
+    function stop() {
+      if (!dragState) return;
+      panel.classList.remove('is-moving');
+      if (dragState.lastPosition) savePosition(win, dragState.lastPosition);
+      dragState = null;
+      win.removeEventListener('mousemove', move, true);
+      win.removeEventListener('mouseup', stop, true);
+      win.removeEventListener('touchmove', move, true);
+      win.removeEventListener('touchend', stop, true);
+      win.removeEventListener('touchcancel', stop, true);
+    }
+
+    function start(event) {
+      if (event.target && typeof event.target.closest === 'function' && event.target.closest('button')) return;
+      const point = getPointerPoint(event);
+      const rect = panel.getBoundingClientRect();
+      dragState = {
+        offsetX: point.x - rect.left,
+        offsetY: point.y - rect.top,
+        panelWidth: rect.width,
+        panelHeight: rect.height,
+        viewportWidth: win.innerWidth || rect.right,
+        viewportHeight: win.innerHeight || rect.bottom,
+        lastPosition: { left: rect.left, top: rect.top },
+      };
+      panel.classList.add('is-moving');
+      event.preventDefault();
+      win.addEventListener('mousemove', move, true);
+      win.addEventListener('mouseup', stop, true);
+      win.addEventListener('touchmove', move, true);
+      win.addEventListener('touchend', stop, true);
+      win.addEventListener('touchcancel', stop, true);
+    }
+
+    handle.addEventListener('mousedown', start);
+    handle.addEventListener('touchstart', start, { passive: false });
   }
 
   function createPanel(doc, win) {
@@ -296,12 +412,15 @@
       '</div>',
     ].join('');
 
+    const head = panel.querySelector('.iu-head');
     const drop = panel.querySelector('.iu-drop');
     const picker = panel.querySelector('input[type="file"]');
     const pickButton = panel.querySelector('.iu-primary');
     const findButton = panel.querySelector('.iu-upload');
     const closeButton = panel.querySelector('.iu-close');
     const statusEl = panel.querySelector('.iu-status');
+
+    enablePanelDragging(panel, head, win);
 
     function status(message, isError) {
       statusEl.textContent = message;
@@ -373,6 +492,7 @@
   return {
     bootstrap,
     createNamedImageFile,
+    calculateDraggedPanelPosition,
     extractImageFilesFromPaste,
     filterImageFiles,
     findICloudFileInput,
