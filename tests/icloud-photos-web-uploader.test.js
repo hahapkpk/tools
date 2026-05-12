@@ -185,6 +185,60 @@ test('uses Simplified Chinese panel labels', () => {
   assert.equal(text.waiting, '等待图片');
 });
 
+test('soft refresh navigates away from the library then back without reloading', async () => {
+  const clicks = [];
+  function makeItem(label) {
+    return {
+      textContent: label,
+      click: () => clicks.push(label),
+      closest: () => null,
+    };
+  }
+  const library = makeItem('图库');
+  const pivot = makeItem('最近项目');
+  const doc = {
+    getElementById: () => null,
+    querySelectorAll: (selector) => {
+      if (selector === 'a, button, [role="button"], [role="menuitem"], [role="tab"], [role="treeitem"]') {
+        return [library, pivot];
+      }
+      return [];
+    },
+  };
+
+  const softened = await helpers.softRefreshLibraryView(doc, {}, { pivotDelay: 0 });
+
+  assert.equal(softened, true);
+  assert.deepEqual(clicks, ['最近项目', '图库']);
+});
+
+test('soft refresh returns false when sidebar items are missing', async () => {
+  const doc = {
+    getElementById: () => null,
+    querySelectorAll: () => [],
+  };
+
+  const softened = await helpers.softRefreshLibraryView(doc, {}, { pivotDelay: 0 });
+
+  assert.equal(softened, false);
+});
+
+test('findSidebarItem matches labels including trailing counts', () => {
+  const library = {
+    textContent: '图库 (123)',
+    click: () => {},
+    closest: () => null,
+  };
+  const doc = {
+    getElementById: () => null,
+    querySelectorAll: () => [library],
+  };
+
+  const found = helpers.findSidebarItem(doc, ['图库', 'Library']);
+  assert.equal(found, library);
+});
+
+
 test('only mounts the panel inside the inner iCloud Photos application frame', () => {
   assert.equal(
     helpers.isInICloudPhotosAppFrame({

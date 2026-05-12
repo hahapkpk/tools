@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.6.0
+// @version      1.7.0
 // @description  Adds a paste, drag-and-drop, and quick-pick upload panel to iCloud Photos on the web.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -395,6 +395,61 @@
     const trigger = candidates.find(isUploadTrigger);
     if (!trigger || typeof trigger.click !== 'function') return false;
     trigger.click();
+    return true;
+  }
+
+  const LIBRARY_SIDEBAR_LABELS = [
+    '图库', '所有照片', '照片', 'Library', 'All Photos', 'Photos',
+  ];
+  const PIVOT_SIDEBAR_LABELS = [
+    '最近项目', '最近', '个人收藏', '回忆', '相簿', '媒体类型',
+    'Recents', 'Recent', 'Favorites', 'Memories', 'Albums', 'Media Types',
+  ];
+
+  function normalizeLabelText(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+
+  function findSidebarItem(doc, labels) {
+    const normalizedLabels = labels.map(normalizeLabelText);
+    const ownPanel = doc.getElementById ? doc.getElementById(PANEL_ID) : null;
+    const candidates = queryAllDeep(
+      doc,
+      'a, button, [role="button"], [role="menuitem"], [role="tab"], [role="treeitem"]'
+    );
+    for (let i = 0; i < candidates.length; i += 1) {
+      const element = candidates[i];
+      if (ownPanel && typeof ownPanel.contains === 'function' && ownPanel.contains(element)) continue;
+      if (typeof element.click !== 'function') continue;
+      const text = normalizeLabelText(element.textContent);
+      if (!text) continue;
+      for (let j = 0; j < normalizedLabels.length; j += 1) {
+        const label = normalizedLabels[j];
+        if (text === label || text.indexOf(label + ' ') === 0 || text.indexOf(label) === 0) {
+          return element;
+        }
+      }
+    }
+    return null;
+  }
+
+  async function softRefreshLibraryView(doc, win, options) {
+    const opts = options || {};
+    const pivotDelay = typeof opts.pivotDelay === 'number' ? opts.pivotDelay : 220;
+    const library = findSidebarItem(doc, LIBRARY_SIDEBAR_LABELS);
+    const pivot = findSidebarItem(doc, PIVOT_SIDEBAR_LABELS);
+    if (!library || !pivot) return false;
+    try {
+      pivot.click();
+    } catch (error) {
+      return false;
+    }
+    await sleep(pivotDelay);
+    try {
+      library.click();
+    } catch (error) {
+      return false;
+    }
     return true;
   }
 
@@ -844,9 +899,23 @@
     }
 
     let pendingReload = null;
+    let reloadInFlight = false;
 
-    function doReload() {
+    async function doReload() {
       clearPendingReload();
+      if (reloadInFlight) return;
+      reloadInFlight = true;
+      try {
+        const softened = await softRefreshLibraryView(doc, win);
+        if (softened) {
+          status('已刷新图库');
+          return;
+        }
+      } catch (error) {
+        console.warn(LOG_PREFIX, 'Soft refresh failed:', error && error.message ? error.message : error);
+      } finally {
+        reloadInFlight = false;
+      }
       try {
         if (win.location && typeof win.location.reload === 'function') {
           win.location.reload();
@@ -1023,6 +1092,7 @@
     extractImageFilesFromPaste,
     filterImageFiles,
     findICloudFileInput,
+    findSidebarItem,
     getConvertedJpegFileName,
     getPanelText,
     isInICloudPhotosAppFrame,
@@ -1030,6 +1100,7 @@
     isImageLikeFile,
     normalizeFilesForICloudWebUpload,
     shouldConvertForICloudWeb,
+    softRefreshLibraryView,
     transferFilesToInput,
     uploadViaICloudPage,
     waitForICloudFileInput,
