@@ -180,11 +180,9 @@ test('normalizes non-JPEG images through a converter before upload', async () =>
 test('uses Simplified Chinese panel labels', () => {
   const text = helpers.getPanelText();
 
-  assert.equal(text.title, 'iCloud 快速上传');
-  assert.equal(text.dropText, '拖拽图片到这里，或粘贴截图/选择文件。');
-  assert.equal(text.pickButton, '选择图片');
-  assert.equal(text.detectButton, '检测');
-  assert.equal(text.waiting, '等待图片。');
+  assert.equal(text.title, 'iCloud 上传');
+  assert.equal(text.tooltip, '点击选择 · 粘贴 · 拖拽');
+  assert.equal(text.waiting, '等待图片');
 });
 
 test('only mounts the panel inside the inner iCloud Photos application frame', () => {

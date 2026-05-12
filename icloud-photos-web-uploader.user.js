@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.4.0
+// @version      1.5.0
 // @description  Adds a paste, drag-and-drop, and quick-pick upload panel to iCloud Photos on the web.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -32,12 +32,12 @@
   const JPEG_EXTENSIONS = /\.jpe?g$/i;
   const JPEG_QUALITY = 0.92;
   const PANEL_TEXT = {
-    title: 'iCloud 快速上传',
+    title: 'iCloud 上传',
+    tooltip: '点击选择 · 粘贴 · 拖拽',
+    waiting: '等待图片',
+    ready: '已就绪',
+    uploading: '处理中…',
     closeTitle: '隐藏',
-    dropText: '拖拽图片到这里，或粘贴截图/选择文件。',
-    pickButton: '选择图片',
-    detectButton: '检测',
-    waiting: '等待图片。',
   };
 
   function getPanelText() {
@@ -534,27 +534,33 @@
     const style = doc.createElement('style');
     style.id = PANEL_ID + '-style';
     style.textContent = [
-      '#' + PANEL_ID + '{position:fixed;right:18px;bottom:18px;z-index:2147483647;width:320px;',
-      'font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#1d1d1f;',
-      'background:rgba(255,255,255,.96);border:1px solid rgba(0,0,0,.14);border-radius:10px;',
-      'box-shadow:0 10px 30px rgba(0,0,0,.22);overflow:auto;touch-action:none;',
-      'resize:both;min-width:260px;min-height:220px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px)}',
-      '#' + PANEL_ID + '.is-moving{user-select:none}',
-      '#' + PANEL_ID + ' .iu-head{display:flex;align-items:center;justify-content:space-between;',
-      'padding:10px 12px;background:#f5f5f7;font-weight:700;cursor:move}',
-      '#' + PANEL_ID + ' .iu-body{padding:12px}',
-      '#' + PANEL_ID + ' .iu-drop{border:1px dashed #8e8e93;border-radius:8px;padding:14px 10px;',
-      'text-align:center;background:#fff;min-height:62px;display:flex;align-items:center;justify-content:center}',
-      '#' + PANEL_ID + ' .iu-drop.is-dragging{border-color:#007aff;background:#eef6ff}',
-      '#' + PANEL_ID + ' .iu-actions{display:flex;gap:8px;margin-top:10px}',
-      '#' + PANEL_ID + ' button{appearance:none;border:1px solid rgba(0,0,0,.16);border-radius:7px;',
-      'background:#fff;color:#1d1d1f;padding:7px 10px;cursor:pointer;font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;text-align:center;white-space:nowrap}',
-      '#' + PANEL_ID + ' button.iu-primary{background:#007aff;border-color:#007aff;color:#fff;flex:1}',
-      '#' + PANEL_ID + ' button.iu-upload{min-width:74px}',
-      '#' + PANEL_ID + ' .iu-status{margin-top:10px;color:#515154;word-break:break-word}',
-      '#' + PANEL_ID + ' .iu-status.is-error{color:#b00020}',
-      '#' + PANEL_ID + ' .iu-close{border:0;background:transparent;padding:0 4px;font-size:18px;line-height:1;cursor:pointer}',
-      '#' + PANEL_ID + ' input{display:none}',
+      '#' + PANEL_ID + '{position:fixed;right:20px;bottom:20px;z-index:2147483647;',
+      'width:44px;height:44px;padding:0;border:0;border-radius:50%;',
+      'background:linear-gradient(135deg,#007aff 0%,#5856d6 100%);color:#fff;',
+      'box-shadow:0 4px 14px rgba(0,0,0,.25);cursor:pointer;',
+      'display:flex;align-items:center;justify-content:center;',
+      'transition:transform .15s ease,box-shadow .15s ease,background .15s ease;',
+      'touch-action:none;-webkit-user-select:none;user-select:none;',
+      'font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}',
+      '#' + PANEL_ID + ':hover{transform:scale(1.06);box-shadow:0 6px 18px rgba(0,0,0,.3)}',
+      '#' + PANEL_ID + ':focus{outline:none;box-shadow:0 0 0 3px rgba(0,122,255,.35)}',
+      '#' + PANEL_ID + '.is-moving{cursor:grabbing;opacity:.92}',
+      '#' + PANEL_ID + '.is-dragging{transform:scale(1.15);background:linear-gradient(135deg,#34c759 0%,#30b0c7 100%)}',
+      '#' + PANEL_ID + '.is-busy{background:linear-gradient(135deg,#8e8e93 0%,#48484a 100%);cursor:progress}',
+      '#' + PANEL_ID + '.is-busy .iu-ring{animation:iu-spin 1s linear infinite;opacity:1}',
+      '#' + PANEL_ID + ' svg{pointer-events:none;display:block}',
+      '#' + PANEL_ID + ' .iu-ring{position:absolute;inset:-3px;border-radius:50%;',
+      'border:2px solid transparent;border-top-color:#fff;opacity:0;pointer-events:none}',
+      '@keyframes iu-spin{to{transform:rotate(360deg)}}',
+      '#' + PANEL_ID + ' .iu-toast{position:absolute;right:calc(100% + 8px);bottom:50%;',
+      'transform:translate(6px,50%);white-space:nowrap;background:rgba(0,0,0,.82);color:#fff;',
+      'font:12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;',
+      'padding:6px 10px;border-radius:8px;pointer-events:none;opacity:0;',
+      'transition:opacity .2s ease,transform .2s ease;max-width:280px;',
+      'overflow:hidden;text-overflow:ellipsis}',
+      '#' + PANEL_ID + ' .iu-toast.is-visible{opacity:1;transform:translate(0,50%)}',
+      '#' + PANEL_ID + ' .iu-toast.is-error{background:rgba(176,0,32,.92)}',
+      '#' + PANEL_ID + ' input[type="file"]{display:none}',
     ].join('');
     doc.head.appendChild(style);
   }
@@ -713,86 +719,178 @@
     handle.addEventListener('touchstart', start, { passive: false });
   }
 
+  function enableFabDragging(panel, win) {
+    const savedPosition = loadSavedPosition(win);
+    if (savedPosition) applyPanelPosition(panel, savedPosition);
+
+    let dragState = null;
+    let moved = false;
+
+    function cleanup() {
+      win.removeEventListener('mousemove', move, true);
+      win.removeEventListener('mouseup', stop, true);
+      win.removeEventListener('touchmove', move, true);
+      win.removeEventListener('touchend', stop, true);
+      win.removeEventListener('touchcancel', stop, true);
+    }
+
+    function move(event) {
+      if (!dragState) return;
+      const point = getPointerPoint(event);
+      const dx = point.x - dragState.startX;
+      const dy = point.y - dragState.startY;
+      if (!moved && (dx * dx + dy * dy) < 16) return;
+      moved = true;
+      if (typeof event.preventDefault === 'function') event.preventDefault();
+      const position = calculateDraggedPanelPosition({
+        pointerX: point.x,
+        pointerY: point.y,
+        offsetX: dragState.offsetX,
+        offsetY: dragState.offsetY,
+        panelWidth: dragState.panelWidth,
+        panelHeight: dragState.panelHeight,
+        viewportWidth: win.innerWidth || dragState.viewportWidth,
+        viewportHeight: win.innerHeight || dragState.viewportHeight,
+        margin: 8,
+      });
+      applyPanelPosition(panel, position);
+      dragState.lastPosition = position;
+    }
+
+    function stop() {
+      if (!dragState) return;
+      if (moved && dragState.lastPosition) savePosition(win, dragState.lastPosition);
+      panel.classList.remove('is-moving');
+      dragState = null;
+      if (moved) {
+        panel._recentDrag = true;
+        setTimeout(function () { panel._recentDrag = false; }, 0);
+      }
+      moved = false;
+      cleanup();
+    }
+
+    function start(event) {
+      if (event.button !== undefined && event.button !== 0) return;
+      const point = getPointerPoint(event);
+      const rect = panel.getBoundingClientRect();
+      dragState = {
+        startX: point.x,
+        startY: point.y,
+        offsetX: point.x - rect.left,
+        offsetY: point.y - rect.top,
+        panelWidth: rect.width,
+        panelHeight: rect.height,
+        viewportWidth: win.innerWidth || rect.right,
+        viewportHeight: win.innerHeight || rect.bottom,
+        lastPosition: { left: rect.left, top: rect.top },
+      };
+      panel.classList.add('is-moving');
+      win.addEventListener('mousemove', move, true);
+      win.addEventListener('mouseup', stop, true);
+      win.addEventListener('touchmove', move, true);
+      win.addEventListener('touchend', stop, true);
+      win.addEventListener('touchcancel', stop, true);
+    }
+
+    panel.addEventListener('mousedown', start);
+    panel.addEventListener('touchstart', start, { passive: false });
+  }
+
   function createPanel(doc, win) {
     const existing = doc.getElementById(PANEL_ID);
     if (existing) return existing;
 
     injectStyles(doc);
 
-    const panel = doc.createElement('section');
+    const panel = doc.createElement('button');
     panel.id = PANEL_ID;
+    panel.type = 'button';
     const text = getPanelText();
+    panel.setAttribute('aria-label', text.title + '：' + text.tooltip);
+    panel.title = text.tooltip;
     panel.innerHTML = [
-      '<div class="iu-head"><span>' + text.title + '</span><button class="iu-close" type="button" title="' + text.closeTitle + '">x</button></div>',
-      '<div class="iu-body">',
-      '<div class="iu-drop" tabindex="0">' + text.dropText + '</div>',
-      '<div class="iu-actions">',
-      '<button class="iu-primary" type="button">' + text.pickButton + '</button>',
-      '<button type="button" class="iu-upload">' + text.detectButton + '</button>',
-      '</div>',
-      '<div class="iu-status">' + text.waiting + '</div>',
+      '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">',
+      '<path fill="currentColor" d="M19.35 10.04A7.49 7.49 0 0 0 12 4a7.5 7.5 0 0 0-6.98 4.76A5.5 5.5 0 0 0 5.5 20H19a4.5 4.5 0 0 0 .35-9.96zM13 13v4h-2v-4H8l4-4 4 4h-3z"/>',
+      '</svg>',
+      '<span class="iu-ring"></span>',
+      '<span class="iu-toast"></span>',
       '<input type="file" accept="image/*,.heic,.heif" multiple>',
-      '</div>',
     ].join('');
 
-    const head = panel.querySelector('.iu-head');
-    const drop = panel.querySelector('.iu-drop');
     const picker = panel.querySelector('input[type="file"]');
-    const pickButton = panel.querySelector('.iu-primary');
-    const findButton = panel.querySelector('.iu-upload');
-    const closeButton = panel.querySelector('.iu-close');
-    const statusEl = panel.querySelector('.iu-status');
+    const toast = panel.querySelector('.iu-toast');
+    let toastTimer = null;
 
-    enablePanelDragging(panel, head, win);
-    enablePanelResizePersistence(panel, win);
+    enableFabDragging(panel, win);
 
     function status(message, isError) {
-      statusEl.textContent = message;
-      statusEl.classList.toggle('is-error', Boolean(isError));
+      toast.textContent = message;
+      toast.classList.toggle('is-error', Boolean(isError));
+      toast.classList.add('is-visible');
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(function () {
+        toast.classList.remove('is-visible');
+      }, isError ? 6000 : 2800);
       if (isError) console.warn(LOG_PREFIX, message);
       else console.log(LOG_PREFIX, message);
     }
 
     async function send(files) {
-      status(describeFiles(files));
-      await uploadViaICloudPage(files, doc, win, status);
+      const images = filterImageFiles(files);
+      if (!images.length) {
+        status('只能上传图片', true);
+        return;
+      }
+      panel.classList.add('is-busy');
+      try {
+        await uploadViaICloudPage(files, doc, win, status);
+      } finally {
+        panel.classList.remove('is-busy');
+      }
     }
 
-    pickButton.addEventListener('click', function () {
+    panel.addEventListener('click', function (event) {
+      // Suppress the click that follows a drag.
+      if (panel._recentDrag) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (event.target === picker) return;
       picker.click();
     });
 
-    picker.addEventListener('change', function () {
-      send(picker.files);
-      picker.value = '';
-    });
-
-    findButton.addEventListener('click', async function () {
-      status('正在检测 iCloud 上传控件...');
+    panel.addEventListener('contextmenu', async function (event) {
+      // Right-click: quick detection debug.
+      event.preventDefault();
+      status('检测 iCloud 上传控件…');
       let found = findICloudFileInput(doc);
       if (!found) {
         clickPossibleUploadTrigger(doc);
         found = await waitForICloudFileInput(doc, 3000);
       }
-      status(found ? '已找到 iCloud 上传控件。' : '暂未找到上传控件。', !found);
+      status(found ? '已找到 iCloud 上传控件' : '未找到上传控件', !found);
     });
 
-    closeButton.addEventListener('click', function () {
-      panel.remove();
+    picker.addEventListener('change', function () {
+      const files = picker.files;
+      picker.value = '';
+      send(files);
     });
 
-    drop.addEventListener('dragover', function (event) {
+    panel.addEventListener('dragover', function (event) {
       event.preventDefault();
-      drop.classList.add('is-dragging');
+      panel.classList.add('is-dragging');
     });
 
-    drop.addEventListener('dragleave', function () {
-      drop.classList.remove('is-dragging');
+    panel.addEventListener('dragleave', function () {
+      panel.classList.remove('is-dragging');
     });
 
-    drop.addEventListener('drop', function (event) {
+    panel.addEventListener('drop', function (event) {
       event.preventDefault();
-      drop.classList.remove('is-dragging');
+      panel.classList.remove('is-dragging');
       send(event.dataTransfer && event.dataTransfer.files);
     });
 
