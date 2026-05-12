@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.3.0
+// @version      1.4.0
 // @description  Adds a paste, drag-and-drop, and quick-pick upload panel to iCloud Photos on the web.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
 // @match        https://www.icloud.com.cn/photos*
+// @match        https://www.icloud.com/applications/photos*
+// @match        https://www.icloud.com.cn/applications/photos*
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
@@ -45,6 +47,12 @@
   function pad2(value) {
     return String(value).padStart(2, '0');
   }
+
+  function pad3(value) {
+    return String(value).padStart(3, '0');
+  }
+
+  let imageSequence = 0;
 
   function getImageExtension(type, fallbackName) {
     const byType = {
@@ -95,6 +103,7 @@
   function createNamedImageFile(blob, now) {
     const date = now || new Date();
     const ext = getImageExtension(blob && blob.type, blob && blob.name);
+    imageSequence = (imageSequence + 1) & 0xffff;
     const name = [
       'icloud-screenshot-',
       date.getUTCFullYear(),
@@ -104,6 +113,10 @@
       pad2(date.getUTCHours()),
       pad2(date.getUTCMinutes()),
       pad2(date.getUTCSeconds()),
+      '-',
+      pad3(date.getUTCMilliseconds()),
+      '-',
+      imageSequence.toString(16).padStart(4, '0'),
       '.',
       ext,
     ].join('');
@@ -398,8 +411,12 @@
 
     input.files = transfer.files;
     const EventCtor = (win && win.Event) || root.Event;
-    const inputEvent = typeof EventCtor === 'function' ? new EventCtor('input', { bubbles: true }) : { type: 'input' };
-    const changeEvent = typeof EventCtor === 'function' ? new EventCtor('change', { bubbles: true }) : { type: 'change' };
+    const inputEvent = typeof EventCtor === 'function'
+      ? new EventCtor('input', { bubbles: true, composed: true })
+      : { type: 'input' };
+    const changeEvent = typeof EventCtor === 'function'
+      ? new EventCtor('change', { bubbles: true, composed: true })
+      : { type: 'change' };
     input.dispatchEvent(inputEvent);
     input.dispatchEvent(changeEvent);
     return true;
@@ -501,7 +518,7 @@
       return false;
     }
 
-    const transferred = transferFilesToInput(input, images, win);
+    const transferred = transferFilesToInput(input, images, input.ownerDocument && input.ownerDocument.defaultView || win);
     if (!transferred) {
       status('浏览器阻止了自动交接。请使用“选择图片”按钮手动选择。', true);
       return false;
@@ -784,16 +801,66 @@
       if (!files.length) return;
       event.preventDefault();
       send(files);
-    });
+    }, true);
 
     doc.body.appendChild(panel);
     return panel;
   }
 
+  function isInICloudPhotosAppFrame(win) {
+    try {
+      const loc = win && win.location;
+      if (!loc) return false;
+      // The actual Photos app is loaded inside an iframe at
+      // /applications/photos3/current/<locale>/index.html.
+      // The outer shell at /photos is just a launcher.
+      return /^\/applications\/photos/i.test(loc.pathname || '');
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function observeAndRemount(doc, win) {
+    const MutationObserverCtor = (win && win.MutationObserver) || root.MutationObserver;
+    if (typeof MutationObserverCtor !== 'function') return;
+    const observer = new MutationObserverCtor(function () {
+      if (doc.body && !doc.getElementById(PANEL_ID)) {
+        try {
+          createPanel(doc, win);
+        } catch (error) {
+          console.warn(LOG_PREFIX, 'Remount failed:', error && error.message ? error.message : error);
+        }
+      }
+    });
+    const target = doc.body || doc.documentElement;
+    if (target) observer.observe(target, { childList: true, subtree: false });
+  }
+
+  function mountWhenReady(doc, win) {
+    if (doc.body) {
+      createPanel(doc, win);
+      observeAndRemount(doc, win);
+      return;
+    }
+    doc.addEventListener('DOMContentLoaded', function () {
+      if (!doc.body) return;
+      createPanel(doc, win);
+      observeAndRemount(doc, win);
+    }, { once: true });
+  }
+
   function bootstrap() {
     const doc = root.document;
-    if (!doc || !doc.body) return;
-    createPanel(doc, root.window || root);
+    if (!doc) return;
+    const win = root.window || root;
+    if (!isInICloudPhotosAppFrame(win)) {
+      // Outer shell frame (or unrelated page). The inner iframe instance will mount the panel.
+      if (typeof console !== 'undefined' && console.debug) {
+        console.debug(LOG_PREFIX, 'Skipping panel mount in non-app frame:', (win.location || {}).href);
+      }
+      return;
+    }
+    mountWhenReady(doc, win);
   }
 
   return {
@@ -808,6 +875,7 @@
     findICloudFileInput,
     getConvertedJpegFileName,
     getPanelText,
+    isInICloudPhotosAppFrame,
     isJpegLikeFile,
     isImageLikeFile,
     normalizeFilesForICloudWebUpload,
