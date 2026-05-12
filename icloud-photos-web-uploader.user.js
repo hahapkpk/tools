@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.7.0
+// @version      1.7.1
 // @description  Adds a paste, drag-and-drop, and quick-pick upload panel to iCloud Photos on the web.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -1015,19 +1015,65 @@
       send(event.dataTransfer && event.dataTransfer.files);
     });
 
-    doc.addEventListener('paste', function (event) {
-      const files = extractImageFilesFromPaste(event);
-      if (!files.length) return;
-      event.preventDefault();
-      send(files);
-    }, true);
+    // Expose the current panel's upload handler so the shared paste listener
+    // (installed once by installPasteListener) can dispatch to the active panel
+    // even after a MutationObserver re-mount swaps the send closure.
+    panel._handlePasteUpload = send;
 
     doc.body.appendChild(panel);
     return panel;
   }
 
-  function isInICloudPhotosAppFrame(win) {
-    try {
+  let pasteListenerInstalled = false;
+
+  function installPasteListener(doc, win) {
+    if (pasteListenerInstalled) return;
+    pasteListenerInstalled = true;
+
+    function dispatchPaste(event) {
+      // Ignore pastes targeted at native editable fields (text inputs, textareas,
+      // contenteditable) so we do not hijack users typing into iCloud search or rename dialogs.
+      const target = event.target;
+      if (target && typeof target.matches === 'function') {
+        try {
+          if (target.matches('input:not([type]), input[type="text"], input[type="search"], input[type="email"], input[type="url"], input[type="password"], textarea')) {
+            return;
+          }
+        } catch (error) {
+          // ignore selector errors and continue
+        }
+        if (target.isContentEditable) return;
+      }
+
+      const files = extractImageFilesFromPaste(event);
+      if (!files.length) return;
+      const panel = doc.getElementById(PANEL_ID);
+      if (!panel || typeof panel._handlePasteUpload !== 'function') return;
+      event.preventDefault();
+      try {
+        panel._handlePasteUpload(files);
+      } catch (error) {
+        console.warn(LOG_PREFIX, 'Paste handler failed:', error && error.message ? error.message : error);
+      }
+    }
+
+    // Listen on multiple targets in capture phase so that we get the event
+    // regardless of which layer iCloud's own code subscribed to.
+    const targets = [];
+    if (win && typeof win.addEventListener === 'function') targets.push(win);
+    if (doc && typeof doc.addEventListener === 'function' && doc !== win) targets.push(doc);
+    if (doc && doc.body && typeof doc.body.addEventListener === 'function') targets.push(doc.body);
+
+    targets.forEach(function (target) {
+      try {
+        target.addEventListener('paste', dispatchPaste, true);
+      } catch (error) {
+        // ignore registration failures
+      }
+    });
+  }
+
+  function isInICloudPhotosAppFrame(win) {    try {
       const loc = win && win.location;
       if (!loc) return false;
       // The actual Photos app is loaded inside an iframe at
@@ -1058,12 +1104,14 @@
   function mountWhenReady(doc, win) {
     if (doc.body) {
       createPanel(doc, win);
+      installPasteListener(doc, win);
       observeAndRemount(doc, win);
       return;
     }
     doc.addEventListener('DOMContentLoaded', function () {
       if (!doc.body) return;
       createPanel(doc, win);
+      installPasteListener(doc, win);
       observeAndRemount(doc, win);
     }, { once: true });
   }
