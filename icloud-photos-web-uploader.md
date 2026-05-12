@@ -16,6 +16,7 @@ https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader
 2. Install and enable `icloud-photos-web-uploader.user.js`.
 3. Open iCloud Photos.
 4. Use the floating panel to pick images, drag images, or paste a screenshot.
+5. Drag the title bar to move the panel, or drag the lower-right corner to resize it.
 
 The script does not store Apple ID credentials or call private iCloud APIs. It hands image files to the upload control already present on the iCloud Photos page.
 

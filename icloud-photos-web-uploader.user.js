@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.1.0
+// @version      1.2.0
 // @description  Adds a paste, drag-and-drop, and quick-pick upload panel to iCloud Photos on the web.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -25,9 +25,22 @@
   const PANEL_ID = 'icloud-web-uploader-panel';
   const LOG_PREFIX = '[iCloud Photos Web Uploader]';
   const POSITION_KEY = 'icloud-web-uploader-position';
+  const SIZE_KEY = 'icloud-web-uploader-size';
   const IMAGE_EXTENSIONS = /\.(apng|avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i;
   const JPEG_EXTENSIONS = /\.jpe?g$/i;
   const JPEG_QUALITY = 0.92;
+  const PANEL_TEXT = {
+    title: 'iCloud 快速上传',
+    closeTitle: '隐藏',
+    dropText: '拖拽图片到这里，或粘贴截图/选择文件。',
+    pickButton: '选择图片',
+    detectButton: '检测',
+    waiting: '等待图片。',
+  };
+
+  function getPanelText() {
+    return Object.assign({}, PANEL_TEXT);
+  }
 
   function pad2(value) {
     return String(value).padStart(2, '0');
@@ -233,29 +246,29 @@
         continue;
       }
 
-      status('Converting for iCloud.com JPEG upload: ' + (file.name || 'image'));
+      status('正在转换为 iCloud.com 支持的 JPEG：' + (file.name || '图片'));
       try {
         normalized.push(await convert(file, win));
         convertedCount += 1;
       } catch (error) {
         throw new Error(
-          'Could not convert "' + (file.name || 'image') + '" to JPEG. ' +
-            'This browser may not decode the source format. Details: ' + error.message
+          '无法将“' + (file.name || '图片') + '”转换为 JPEG。' +
+            '当前浏览器可能无法解码这个源格式。详情：' + error.message
         );
       }
     }
 
     if (convertedCount) {
-      status('Converted ' + convertedCount + ' image(s) to JPEG for iCloud.com upload.');
+      status('已将 ' + convertedCount + ' 张图片转换为 JPEG。');
     }
 
     return normalized;
   }
 
   function describeFiles(files) {
-    if (!files.length) return 'No image files selected.';
-    if (files.length === 1) return 'Ready: ' + files[0].name;
-    return 'Ready: ' + files.length + ' images';
+    if (!files.length) return '没有选择图片文件。';
+    if (files.length === 1) return '已准备：' + files[0].name;
+    return '已准备：' + files.length + ' 张图片';
   }
 
   function clamp(value, min, max) {
@@ -269,6 +282,18 @@
     return {
       left: clamp(options.pointerX - options.offsetX, margin, maxLeft),
       top: clamp(options.pointerY - options.offsetY, margin, maxTop),
+    };
+  }
+
+  function calculatePanelSize(options) {
+    const margin = typeof options.margin === 'number' ? options.margin : 8;
+    const minWidth = typeof options.minWidth === 'number' ? options.minWidth : 260;
+    const minHeight = typeof options.minHeight === 'number' ? options.minHeight : 220;
+    const maxWidth = Math.max(minWidth, options.viewportWidth - margin * 2);
+    const maxHeight = Math.max(minHeight, options.viewportHeight - margin * 2);
+    return {
+      width: clamp(options.width, minWidth, maxWidth),
+      height: clamp(options.height, minHeight, maxHeight),
     };
   }
 
@@ -374,7 +399,7 @@
   async function uploadViaICloudPage(files, doc, win, status) {
     let images = filterImageFiles(files);
     if (!images.length) {
-      status('Only image files can be uploaded here.', true);
+      status('这里只能上传图片文件。', true);
       return false;
     }
 
@@ -387,23 +412,23 @@
 
     let input = findICloudFileInput(doc);
     if (!input) {
-      status('Opening iCloud upload control...');
+      status('正在打开 iCloud 上传控件...');
       clickPossibleUploadTrigger(doc);
       input = await waitForICloudFileInput(doc, 3000);
     }
 
     if (!input) {
-      status('Could not find iCloud upload control. Click the native iCloud upload button once, then try again.', true);
+      status('找不到 iCloud 上传控件。请先点击 iCloud 页面原生上传按钮一次，然后重试。', true);
       return false;
     }
 
     const transferred = transferFilesToInput(input, images, win);
     if (!transferred) {
-      status('Browser blocked automatic handoff. Use the Pick button and select the images.', true);
+      status('浏览器阻止了自动交接。请使用“选择图片”按钮手动选择。', true);
       return false;
     }
 
-    status('Sent to iCloud upload queue: ' + images.length + ' image(s).');
+    status('已发送到 iCloud 上传队列：' + images.length + ' 张图片。');
     return true;
   }
 
@@ -413,10 +438,11 @@
     const style = doc.createElement('style');
     style.id = PANEL_ID + '-style';
     style.textContent = [
-      '#' + PANEL_ID + '{position:fixed;right:18px;bottom:18px;z-index:2147483647;width:280px;',
+      '#' + PANEL_ID + '{position:fixed;right:18px;bottom:18px;z-index:2147483647;width:320px;',
       'font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#1d1d1f;',
       'background:rgba(255,255,255,.96);border:1px solid rgba(0,0,0,.14);border-radius:10px;',
-      'box-shadow:0 10px 30px rgba(0,0,0,.22);overflow:hidden;touch-action:none}',
+      'box-shadow:0 10px 30px rgba(0,0,0,.22);overflow:auto;touch-action:none;',
+      'resize:both;min-width:260px;min-height:220px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px)}',
       '#' + PANEL_ID + '.is-moving{user-select:none}',
       '#' + PANEL_ID + ' .iu-head{display:flex;align-items:center;justify-content:space-between;',
       'padding:10px 12px;background:#f5f5f7;font-weight:700;cursor:move}',
@@ -465,6 +491,60 @@
     } catch (error) {
       // Ignore storage failures; dragging still works for the current page.
     }
+  }
+
+  function loadSavedSize(win) {
+    try {
+      const raw = win.localStorage && win.localStorage.getItem(SIZE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (typeof parsed.width !== 'number' || typeof parsed.height !== 'number') return null;
+      return parsed;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function saveSize(win, size) {
+    try {
+      if (win.localStorage) win.localStorage.setItem(SIZE_KEY, JSON.stringify(size));
+    } catch (error) {
+      // Ignore storage failures; resizing still works for the current page.
+    }
+  }
+
+  function applyPanelSize(panel, size) {
+    panel.style.width = size.width + 'px';
+    panel.style.height = size.height + 'px';
+  }
+
+  function enablePanelResizePersistence(panel, win) {
+    const savedSize = loadSavedSize(win);
+    if (savedSize) {
+      applyPanelSize(
+        panel,
+        calculatePanelSize({
+          width: savedSize.width,
+          height: savedSize.height,
+          viewportWidth: win.innerWidth || savedSize.width,
+          viewportHeight: win.innerHeight || savedSize.height,
+          margin: 8,
+        })
+      );
+    }
+
+    const ResizeObserverCtor = win.ResizeObserver || root.ResizeObserver;
+    if (typeof ResizeObserverCtor !== 'function') return;
+
+    const observer = new ResizeObserverCtor(function (entries) {
+      const entry = entries && entries[0];
+      if (!entry || !entry.contentRect) return;
+      saveSize(win, {
+        width: Math.round(entry.contentRect.width),
+        height: Math.round(entry.contentRect.height),
+      });
+    });
+    observer.observe(panel);
   }
 
   function applyPanelPosition(panel, position) {
@@ -545,15 +625,16 @@
 
     const panel = doc.createElement('section');
     panel.id = PANEL_ID;
+    const text = getPanelText();
     panel.innerHTML = [
-      '<div class="iu-head"><span>iCloud quick upload</span><button class="iu-close" type="button" title="Hide">x</button></div>',
+      '<div class="iu-head"><span>' + text.title + '</span><button class="iu-close" type="button" title="' + text.closeTitle + '">x</button></div>',
       '<div class="iu-body">',
-      '<div class="iu-drop" tabindex="0">Drop images here, paste a screenshot, or pick files.</div>',
+      '<div class="iu-drop" tabindex="0">' + text.dropText + '</div>',
       '<div class="iu-actions">',
-      '<button class="iu-primary" type="button">Pick images</button>',
-      '<button type="button" class="iu-upload">Detect</button>',
+      '<button class="iu-primary" type="button">' + text.pickButton + '</button>',
+      '<button type="button" class="iu-upload">' + text.detectButton + '</button>',
       '</div>',
-      '<div class="iu-status">Waiting for images.</div>',
+      '<div class="iu-status">' + text.waiting + '</div>',
       '<input type="file" accept="image/*,.heic,.heif" multiple>',
       '</div>',
     ].join('');
@@ -567,6 +648,7 @@
     const statusEl = panel.querySelector('.iu-status');
 
     enablePanelDragging(panel, head, win);
+    enablePanelResizePersistence(panel, win);
 
     function status(message, isError) {
       statusEl.textContent = message;
@@ -590,13 +672,13 @@
     });
 
     findButton.addEventListener('click', async function () {
-      status('Searching for iCloud upload control...');
+      status('正在检测 iCloud 上传控件...');
       let found = findICloudFileInput(doc);
       if (!found) {
         clickPossibleUploadTrigger(doc);
         found = await waitForICloudFileInput(doc, 3000);
       }
-      status(found ? 'iCloud upload control is available.' : 'Upload control not found yet.', !found);
+      status(found ? '已找到 iCloud 上传控件。' : '暂未找到上传控件。', !found);
     });
 
     closeButton.addEventListener('click', function () {
@@ -639,11 +721,13 @@
     bootstrap,
     createNamedImageFile,
     calculateDraggedPanelPosition,
+    calculatePanelSize,
     convertImageFileToJpeg,
     extractImageFilesFromPaste,
     filterImageFiles,
     findICloudFileInput,
     getConvertedJpegFileName,
+    getPanelText,
     isJpegLikeFile,
     isImageLikeFile,
     normalizeFilesForICloudWebUpload,

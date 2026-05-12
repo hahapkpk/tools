@@ -110,7 +110,7 @@ test('waits for iCloud to create its file input after clicking upload', async ()
   assert.equal(uploaded, true);
   assert.deepEqual(input.files, [image]);
   assert.deepEqual(events, ['input', 'change']);
-  assert.match(messages.at(-1), /Sent to iCloud upload queue/);
+  assert.match(messages.at(-1), /已发送到 iCloud 上传队列/);
 });
 
 test('calculates draggable panel position and clamps it inside viewport', () => {
@@ -154,5 +154,27 @@ test('normalizes non-JPEG images through a converter before upload', async () =>
   );
 
   assert.deepEqual(files, [jpg, convertedPng]);
-  assert.match(seenMessages.join('\n'), /Converted 1 image/);
+  assert.match(seenMessages.join('\n'), /已将 1 张图片转换为 JPEG/);
+});
+
+test('uses Simplified Chinese panel labels', () => {
+  const text = helpers.getPanelText();
+
+  assert.equal(text.title, 'iCloud 快速上传');
+  assert.equal(text.dropText, '拖拽图片到这里，或粘贴截图/选择文件。');
+  assert.equal(text.pickButton, '选择图片');
+  assert.equal(text.detectButton, '检测');
+  assert.equal(text.waiting, '等待图片。');
+});
+
+test('calculates resizable panel size and clamps it inside viewport', () => {
+  const size = helpers.calculatePanelSize({
+    width: 900,
+    height: 80,
+    viewportWidth: 640,
+    viewportHeight: 420,
+    margin: 8,
+  });
+
+  assert.deepEqual(size, { width: 624, height: 220 });
 });
