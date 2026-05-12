@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.0.0
+// @version      1.0.1
 // @description  Adds a paste, drag-and-drop, and quick-pick upload panel to iCloud Photos on the web.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -118,8 +118,27 @@
     return 'Ready: ' + files.length + ' images';
   }
 
+  function queryAllDeep(rootNode, selector) {
+    const results = [];
+    const seen = new Set();
+
+    function walk(node) {
+      if (!node || seen.has(node) || typeof node.querySelectorAll !== 'function') return;
+      seen.add(node);
+
+      results.push.apply(results, Array.from(node.querySelectorAll(selector)));
+
+      Array.from(node.querySelectorAll('*')).forEach(function (element) {
+        if (element.shadowRoot) walk(element.shadowRoot);
+      });
+    }
+
+    walk(rootNode);
+    return results;
+  }
+
   function findICloudFileInput(doc) {
-    const inputs = Array.from(doc.querySelectorAll('input[type="file"]')).filter(function (input) {
+    const inputs = queryAllDeep(doc, 'input[type="file"]').filter(function (input) {
       return !(typeof input.closest === 'function' && input.closest('#' + PANEL_ID));
     });
     if (!inputs.length) return null;
@@ -130,6 +149,25 @@
     });
 
     return preferred || inputs[0];
+  }
+
+  function sleep(ms) {
+    return new Promise(function (resolve) {
+      setTimeout(resolve, ms);
+    });
+  }
+
+  async function waitForICloudFileInput(doc, timeoutMs, intervalMs) {
+    const deadline = Date.now() + (timeoutMs || 2500);
+    const interval = intervalMs || 80;
+    let input = findICloudFileInput(doc);
+
+    while (!input && Date.now() < deadline) {
+      await sleep(interval);
+      input = findICloudFileInput(doc);
+    }
+
+    return input;
   }
 
   function isUploadTrigger(element) {
@@ -150,9 +188,7 @@
   }
 
   function clickPossibleUploadTrigger(doc) {
-    const candidates = Array.from(
-      doc.querySelectorAll('button, [role="button"], [aria-label], [title]')
-    ).filter(function (element) {
+    const candidates = queryAllDeep(doc, 'button, [role="button"], [aria-label], [title]').filter(function (element) {
       return !(typeof element.closest === 'function' && element.closest('#' + PANEL_ID));
     });
     const trigger = candidates.find(isUploadTrigger);
@@ -173,12 +209,15 @@
     });
 
     input.files = transfer.files;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.dispatchEvent(new Event('change', { bubbles: true }));
+    const EventCtor = (win && win.Event) || root.Event;
+    const inputEvent = typeof EventCtor === 'function' ? new EventCtor('input', { bubbles: true }) : { type: 'input' };
+    const changeEvent = typeof EventCtor === 'function' ? new EventCtor('change', { bubbles: true }) : { type: 'change' };
+    input.dispatchEvent(inputEvent);
+    input.dispatchEvent(changeEvent);
     return true;
   }
 
-  function uploadViaICloudPage(files, doc, win, status) {
+  async function uploadViaICloudPage(files, doc, win, status) {
     const images = filterImageFiles(files);
     if (!images.length) {
       status('Only image files can be uploaded here.', true);
@@ -187,12 +226,13 @@
 
     let input = findICloudFileInput(doc);
     if (!input) {
+      status('Opening iCloud upload control...');
       clickPossibleUploadTrigger(doc);
-      input = findICloudFileInput(doc);
+      input = await waitForICloudFileInput(doc, 3000);
     }
 
     if (!input) {
-      status('Could not find iCloud upload control. Click iCloud upload once, then try again.', true);
+      status('Could not find iCloud upload control. Click the native iCloud upload button once, then try again.', true);
       return false;
     }
 
@@ -224,8 +264,9 @@
       '#' + PANEL_ID + ' .iu-drop.is-dragging{border-color:#007aff;background:#eef6ff}',
       '#' + PANEL_ID + ' .iu-actions{display:flex;gap:8px;margin-top:10px}',
       '#' + PANEL_ID + ' button{appearance:none;border:1px solid rgba(0,0,0,.16);border-radius:7px;',
-      'background:#fff;padding:7px 10px;cursor:pointer;font:inherit}',
+      'background:#fff;color:#1d1d1f;padding:7px 10px;cursor:pointer;font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;text-align:center;white-space:nowrap}',
       '#' + PANEL_ID + ' button.iu-primary{background:#007aff;border-color:#007aff;color:#fff;flex:1}',
+      '#' + PANEL_ID + ' button.iu-upload{min-width:74px}',
       '#' + PANEL_ID + ' .iu-status{margin-top:10px;color:#515154;word-break:break-word}',
       '#' + PANEL_ID + ' .iu-status.is-error{color:#b00020}',
       '#' + PANEL_ID + ' .iu-close{border:0;background:transparent;padding:0 4px;font-size:18px;line-height:1}',
@@ -248,7 +289,7 @@
       '<div class="iu-drop" tabindex="0">Drop images here, paste a screenshot, or pick files.</div>',
       '<div class="iu-actions">',
       '<button class="iu-primary" type="button">Pick images</button>',
-      '<button type="button" class="iu-upload">Find iCloud upload</button>',
+      '<button type="button" class="iu-upload">Detect</button>',
       '</div>',
       '<div class="iu-status">Waiting for images.</div>',
       '<input type="file" accept="image/*,.heic,.heif" multiple>',
@@ -269,9 +310,9 @@
       else console.log(LOG_PREFIX, message);
     }
 
-    function send(files) {
+    async function send(files) {
       status(describeFiles(files));
-      uploadViaICloudPage(files, doc, win, status);
+      await uploadViaICloudPage(files, doc, win, status);
     }
 
     pickButton.addEventListener('click', function () {
@@ -283,8 +324,13 @@
       picker.value = '';
     });
 
-    findButton.addEventListener('click', function () {
-      const found = findICloudFileInput(doc) || (clickPossibleUploadTrigger(doc) && findICloudFileInput(doc));
+    findButton.addEventListener('click', async function () {
+      status('Searching for iCloud upload control...');
+      let found = findICloudFileInput(doc);
+      if (!found) {
+        clickPossibleUploadTrigger(doc);
+        found = await waitForICloudFileInput(doc, 3000);
+      }
       status(found ? 'iCloud upload control is available.' : 'Upload control not found yet.', !found);
     });
 
@@ -333,5 +379,6 @@
     isImageLikeFile,
     transferFilesToInput,
     uploadViaICloudPage,
+    waitForICloudFileInput,
   };
 });

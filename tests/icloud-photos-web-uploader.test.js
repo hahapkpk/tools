@@ -56,3 +56,59 @@ test('ignores the helper panel file input when searching for iCloud upload input
 
   assert.equal(helpers.findICloudFileInput(doc), icloudInput);
 });
+
+test('waits for iCloud to create its file input after clicking upload', async () => {
+  const image = { name: 'shot.png', type: 'image/png' };
+  const events = [];
+  let clicked = false;
+  let inserted = false;
+  const input = {
+    multiple: true,
+    files: null,
+    getAttribute: () => 'image/*',
+    closest: () => null,
+    dispatchEvent: (event) => events.push(event.type),
+  };
+  const uploadButton = {
+    getAttribute: (name) => (name === 'aria-label' ? 'Upload' : ''),
+    textContent: '',
+    closest: () => null,
+    click: () => {
+      clicked = true;
+      setTimeout(() => {
+        inserted = true;
+      }, 5);
+    },
+  };
+  const doc = {
+    querySelectorAll: (selector) => {
+      if (selector === 'input[type="file"]') return inserted ? [input] : [];
+      return [uploadButton];
+    },
+  };
+  class FakeDataTransfer {
+    constructor() {
+      this.files = [];
+      this.items = {
+        add: (file) => {
+          this.files.push(file);
+        },
+      };
+    }
+  }
+  const win = {
+    DataTransfer: FakeDataTransfer,
+    Event,
+  };
+  const messages = [];
+
+  const uploaded = await helpers.uploadViaICloudPage([image], doc, win, (message) => {
+    messages.push(message);
+  });
+
+  assert.equal(clicked, true);
+  assert.equal(uploaded, true);
+  assert.deepEqual(input.files, [image]);
+  assert.deepEqual(events, ['input', 'change']);
+  assert.match(messages.at(-1), /Sent to iCloud upload queue/);
+});
