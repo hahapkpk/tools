@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.7.1
+// @version      1.7.2
 // @description  Adds a paste, drag-and-drop, and quick-pick upload panel to iCloud Photos on the web.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -433,12 +433,64 @@
     return null;
   }
 
+  function findActiveSidebarItem(doc) {
+    const ownPanel = doc.getElementById ? doc.getElementById(PANEL_ID) : null;
+    const allLabels = LIBRARY_SIDEBAR_LABELS.concat(PIVOT_SIDEBAR_LABELS, [
+      '隐藏', '最近删除', 'Hidden', 'Recently Deleted',
+    ]).map(normalizeLabelText);
+    const activeSelectors = [
+      '[aria-current="page"]',
+      '[aria-current="true"]',
+      '[aria-selected="true"]',
+      '.is-selected',
+      '.selected',
+      '.is-active',
+      '.active',
+    ];
+    for (let i = 0; i < activeSelectors.length; i += 1) {
+      const els = queryAllDeep(doc, activeSelectors[i]);
+      for (let j = 0; j < els.length; j += 1) {
+        const el = els[j];
+        if (ownPanel && typeof ownPanel.contains === 'function' && ownPanel.contains(el)) continue;
+        if (typeof el.click !== 'function') continue;
+        const text = normalizeLabelText(el.textContent);
+        if (!text) continue;
+        for (let k = 0; k < allLabels.length; k += 1) {
+          const label = allLabels[k];
+          if (text === label || text.indexOf(label + ' ') === 0 || text.indexOf(label) === 0) {
+            return el;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   async function softRefreshLibraryView(doc, win, options) {
     const opts = options || {};
-    const pivotDelay = typeof opts.pivotDelay === 'number' ? opts.pivotDelay : 220;
-    const library = findSidebarItem(doc, LIBRARY_SIDEBAR_LABELS);
-    const pivot = findSidebarItem(doc, PIVOT_SIDEBAR_LABELS);
-    if (!library || !pivot) return false;
+    const pivotDelay = typeof opts.pivotDelay === 'number' ? opts.pivotDelay : 180;
+
+    // Prefer returning to whatever view the user is currently on. If we cannot
+    // detect an active item, fall back to the library.
+    const original = findActiveSidebarItem(doc) || findSidebarItem(doc, LIBRARY_SIDEBAR_LABELS);
+    if (!original) return false;
+
+    const originalText = normalizeLabelText(original.textContent);
+
+    // Pick a pivot sidebar item that is NOT the currently active one so
+    // clicking it actually triggers a route change.
+    const pivotLabelPool = PIVOT_SIDEBAR_LABELS.concat(LIBRARY_SIDEBAR_LABELS);
+    let pivot = null;
+    for (let i = 0; i < pivotLabelPool.length; i += 1) {
+      const candidate = findSidebarItem(doc, [pivotLabelPool[i]]);
+      if (!candidate || candidate === original) continue;
+      const candidateText = normalizeLabelText(candidate.textContent);
+      if (candidateText && originalText && candidateText === originalText) continue;
+      pivot = candidate;
+      break;
+    }
+    if (!pivot) return false;
+
     try {
       pivot.click();
     } catch (error) {
@@ -446,7 +498,7 @@
     }
     await sleep(pivotDelay);
     try {
-      library.click();
+      original.click();
     } catch (error) {
       return false;
     }
@@ -1031,6 +1083,11 @@
     pasteListenerInstalled = true;
 
     function dispatchPaste(event) {
+      // The same paste event bubbles to window/document/body — each has our
+      // capture-phase listener. Dedupe by tagging the event once.
+      if (event.__iCloudUploaderPasteHandled) return;
+      event.__iCloudUploaderPasteHandled = true;
+
       // Ignore pastes targeted at native editable fields (text inputs, textareas,
       // contenteditable) so we do not hijack users typing into iCloud search or rename dialogs.
       const target = event.target;
@@ -1139,6 +1196,7 @@
     dropFilesOnICloudPage,
     extractImageFilesFromPaste,
     filterImageFiles,
+    findActiveSidebarItem,
     findICloudFileInput,
     findSidebarItem,
     getConvertedJpegFileName,
