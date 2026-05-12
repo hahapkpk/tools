@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.5.0
+// @version      1.6.0
 // @description  Adds a paste, drag-and-drop, and quick-pick upload panel to iCloud Photos on the web.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -549,6 +549,10 @@
       '#' + PANEL_ID + '.is-busy{background:linear-gradient(135deg,#8e8e93 0%,#48484a 100%);cursor:progress}',
       '#' + PANEL_ID + '.is-busy .iu-ring{animation:iu-spin 1s linear infinite;opacity:1}',
       '#' + PANEL_ID + ' svg{pointer-events:none;display:block}',
+      '#' + PANEL_ID + ' .iu-icon-refresh{display:none}',
+      '#' + PANEL_ID + '.is-pending-reload .iu-icon-upload{display:none}',
+      '#' + PANEL_ID + '.is-pending-reload .iu-icon-refresh{display:block}',
+      '#' + PANEL_ID + '.is-pending-reload{background:linear-gradient(135deg,#34c759 0%,#30b0c7 100%)}',
       '#' + PANEL_ID + ' .iu-ring{position:absolute;inset:-3px;border-radius:50%;',
       'border:2px solid transparent;border-top-color:#fff;opacity:0;pointer-events:none}',
       '@keyframes iu-spin{to{transform:rotate(360deg)}}',
@@ -810,8 +814,11 @@
     panel.setAttribute('aria-label', text.title + '：' + text.tooltip);
     panel.title = text.tooltip;
     panel.innerHTML = [
-      '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">',
+      '<svg class="iu-icon iu-icon-upload" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">',
       '<path fill="currentColor" d="M19.35 10.04A7.49 7.49 0 0 0 12 4a7.5 7.5 0 0 0-6.98 4.76A5.5 5.5 0 0 0 5.5 20H19a4.5 4.5 0 0 0 .35-9.96zM13 13v4h-2v-4H8l4-4 4 4h-3z"/>',
+      '</svg>',
+      '<svg class="iu-icon iu-icon-refresh" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">',
+      '<path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0 0 12 4a8 8 0 1 0 7.74 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>',
       '</svg>',
       '<span class="iu-ring"></span>',
       '<span class="iu-toast"></span>',
@@ -836,17 +843,57 @@
       else console.log(LOG_PREFIX, message);
     }
 
+    let pendingReload = null;
+
+    function doReload() {
+      clearPendingReload();
+      try {
+        if (win.location && typeof win.location.reload === 'function') {
+          win.location.reload();
+        }
+      } catch (error) {
+        console.warn(LOG_PREFIX, 'Reload failed:', error && error.message ? error.message : error);
+      }
+    }
+
+    function clearPendingReload() {
+      if (pendingReload) {
+        clearTimeout(pendingReload);
+        pendingReload = null;
+      }
+      panel.classList.remove('is-pending-reload');
+    }
+
+    function scheduleRefresh(delayMs) {
+      clearPendingReload();
+      panel.classList.add('is-pending-reload');
+      panel.title = '点击立即刷新图库';
+      pendingReload = setTimeout(function () {
+        pendingReload = null;
+        doReload();
+      }, delayMs);
+    }
+
     async function send(files) {
       const images = filterImageFiles(files);
       if (!images.length) {
         status('只能上传图片', true);
         return;
       }
+      // A new upload cancels any queued auto-refresh so we refresh only once at the end.
+      clearPendingReload();
       panel.classList.add('is-busy');
+      let uploaded = false;
       try {
-        await uploadViaICloudPage(files, doc, win, status);
+        uploaded = await uploadViaICloudPage(files, doc, win, status);
       } finally {
         panel.classList.remove('is-busy');
+      }
+      if (uploaded) {
+        const delay = Math.min(12000, Math.max(3000, (2 + images.length) * 1000));
+        const secs = Math.round(delay / 1000);
+        status('✓ 已发送 ' + images.length + ' 张，' + secs + ' 秒后自动刷新图库');
+        scheduleRefresh(delay);
       }
     }
 
@@ -858,6 +905,11 @@
         return;
       }
       if (event.target === picker) return;
+      if (pendingReload) {
+        event.preventDefault();
+        doReload();
+        return;
+      }
       picker.click();
     });
 
