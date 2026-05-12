@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.0.2
+// @version      1.1.0
 // @description  Adds a paste, drag-and-drop, and quick-pick upload panel to iCloud Photos on the web.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -26,6 +26,8 @@
   const LOG_PREFIX = '[iCloud Photos Web Uploader]';
   const POSITION_KEY = 'icloud-web-uploader-position';
   const IMAGE_EXTENSIONS = /\.(apng|avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i;
+  const JPEG_EXTENSIONS = /\.jpe?g$/i;
+  const JPEG_QUALITY = 0.92;
 
   function pad2(value) {
     return String(value).padStart(2, '0');
@@ -58,6 +60,23 @@
     const type = String(file.type || '').toLowerCase();
     if (type.startsWith('image/')) return true;
     return IMAGE_EXTENSIONS.test(String(file.name || ''));
+  }
+
+  function isJpegLikeFile(file) {
+    if (!file) return false;
+    const type = String(file.type || '').toLowerCase();
+    if (type === 'image/jpeg' || type === 'image/jpg') return true;
+    return JPEG_EXTENSIONS.test(String(file.name || ''));
+  }
+
+  function shouldConvertForICloudWeb(file) {
+    return isImageLikeFile(file) && !isJpegLikeFile(file);
+  }
+
+  function getConvertedJpegFileName(name) {
+    const sourceName = String(name || 'icloud-upload-image').trim() || 'icloud-upload-image';
+    const withoutExtension = sourceName.replace(/\.[^.\\/]+$/, '');
+    return withoutExtension + '.jpg';
   }
 
   function createNamedImageFile(blob, now) {
@@ -111,6 +130,126 @@
 
   function filterImageFiles(fileList) {
     return Array.from(fileList || []).filter(isImageLikeFile);
+  }
+
+  function createFileFromBlob(blob, name, win) {
+    const FileCtor = win && win.File ? win.File : root.File;
+    if (typeof FileCtor === 'function') {
+      return new FileCtor([blob], name, {
+        type: 'image/jpeg',
+        lastModified: Date.now(),
+      });
+    }
+
+    blob.name = name;
+    return blob;
+  }
+
+  function canvasToBlob(canvas, type, quality) {
+    return new Promise(function (resolve, reject) {
+      if (!canvas || typeof canvas.toBlob !== 'function') {
+        reject(new Error('Canvas JPEG conversion is not available in this browser.'));
+        return;
+      }
+
+      canvas.toBlob(function (blob) {
+        if (!blob) reject(new Error('Could not convert image to JPEG.'));
+        else resolve(blob);
+      }, type, quality);
+    });
+  }
+
+  function loadImageElement(file, win) {
+    return new Promise(function (resolve, reject) {
+      const doc = win.document || root.document;
+      const ImageCtor = win.Image || root.Image;
+      const urlApi = win.URL || root.URL;
+
+      if (!doc || !ImageCtor || !urlApi || typeof urlApi.createObjectURL !== 'function') {
+        reject(new Error('Image decoding is not available in this browser.'));
+        return;
+      }
+
+      const url = urlApi.createObjectURL(file);
+      const image = new ImageCtor();
+      image.onload = function () {
+        urlApi.revokeObjectURL(url);
+        resolve(image);
+      };
+      image.onerror = function () {
+        urlApi.revokeObjectURL(url);
+        reject(new Error('Could not decode image: ' + (file.name || 'unnamed file')));
+      };
+      image.src = url;
+    });
+  }
+
+  async function decodeImageForCanvas(file, win) {
+    if (win && typeof win.createImageBitmap === 'function') {
+      return win.createImageBitmap(file);
+    }
+    return loadImageElement(file, win || root);
+  }
+
+  async function convertImageFileToJpeg(file, win) {
+    const actualWindow = win || root;
+    const doc = actualWindow.document || root.document;
+    if (!doc || typeof doc.createElement !== 'function') {
+      throw new Error('Canvas JPEG conversion is not available in this browser.');
+    }
+
+    const image = await decodeImageForCanvas(file, actualWindow);
+    const width = image.width || image.naturalWidth;
+    const height = image.height || image.naturalHeight;
+    if (!width || !height) throw new Error('Could not read image dimensions: ' + (file.name || 'unnamed file'));
+
+    const canvas = doc.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Canvas 2D rendering is not available in this browser.');
+
+    context.fillStyle = '#fff';
+    context.fillRect(0, 0, width, height);
+    context.drawImage(image, 0, 0, width, height);
+
+    if (typeof image.close === 'function') image.close();
+
+    const blob = await canvasToBlob(canvas, 'image/jpeg', JPEG_QUALITY);
+    return createFileFromBlob(blob, getConvertedJpegFileName(file.name), actualWindow);
+  }
+
+  async function normalizeFilesForICloudWebUpload(files, win, status, converter) {
+    const images = filterImageFiles(files);
+    const normalized = [];
+    let convertedCount = 0;
+    const convert = converter || convertImageFileToJpeg;
+
+    for (let i = 0; i < images.length; i += 1) {
+      const file = images[i];
+      if (!shouldConvertForICloudWeb(file)) {
+        normalized.push(file);
+        continue;
+      }
+
+      status('Converting for iCloud.com JPEG upload: ' + (file.name || 'image'));
+      try {
+        normalized.push(await convert(file, win));
+        convertedCount += 1;
+      } catch (error) {
+        throw new Error(
+          'Could not convert "' + (file.name || 'image') + '" to JPEG. ' +
+            'This browser may not decode the source format. Details: ' + error.message
+        );
+      }
+    }
+
+    if (convertedCount) {
+      status('Converted ' + convertedCount + ' image(s) to JPEG for iCloud.com upload.');
+    }
+
+    return normalized;
   }
 
   function describeFiles(files) {
@@ -233,9 +372,16 @@
   }
 
   async function uploadViaICloudPage(files, doc, win, status) {
-    const images = filterImageFiles(files);
+    let images = filterImageFiles(files);
     if (!images.length) {
       status('Only image files can be uploaded here.', true);
+      return false;
+    }
+
+    try {
+      images = await normalizeFilesForICloudWebUpload(images, win, status);
+    } catch (error) {
+      status(error.message, true);
       return false;
     }
 
@@ -493,10 +639,15 @@
     bootstrap,
     createNamedImageFile,
     calculateDraggedPanelPosition,
+    convertImageFileToJpeg,
     extractImageFilesFromPaste,
     filterImageFiles,
     findICloudFileInput,
+    getConvertedJpegFileName,
+    isJpegLikeFile,
     isImageLikeFile,
+    normalizeFilesForICloudWebUpload,
+    shouldConvertForICloudWeb,
     transferFilesToInput,
     uploadViaICloudPage,
     waitForICloudFileInput,

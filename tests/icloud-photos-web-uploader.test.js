@@ -58,7 +58,7 @@ test('ignores the helper panel file input when searching for iCloud upload input
 });
 
 test('waits for iCloud to create its file input after clicking upload', async () => {
-  const image = { name: 'shot.png', type: 'image/png' };
+  const image = { name: 'shot.jpg', type: 'image/jpeg' };
   const events = [];
   let clicked = false;
   let inserted = false;
@@ -127,4 +127,32 @@ test('calculates draggable panel position and clamps it inside viewport', () => 
   });
 
   assert.deepEqual(position, { left: 8, top: 42 });
+});
+
+test('keeps JPEG files and plans other images for iCloud web JPEG conversion', () => {
+  assert.equal(helpers.isJpegLikeFile({ name: 'photo.jpeg', type: '' }), true);
+  assert.equal(helpers.isJpegLikeFile({ name: 'photo.jpg', type: 'image/jpeg' }), true);
+  assert.equal(helpers.shouldConvertForICloudWeb({ name: 'shot.png', type: 'image/png' }), true);
+  assert.equal(helpers.shouldConvertForICloudWeb({ name: 'photo.jpg', type: 'image/jpeg' }), false);
+  assert.equal(helpers.getConvertedJpegFileName('PixPin_2026-05-12.png'), 'PixPin_2026-05-12.jpg');
+});
+
+test('normalizes non-JPEG images through a converter before upload', async () => {
+  const jpg = { name: 'camera.jpg', type: 'image/jpeg' };
+  const png = { name: 'screenshot.png', type: 'image/png' };
+  const convertedPng = { name: 'screenshot.jpg', type: 'image/jpeg' };
+  const seenMessages = [];
+
+  const files = await helpers.normalizeFilesForICloudWebUpload(
+    [jpg, png],
+    {},
+    (message) => seenMessages.push(message),
+    async (file) => {
+      assert.equal(file, png);
+      return convertedPng;
+    }
+  );
+
+  assert.deepEqual(files, [jpg, convertedPng]);
+  assert.match(seenMessages.join('\n'), /Converted 1 image/);
 });
