@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.2.0
+// @version      1.3.0
 // @description  Adds a paste, drag-and-drop, and quick-pick upload panel to iCloud Photos on the web.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -310,6 +310,15 @@
       Array.from(node.querySelectorAll('*')).forEach(function (element) {
         if (element.shadowRoot) walk(element.shadowRoot);
       });
+
+      Array.from(node.querySelectorAll('iframe, frame')).forEach(function (frame) {
+        try {
+          if (frame.contentDocument) walk(frame.contentDocument);
+          else if (frame.contentWindow && frame.contentWindow.document) walk(frame.contentWindow.document);
+        } catch (error) {
+          // Cross-origin frames cannot be inspected. Continue with accessible DOM.
+        }
+      });
     }
 
     walk(rootNode);
@@ -396,6 +405,71 @@
     return true;
   }
 
+  function createDataTransfer(files, win) {
+    const WindowDataTransfer = win && win.DataTransfer;
+    if (typeof WindowDataTransfer !== 'function') return null;
+
+    const transfer = new WindowDataTransfer();
+    files.forEach(function (file) {
+      transfer.items.add(file);
+    });
+    return transfer;
+  }
+
+  function createDragEvent(type, transfer, win) {
+    const DragEventCtor = win && win.DragEvent;
+    if (typeof DragEventCtor === 'function') {
+      return new DragEventCtor(type, {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: transfer,
+      });
+    }
+
+    const EventCtor = (win && win.Event) || root.Event;
+    const event = typeof EventCtor === 'function' ? new EventCtor(type, { bubbles: true, cancelable: true }) : { type };
+    try {
+      Object.defineProperty(event, 'dataTransfer', {
+        value: transfer,
+      });
+    } catch (error) {
+      event.dataTransfer = transfer;
+    }
+    return event;
+  }
+
+  function getDropTargets(doc) {
+    const targets = [];
+    ['[data-testid*="drop" i]', '[class*="drop" i]', '[role="main"]', 'main', '#root', '#app'].forEach(function (selector) {
+      queryAllDeep(doc, selector).forEach(function (element) {
+        if (targets.indexOf(element) === -1) targets.push(element);
+      });
+    });
+
+    if (doc.body && targets.indexOf(doc.body) === -1) targets.push(doc.body);
+    if (doc.documentElement && targets.indexOf(doc.documentElement) === -1) targets.push(doc.documentElement);
+    return targets;
+  }
+
+  function dropFilesOnICloudPage(files, doc, win) {
+    const transfer = createDataTransfer(files, win);
+    if (!transfer) return false;
+
+    const targets = getDropTargets(doc);
+    if (!targets.length) return false;
+
+    const eventTypes = ['dragenter', 'dragover', 'drop'];
+    targets.forEach(function (target) {
+      eventTypes.forEach(function (type) {
+        const event = createDragEvent(type, transfer, win);
+        if (type === 'dragover' && typeof event.preventDefault === 'function') event.preventDefault();
+        target.dispatchEvent(event);
+      });
+    });
+
+    return true;
+  }
+
   async function uploadViaICloudPage(files, doc, win, status) {
     let images = filterImageFiles(files);
     if (!images.length) {
@@ -413,12 +487,17 @@
     let input = findICloudFileInput(doc);
     if (!input) {
       status('正在打开 iCloud 上传控件...');
-      clickPossibleUploadTrigger(doc);
-      input = await waitForICloudFileInput(doc, 3000);
+      const clickedUploadTrigger = clickPossibleUploadTrigger(doc);
+      input = clickedUploadTrigger ? await waitForICloudFileInput(doc, 3000) : null;
     }
 
     if (!input) {
-      status('找不到 iCloud 上传控件。请先点击 iCloud 页面原生上传按钮一次，然后重试。', true);
+      status('找不到 iCloud 上传控件，正在尝试拖拽上传通道...');
+      if (dropFilesOnICloudPage(images, doc, win)) {
+        status('已通过拖拽上传通道发送：' + images.length + ' 张图片。');
+        return true;
+      }
+      status('找不到可用的 iCloud 上传入口。请确认当前页面已经登录并停留在“照片”图库视图。', true);
       return false;
     }
 
@@ -723,6 +802,7 @@
     calculateDraggedPanelPosition,
     calculatePanelSize,
     convertImageFileToJpeg,
+    dropFilesOnICloudPage,
     extractImageFilesFromPaste,
     filterImageFiles,
     findICloudFileInput,

@@ -57,6 +57,26 @@ test('ignores the helper panel file input when searching for iCloud upload input
   assert.equal(helpers.findICloudFileInput(doc), icloudInput);
 });
 
+test('searches same-origin iframes for iCloud upload input', () => {
+  const frameInput = {
+    multiple: true,
+    getAttribute: () => 'image/*',
+    closest: () => null,
+  };
+  const frameDocument = {
+    querySelectorAll: (selector) => (selector === 'input[type="file"]' ? [frameInput] : []),
+  };
+  const frame = {
+    contentDocument: frameDocument,
+    contentWindow: { document: frameDocument },
+  };
+  const doc = {
+    querySelectorAll: (selector) => (selector === 'iframe, frame' ? [frame] : []),
+  };
+
+  assert.equal(helpers.findICloudFileInput(doc), frameInput);
+});
+
 test('waits for iCloud to create its file input after clicking upload', async () => {
   const image = { name: 'shot.jpg', type: 'image/jpeg' };
   const events = [];
@@ -177,4 +197,49 @@ test('calculates resizable panel size and clamps it inside viewport', () => {
   });
 
   assert.deepEqual(size, { width: 624, height: 220 });
+});
+
+test('falls back to drop upload when iCloud file input is unavailable', async () => {
+  const image = { name: 'shot.jpg', type: 'image/jpeg' };
+  const dropped = [];
+  const body = {
+    dispatchEvent: (event) => {
+      dropped.push(event.type);
+      return true;
+    },
+  };
+  const doc = {
+    body,
+    documentElement: body,
+    querySelectorAll: () => [],
+  };
+  class FakeDataTransfer {
+    constructor() {
+      this.files = [];
+      this.items = {
+        add: (file) => {
+          this.files.push(file);
+        },
+      };
+    }
+  }
+  const win = {
+    DataTransfer: FakeDataTransfer,
+    Event,
+    DragEvent: class {
+      constructor(type, options) {
+        this.type = type;
+        this.dataTransfer = options.dataTransfer;
+      }
+    },
+  };
+  const messages = [];
+
+  const uploaded = await helpers.uploadViaICloudPage([image], doc, win, (message) => {
+    messages.push(message);
+  });
+
+  assert.equal(uploaded, true);
+  assert.deepEqual(dropped, ['dragenter', 'dragover', 'drop']);
+  assert.match(messages.at(-1), /已通过拖拽上传通道发送/);
 });

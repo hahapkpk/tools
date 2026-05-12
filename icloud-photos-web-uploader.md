@@ -20,7 +20,7 @@ https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader
 
 The script does not store Apple ID credentials or call private iCloud APIs. It hands image files to the upload control already present on the iCloud Photos page.
 
-If the panel says it cannot find the upload control, click the native iCloud upload button once and try again. Apple may change the page structure, so this script uses best-effort DOM detection.
+The script first looks for iCloud's native upload control, including same-origin frames and shadow DOM. If the control is unavailable, it falls back to dispatching a drag-and-drop upload event to the iCloud Photos page.
 
 ## Format handling
 
