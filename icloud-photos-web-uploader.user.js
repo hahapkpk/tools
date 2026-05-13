@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.8.0
+// @version      1.8.1
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -1193,22 +1193,71 @@
       savedUserSelect: '',
     };
 
-    function findPreviewImage(target) {
+    function isLargeMedia(el) {
+      if (!el || !el.tagName) return false;
+      const tag = el.tagName;
+      if (tag !== 'IMG' && tag !== 'CANVAS' && tag !== 'VIDEO') return false;
+      if (typeof el.getBoundingClientRect !== 'function') return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width >= MIN_PREVIEW_PX && rect.height >= MIN_PREVIEW_PX;
+    }
+
+    function findLargestMediaAtPoint(x, y) {
+      if (typeof doc.elementsFromPoint !== 'function') return null;
+      const stack = doc.elementsFromPoint(x, y) || [];
+      let best = null;
+      let bestArea = 0;
+      for (let i = 0; i < stack.length; i += 1) {
+        const el = stack[i];
+        if (!isLargeMedia(el)) continue;
+        const rect = el.getBoundingClientRect();
+        const area = rect.width * rect.height;
+        if (area > bestArea) {
+          best = el;
+          bestArea = area;
+        }
+      }
+      return best;
+    }
+
+    function findLargestMediaInViewport() {
+      const candidates = doc.querySelectorAll
+        ? doc.querySelectorAll('img, canvas, video')
+        : [];
+      let best = null;
+      let bestArea = 0;
+      const vw = (win && win.innerWidth) || doc.documentElement.clientWidth;
+      const vh = (win && win.innerHeight) || doc.documentElement.clientHeight;
+      for (let i = 0; i < candidates.length; i += 1) {
+        const el = candidates[i];
+        const rect = el.getBoundingClientRect();
+        if (rect.width < MIN_PREVIEW_PX || rect.height < MIN_PREVIEW_PX) continue;
+        // Reject elements outside the viewport.
+        if (rect.right < 0 || rect.bottom < 0 || rect.left > vw || rect.top > vh) continue;
+        const area = rect.width * rect.height;
+        if (area > bestArea) {
+          best = el;
+          bestArea = area;
+        }
+      }
+      return best;
+    }
+
+    function findPreviewImage(target, x, y) {
+      // 1. Walk up from the wheel/click target.
       let el = target;
       while (el && el !== doc && el !== doc.body) {
-        if (el.tagName === 'IMG' || el.tagName === 'CANVAS' || el.tagName === 'VIDEO') {
-          if (typeof el.getBoundingClientRect !== 'function') {
-            el = el.parentElement || (el.parentNode && el.parentNode.host) || null;
-            continue;
-          }
-          const rect = el.getBoundingClientRect();
-          if (rect.width >= MIN_PREVIEW_PX && rect.height >= MIN_PREVIEW_PX) {
-            return el;
-          }
-        }
+        if (isLargeMedia(el)) return el;
         el = el.parentElement || (el.parentNode && el.parentNode.host) || null;
       }
-      return null;
+      // 2. iCloud often layers a transparent overlay on top of the image.
+      //    Use elementsFromPoint to inspect the entire stack at the cursor.
+      if (typeof x === 'number' && typeof y === 'number') {
+        const found = findLargestMediaAtPoint(x, y);
+        if (found) return found;
+      }
+      // 3. Fall back to the largest visible IMG/CANVAS/VIDEO in the viewport.
+      return findLargestMediaInViewport();
     }
 
     function attach(el) {
@@ -1255,35 +1304,54 @@
         state.scale > 1 ? (state.dragging ? 'grabbing' : 'grab') : '';
     }
 
+    function debugLog() {
+      try {
+        if (win && win.localStorage && win.localStorage.getItem('iu-debug-zoom') === '1') {
+          const args = ['[iCloud Zoom]'].concat(Array.prototype.slice.call(arguments));
+          console.log.apply(console, args);
+        }
+      } catch (error) {
+        // ignore localStorage access errors
+      }
+    }
+
     function onWheel(event) {
-      const img = state.element || findPreviewImage(event.target);
-      if (!img) return;
+      const img = state.element || findPreviewImage(event.target, event.clientX, event.clientY);
+      if (!img) {
+        debugLog('no preview img', event.target && event.target.tagName, event.target && event.target.className);
+        return;
+      }
+
+      const rect = img.getBoundingClientRect();
+      const px = event.clientX - rect.left - rect.width / 2;
+      const py = event.clientY - rect.top - rect.height / 2;
+
+      const delta = -event.deltaY;
+      const factor = Math.exp(delta * 0.0015);
+      const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, state.scale * factor));
+      if (newScale === state.scale) {
+        // Already at the clamp boundary in the requested direction; let the
+        // page scroll naturally so the user is not stuck.
+        debugLog('clamped at', newScale);
+        return;
+      }
+
       event.preventDefault();
       event.stopPropagation();
 
       if (state.element !== img) attach(img);
 
-      const rect = img.getBoundingClientRect();
-      // Position of the cursor relative to the image's center.
-      const px = event.clientX - rect.left - rect.width / 2;
-      const py = event.clientY - rect.top - rect.height / 2;
-
-      // Convert wheel delta into a smooth zoom factor.
-      const delta = -event.deltaY;
-      const factor = Math.exp(delta * 0.0015);
-      const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, state.scale * factor));
-      if (newScale === state.scale) return;
-
-      // Keep the cursor position anchored on the image by adjusting translation.
       const scaleRatio = newScale / state.scale;
       state.tx = px - (px - state.tx) * scaleRatio;
       state.ty = py - (py - state.ty) * scaleRatio;
       state.scale = newScale;
 
       if (state.scale <= MIN_SCALE + 0.001) {
+        debugLog('detach (back to 1x)');
         detach();
         return;
       }
+      debugLog('scale=', state.scale.toFixed(2), 'tag=', img.tagName, 'size=', Math.round(rect.width) + 'x' + Math.round(rect.height));
       applyTransform();
     }
 
@@ -1325,7 +1393,7 @@
     }
 
     function onDoubleClick(event) {
-      const img = findPreviewImage(event.target);
+      const img = findPreviewImage(event.target, event.clientX, event.clientY);
       if (!img) return;
       if (state.element === img && state.scale > MIN_SCALE) {
         detach();
