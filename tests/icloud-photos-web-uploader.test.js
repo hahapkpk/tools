@@ -6,6 +6,9 @@ const helpers = require('../icloud-photos-web-uploader.user.js');
 test('accepts common image files and rejects non-images', () => {
   assert.equal(helpers.isImageLikeFile({ name: 'shot.png', type: 'image/png' }), true);
   assert.equal(helpers.isImageLikeFile({ name: 'photo.heic', type: '' }), true);
+  assert.equal(helpers.isImageLikeFile({ name: 'logo.svg', type: 'image/svg+xml' }), true);
+  assert.equal(helpers.isImageLikeFile({ name: 'favicon.ico', type: 'image/x-icon' }), true);
+  assert.equal(helpers.isImageLikeFile({ name: 'favicon.ico', type: 'image/vnd.microsoft.icon' }), true);
   assert.equal(helpers.isImageLikeFile({ name: 'notes.txt', type: 'text/plain' }), false);
   assert.equal(helpers.isImageLikeFile({ name: 'archive.zip', type: '' }), false);
 });
@@ -154,7 +157,11 @@ test('keeps JPEG files and plans other images for iCloud web JPEG conversion', (
   assert.equal(helpers.isJpegLikeFile({ name: 'photo.jpg', type: 'image/jpeg' }), true);
   assert.equal(helpers.shouldConvertForICloudWeb({ name: 'shot.png', type: 'image/png' }), true);
   assert.equal(helpers.shouldConvertForICloudWeb({ name: 'photo.jpg', type: 'image/jpeg' }), false);
+  assert.equal(helpers.shouldConvertForICloudWeb({ name: 'logo.svg', type: 'image/svg+xml' }), true);
+  assert.equal(helpers.shouldConvertForICloudWeb({ name: 'favicon.ico', type: 'image/x-icon' }), true);
   assert.equal(helpers.getConvertedJpegFileName('PixPin_2026-05-12.png'), 'PixPin_2026-05-12.jpg');
+  assert.equal(helpers.getConvertedJpegFileName('logo.svg'), 'logo.jpg');
+  assert.equal(helpers.getConvertedJpegFileName('favicon.ico'), 'favicon.jpg');
 });
 
 test('normalizes non-JPEG images through a converter before upload', async () => {

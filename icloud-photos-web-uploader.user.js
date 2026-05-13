@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.9.0
+// @version      1.10.0
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -28,7 +28,7 @@
   const LOG_PREFIX = '[iCloud Photos Web Uploader]';
   const POSITION_KEY = 'icloud-web-uploader-position';
   const SIZE_KEY = 'icloud-web-uploader-size';
-  const IMAGE_EXTENSIONS = /\.(apng|avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i;
+  const IMAGE_EXTENSIONS = /\.(apng|avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|tiff?|webp)$/i;
   const JPEG_EXTENSIONS = /\.jpe?g$/i;
   const JPEG_QUALITY = 0.92;
   const PANEL_TEXT = {
@@ -65,8 +65,11 @@
       'image/jpeg': 'jpg',
       'image/jpg': 'jpg',
       'image/png': 'png',
+      'image/svg+xml': 'svg',
       'image/tiff': 'tiff',
+      'image/vnd.microsoft.icon': 'ico',
       'image/webp': 'webp',
+      'image/x-icon': 'ico',
     };
 
     const normalizedType = String(type || '').toLowerCase();
@@ -212,10 +215,25 @@
 
   async function decodeImageForCanvas(file, win) {
     if (win && typeof win.createImageBitmap === 'function') {
-      return win.createImageBitmap(file);
+      try {
+        return await win.createImageBitmap(file);
+      } catch (error) {
+        // createImageBitmap commonly fails on SVG and ICO; fall back to <img>.
+      }
     }
     return loadImageElement(file, win || root);
   }
+
+  function isSvgFile(file) {
+    if (!file) return false;
+    const type = String(file.type || '').toLowerCase();
+    if (type === 'image/svg+xml') return true;
+    return /\.svg$/i.test(String(file.name || ''));
+  }
+
+  // SVGs may report 0x0 when their <svg> root has no width/height/viewBox.
+  // Pick a reasonable raster size in that case so the JPEG output is usable.
+  const SVG_DEFAULT_RASTER_PX = 1024;
 
   async function convertImageFileToJpeg(file, win) {
     const actualWindow = win || root;
@@ -225,8 +243,14 @@
     }
 
     const image = await decodeImageForCanvas(file, actualWindow);
-    const width = image.width || image.naturalWidth;
-    const height = image.height || image.naturalHeight;
+    let width = image.width || image.naturalWidth;
+    let height = image.height || image.naturalHeight;
+
+    if ((!width || !height) && isSvgFile(file)) {
+      width = SVG_DEFAULT_RASTER_PX;
+      height = SVG_DEFAULT_RASTER_PX;
+    }
+
     if (!width || !height) throw new Error('Could not read image dimensions: ' + (file.name || 'unnamed file'));
 
     const canvas = doc.createElement('canvas');
@@ -996,7 +1020,7 @@
       '</svg>',
       '<span class="iu-ring"></span>',
       '<span class="iu-toast"></span>',
-      '<input type="file" accept="image/*,.heic,.heif" multiple>',
+      '<input type="file" accept="image/*,.heic,.heif,.ico,.svg,.avif" multiple>',
     ].join('');
 
     const picker = panel.querySelector('input[type="file"]');
