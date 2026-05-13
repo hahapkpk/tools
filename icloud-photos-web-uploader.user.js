@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.8.1
+// @version      1.8.2
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -1273,13 +1273,16 @@
       state.savedCursor = el.style.cursor || '';
       state.savedUserSelect = el.style.userSelect || '';
       el.setAttribute(DATA_ATTR, '1');
-      el.style.transition = 'transform 40ms linear';
+      // Disable transitions so iCloud's own ones do not animate our zoom changes.
+      el.style.transition = 'none';
       el.style.transformOrigin = 'center center';
       el.style.userSelect = 'none';
       el.style.willChange = 'transform';
+      startWatchdog();
     }
 
     function detach() {
+      stopWatchdog();
       const el = state.element;
       if (!el) return;
       el.style.transform = state.savedTransform;
@@ -1296,12 +1299,68 @@
       state.dragging = false;
     }
 
+    function expectedTransform() {
+      return 'translate(' + state.tx + 'px, ' + state.ty + 'px) scale(' + state.scale + ')';
+    }
+
     function applyTransform() {
       if (!state.element) return;
-      state.element.style.transform =
-        'translate(' + state.tx + 'px, ' + state.ty + 'px) scale(' + state.scale + ')';
+      state.element.style.transform = expectedTransform();
       state.element.style.cursor =
         state.scale > 1 ? (state.dragging ? 'grabbing' : 'grab') : '';
+    }
+
+    function startWatchdog() {
+      const raf = (win && win.requestAnimationFrame) || root.requestAnimationFrame;
+      if (typeof raf !== 'function' || state.rafActive) return;
+      state.rafActive = true;
+      function tick() {
+        if (!state.element || state.scale <= MIN_SCALE + 0.001) {
+          state.rafActive = false;
+          return;
+        }
+        // Element may have been replaced by React. Try to recover by
+        // re-locating the largest visible media in the viewport.
+        if (!state.element.isConnected) {
+          const replacement = findLargestMediaInViewport();
+          if (replacement && replacement !== state.element) {
+            debugLog('element replaced, switching to', replacement.tagName);
+            // Save the new element's prior styles before we overwrite.
+            const oldScale = state.scale;
+            const oldTx = state.tx;
+            const oldTy = state.ty;
+            // Reset state.element pointer so attach re-saves originals.
+            state.element = null;
+            attach(replacement);
+            state.scale = oldScale;
+            state.tx = oldTx;
+            state.ty = oldTy;
+          } else {
+            debugLog('element replaced and no replacement found, detaching');
+            detach();
+            return;
+          }
+        }
+        const expected = expectedTransform();
+        if (state.element.style.transform !== expected) {
+          state.element.style.transform = expected;
+        }
+        // Defensive: keep transition disabled so iCloud cannot animate our zoom away.
+        if (state.element.style.transition !== 'none') {
+          state.element.style.transition = 'none';
+        }
+        state.rafId = raf(tick);
+      }
+      state.rafId = raf(tick);
+    }
+
+    function stopWatchdog() {
+      const cancel = (win && win.cancelAnimationFrame) || root.cancelAnimationFrame;
+      if (typeof cancel === 'function' && state.rafId != null) {
+        cancel(state.rafId);
+      }
+      state.rafActive = false;
+      state.rafId = null;
     }
 
     function debugLog() {
