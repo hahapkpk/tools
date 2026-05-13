@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.8.2
+// @version      1.8.3
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -1260,6 +1260,58 @@
       return findLargestMediaInViewport();
     }
 
+    function freeAncestorClipping(el) {
+      const saved = [];
+      let node = el.parentElement;
+      let safety = 0;
+      while (node && node !== doc.body && node !== doc.documentElement && safety < 30) {
+        const cs = (win && win.getComputedStyle ? win.getComputedStyle(node) : null) || node.currentStyle || {};
+        const overflow = cs.overflow || '';
+        const clipPath = cs.clipPath || '';
+        const overflowX = cs.overflowX || '';
+        const overflowY = cs.overflowY || '';
+        const needsOverride =
+          overflow === 'hidden' || overflow === 'clip' ||
+          overflowX === 'hidden' || overflowX === 'clip' ||
+          overflowY === 'hidden' || overflowY === 'clip' ||
+          (clipPath && clipPath !== 'none');
+        if (needsOverride) {
+          saved.push({
+            node: node,
+            overflow: node.style.overflow,
+            overflowX: node.style.overflowX,
+            overflowY: node.style.overflowY,
+            clipPath: node.style.clipPath,
+            zIndex: node.style.zIndex,
+          });
+          node.style.overflow = 'visible';
+          node.style.overflowX = 'visible';
+          node.style.overflowY = 'visible';
+          node.style.clipPath = 'none';
+          // Lift the container above neighbouring stacking contexts so the
+          // overflowing zoom is not occluded by sibling toolbars.
+          if (!node.style.zIndex) node.style.zIndex = '999';
+        }
+        node = node.parentElement;
+        safety += 1;
+      }
+      return saved;
+    }
+
+    function restoreAncestorClipping(saved) {
+      if (!saved) return;
+      for (let i = 0; i < saved.length; i += 1) {
+        const entry = saved[i];
+        const node = entry.node;
+        if (!node || !node.style) continue;
+        node.style.overflow = entry.overflow;
+        node.style.overflowX = entry.overflowX;
+        node.style.overflowY = entry.overflowY;
+        node.style.clipPath = entry.clipPath;
+        node.style.zIndex = entry.zIndex;
+      }
+    }
+
     function attach(el) {
       if (state.element === el) return;
       if (state.element) detach();
@@ -1272,12 +1324,15 @@
       state.savedOrigin = el.style.transformOrigin || '';
       state.savedCursor = el.style.cursor || '';
       state.savedUserSelect = el.style.userSelect || '';
+      state.savedAncestors = freeAncestorClipping(el);
       el.setAttribute(DATA_ATTR, '1');
       // Disable transitions so iCloud's own ones do not animate our zoom changes.
       el.style.transition = 'none';
       el.style.transformOrigin = 'center center';
       el.style.userSelect = 'none';
       el.style.willChange = 'transform';
+      // Ensure the zoomed image renders above siblings that would otherwise clip it.
+      if (!el.style.position) el.style.position = el.style.position || '';
       startWatchdog();
     }
 
@@ -1285,6 +1340,8 @@
       stopWatchdog();
       const el = state.element;
       if (!el) return;
+      restoreAncestorClipping(state.savedAncestors);
+      state.savedAncestors = null;
       el.style.transform = state.savedTransform;
       el.style.transition = state.savedTransition;
       el.style.transformOrigin = state.savedOrigin;
@@ -1418,7 +1475,14 @@
       if (event.button !== 0) return;
       const img = state.element;
       if (!img || state.scale <= MIN_SCALE) return;
-      if (!(img === event.target || (typeof img.contains === 'function' && img.contains(event.target)))) return;
+      // The cursor may be over an iCloud overlay layered on top of the image
+      // rather than the image element itself. Accept the drag as long as the
+      // cursor is geometrically inside the image's current visible area.
+      const rect = img.getBoundingClientRect();
+      if (event.clientX < rect.left || event.clientX > rect.right ||
+          event.clientY < rect.top || event.clientY > rect.bottom) {
+        return;
+      }
       state.dragging = true;
       state.startX = event.clientX;
       state.startY = event.clientY;
