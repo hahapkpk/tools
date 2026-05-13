@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.10.2
+// @version      1.10.3
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -1316,51 +1316,38 @@
       return findLargestMediaInViewport();
     }
 
-    function freeAncestorClipping(el) {
-      const saved = [];
-      let node = el.parentElement;
-      let safety = 0;
-      while (node && node !== doc.body && node !== doc.documentElement && safety < 30) {
-        const cs = (win && win.getComputedStyle ? win.getComputedStyle(node) : null) || node.currentStyle || {};
-        const overflow = cs.overflow || '';
-        const clipPath = cs.clipPath || '';
-        const overflowX = cs.overflowX || '';
-        const overflowY = cs.overflowY || '';
-        const needsOverride =
-          overflow === 'hidden' || overflow === 'clip' ||
-          overflowX === 'hidden' || overflowX === 'clip' ||
-          overflowY === 'hidden' || overflowY === 'clip' ||
-          (clipPath && clipPath !== 'none');
-        if (needsOverride) {
-          saved.push({
-            node: node,
-            overflow: node.style.overflow,
-            overflowX: node.style.overflowX,
-            overflowY: node.style.overflowY,
-            clipPath: node.style.clipPath,
-          });
-          node.style.overflow = 'visible';
-          node.style.overflowX = 'visible';
-          node.style.overflowY = 'visible';
-          node.style.clipPath = 'none';
-        }
-        node = node.parentElement;
-        safety += 1;
-      }
-      return saved;
+    // ── Overlay approach ──────────────────────────────────────────────────────
+    // Instead of modifying ancestor overflow/clip-path (which leaks into the UI
+    // and can obscure toolbars), we create a single position:fixed overlay that
+    // mirrors the source image and applies the zoom transform there.
+    // The original image is left completely untouched in the DOM.
+
+    let overlay = null;
+
+    function getOrCreateOverlay() {
+      if (overlay && overlay.isConnected) return overlay;
+      overlay = doc.createElement('div');
+      overlay.id = PANEL_ID + '-zoom-overlay';
+      overlay.style.cssText = [
+        'position:fixed',
+        'top:0',
+        'left:0',
+        'width:100%',
+        'height:100%',
+        'pointer-events:none',   // let all clicks pass through to iCloud UI
+        'z-index:2147483646',    // just below the upload FAB
+        'overflow:hidden',
+        'display:flex',
+        'align-items:center',
+        'justify-content:center',
+      ].join(';');
+      doc.body.appendChild(overlay);
+      return overlay;
     }
 
-    function restoreAncestorClipping(saved) {
-      if (!saved) return;
-      for (let i = 0; i < saved.length; i += 1) {
-        const entry = saved[i];
-        const node = entry.node;
-        if (!node || !node.style) continue;
-        node.style.overflow = entry.overflow;
-        node.style.overflowX = entry.overflowX;
-        node.style.overflowY = entry.overflowY;
-        node.style.clipPath = entry.clipPath;
-      }
+    function removeOverlay() {
+      if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      overlay = null;
     }
 
     function attach(el) {
@@ -1370,41 +1357,58 @@
       state.scale = 1;
       state.tx = 0;
       state.ty = 0;
-      state.savedTransform = el.style.transform || '';
-      state.savedTransition = el.style.transition || '';
-      state.savedOrigin = el.style.transformOrigin || '';
-      state.savedCursor = el.style.cursor || '';
-      state.savedUserSelect = el.style.userSelect || '';
-      state.savedAncestors = freeAncestorClipping(el);
+      // Snapshot the source image position so the overlay clone starts at the
+      // same visual location.
+      const rect = el.getBoundingClientRect();
+      state.sourceRect = { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+      // Build a clone inside the fixed overlay.
+      const ov = getOrCreateOverlay();
+      const clone = doc.createElement('img');
+      clone.src = el.currentSrc || el.src || '';
+      clone.style.cssText = [
+        'position:absolute',
+        'left:' + rect.left + 'px',
+        'top:' + rect.top + 'px',
+        'width:' + rect.width + 'px',
+        'height:' + rect.height + 'px',
+        'transform-origin:center center',
+        'transition:none',
+        'user-select:none',
+        'pointer-events:none',
+        'object-fit:contain',
+        'max-width:none',
+        'max-height:none',
+      ].join(';');
+      ov.appendChild(clone);
+      state.clone = clone;
       el.setAttribute(DATA_ATTR, '1');
-      // Disable transitions so iCloud's own ones do not animate our zoom changes.
-      el.style.transition = 'none';
-      el.style.transformOrigin = 'center center';
-      el.style.userSelect = 'none';
-      el.style.willChange = 'transform';
-      // Ensure the zoomed image renders above siblings that would otherwise clip it.
-      if (!el.style.position) el.style.position = el.style.position || '';
+      // Make the original invisible (not hidden — keep layout) so the clone
+      // appears to be the same image.
+      state.savedOpacity = el.style.opacity;
+      el.style.opacity = '0';
       startWatchdog();
     }
 
     function detach() {
       stopWatchdog();
       const el = state.element;
-      if (!el) return;
-      restoreAncestorClipping(state.savedAncestors);
-      state.savedAncestors = null;
-      el.style.transform = state.savedTransform;
-      el.style.transition = state.savedTransition;
-      el.style.transformOrigin = state.savedOrigin;
-      el.style.cursor = state.savedCursor;
-      el.style.userSelect = state.savedUserSelect;
-      el.style.willChange = '';
-      el.removeAttribute(DATA_ATTR);
+      if (el) {
+        el.style.opacity = state.savedOpacity != null ? state.savedOpacity : '';
+        el.removeAttribute(DATA_ATTR);
+      }
+      if (state.clone && state.clone.parentNode) {
+        state.clone.parentNode.removeChild(state.clone);
+      }
+      state.clone = null;
+      removeOverlay();
       state.element = null;
       state.scale = 1;
       state.tx = 0;
       state.ty = 0;
       state.dragging = false;
+      state.savedOpacity = null;
+      state.sourceRect = null;
+      doc.body.style.cursor = '';
     }
 
     function expectedTransform() {
@@ -1412,10 +1416,11 @@
     }
 
     function applyTransform() {
-      if (!state.element) return;
-      state.element.style.transform = expectedTransform();
-      state.element.style.cursor =
-        state.scale > 1 ? (state.dragging ? 'grabbing' : 'grab') : '';
+      if (!state.clone) return;
+      state.clone.style.transform = expectedTransform();
+      // Overlay passes pointer-events through; cursor is shown on the clone's
+      // parent overlay which also passes through, so set it on the body instead.
+      doc.body.style.cursor = state.scale > 1 ? (state.dragging ? 'grabbing' : 'grab') : '';
     }
 
     function startWatchdog() {
@@ -1427,51 +1432,40 @@
           state.rafActive = false;
           return;
         }
-        // Element may have been replaced by React. Decide whether to migrate.
+        // If the source element was replaced by React, decide whether to migrate.
         if (!state.element.isConnected) {
-          const oldSrc = (state.element && (state.element.currentSrc || state.element.src)) || '';
+          const oldSrc = (state.element.currentSrc || state.element.src) || '';
           const replacement = findLargestMediaInViewport();
           const newSrc = (replacement && (replacement.currentSrc || replacement.src)) || '';
-          // Restore the old element's modified ancestors no matter what we do
-          // next, so leaked overflow/clip-path overrides do not stack up.
-          restoreAncestorClipping(state.savedAncestors);
-          state.savedAncestors = null;
-
-          // Only migrate when the new media looks like the same photo just
-          // re-rendered. If the user navigated to a different photo (different
-          // src), drop the zoom and let the next interaction start fresh.
-          const sameImage =
-            replacement && replacement !== state.element &&
-            oldSrc && newSrc && oldSrc === newSrc;
+          const sameImage = replacement && oldSrc && newSrc && oldSrc === newSrc;
           if (sameImage) {
-            debugLog('element re-rendered, re-anchoring zoom');
+            debugLog('element re-rendered, re-anchoring overlay');
             const keepScale = state.scale;
             const keepTx = state.tx;
             const keepTy = state.ty;
-            state.element = null; // prevent attach() from trying to detach again
+            // Restore opacity on the old (disconnected) element just in case.
+            state.element.style.opacity = state.savedOpacity != null ? state.savedOpacity : '';
+            state.element = null;
             attach(replacement);
             state.scale = keepScale;
             state.tx = keepTx;
             state.ty = keepTy;
           } else {
-            debugLog('user navigated away or no replacement, detaching');
-            // Element is disconnected; we just need to forget it and stop.
-            state.element = null;
-            state.scale = 1;
-            state.tx = 0;
-            state.ty = 0;
-            state.dragging = false;
-            state.rafActive = false;
+            debugLog('user navigated away, detaching');
+            detach();
             return;
           }
         }
-        const expected = expectedTransform();
-        if (state.element.style.transform !== expected) {
-          state.element.style.transform = expected;
-        }
-        // Defensive: keep transition disabled so iCloud cannot animate our zoom away.
-        if (state.element.style.transition !== 'none') {
-          state.element.style.transition = 'none';
+        // Keep the clone's transform in sync.
+        if (state.clone) {
+          const expected = expectedTransform();
+          if (state.clone.style.transform !== expected) {
+            state.clone.style.transform = expected;
+          }
+          // Keep the source image invisible while we're showing the clone.
+          if (state.element && state.element.style.opacity !== '0') {
+            state.element.style.opacity = '0';
+          }
         }
         state.rafId = raf(tick);
       }
@@ -1571,7 +1565,7 @@
     function endDrag() {
       if (!state.dragging) return;
       state.dragging = false;
-      if (state.element) state.element.style.cursor = 'grab';
+      doc.body.style.cursor = state.scale > 1 ? 'grab' : '';
     }
 
     function onKeyDown(event) {
