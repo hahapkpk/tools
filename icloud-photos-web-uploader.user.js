@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.10.4
+// @version      1.10.5
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -1230,7 +1230,6 @@
     const MIN_PREVIEW_PX = 300;
     const MIN_SCALE = 1;
     const MAX_SCALE = 8;
-    const DATA_ATTR = 'data-iu-zoom-active';
 
     const state = {
       element: null,
@@ -1329,7 +1328,8 @@
       state.savedOrigin = el.style.transformOrigin || '';
       state.savedCursor = el.style.cursor || '';
       state.savedUserSelect = el.style.userSelect || '';
-      el.setAttribute(DATA_ATTR, '1');
+      // Do NOT set any attribute on the element — iCloud's own CSS may react to
+      // unknown attributes and change the rendering (e.g. show a red placeholder).
       el.style.transition = 'none';
       el.style.transformOrigin = 'center center';
       el.style.userSelect = 'none';
@@ -1347,7 +1347,6 @@
       el.style.cursor = state.savedCursor;
       el.style.userSelect = state.savedUserSelect;
       el.style.willChange = '';
-      el.removeAttribute(DATA_ATTR);
       state.element = null;
       state.scale = 1;
       state.tx = 0;
