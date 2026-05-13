@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.8.3
+// @version      1.9.0
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -509,19 +509,51 @@
     }
   }
 
+  const KNOWN_HASH_ROUTES = [
+    '#/recents',
+    '#/favorites',
+    '#/memories',
+    '#/albums',
+    '#/mediatypes',
+  ];
+
   async function softRefreshLibraryView(doc, win, options) {
     const opts = options || {};
     const pivotDelay = typeof opts.pivotDelay === 'number' ? opts.pivotDelay : 180;
 
-    // Prefer returning to whatever view the user is currently on. If we cannot
-    // detect an active item, fall back to the library.
+    // Preferred path: switch the hash-based route to a different sidebar view
+    // and back. This drives iCloud's own router state, which is what actually
+    // remounts the photo grid component, without depending on DOM click handlers.
+    if (win && win.location && typeof win.location.hash === 'string' && opts.allowHashNavigation !== false) {
+      const original = win.location.hash || '';
+      let pivot = null;
+      for (let i = 0; i < KNOWN_HASH_ROUTES.length; i += 1) {
+        const candidate = KNOWN_HASH_ROUTES[i];
+        if (original === candidate) continue;
+        if (original && original.indexOf(candidate) === 0) continue;
+        pivot = candidate;
+        break;
+      }
+      if (pivot) {
+        try {
+          win.location.hash = pivot;
+          await sleep(pivotDelay);
+          // Setting hash to '' clears it; setting to the original string restores
+          // any deep-link route the user was on (e.g. a specific photo).
+          win.location.hash = original;
+          return true;
+        } catch (error) {
+          // fall through to DOM click fallback below
+        }
+      }
+    }
+
+    // Fallback: simulate the user clicking the sidebar.
     const original = findActiveSidebarItem(doc) || findSidebarItem(doc, LIBRARY_SIDEBAR_LABELS);
     if (!original) return false;
 
     const originalText = normalizeLabelText(original.textContent);
 
-    // Pick a pivot sidebar item that is NOT the currently active one so
-    // clicking it actually triggers a route change.
     const pivotLabelPool = PIVOT_SIDEBAR_LABELS.concat(LIBRARY_SIDEBAR_LABELS);
     let pivot = null;
     for (let i = 0; i < pivotLabelPool.length; i += 1) {

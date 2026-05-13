@@ -185,6 +185,62 @@ test('uses Simplified Chinese panel labels', () => {
   assert.equal(text.waiting, '等待图片');
 });
 
+test('soft refresh prefers hash-based navigation when location is settable', async () => {
+  const hashes = [];
+  const win = {
+    location: {
+      _hash: '',
+      get hash() {
+        return this._hash;
+      },
+      set hash(value) {
+        this._hash = value;
+        hashes.push(value);
+      },
+    },
+  };
+  const doc = {
+    getElementById: () => null,
+    querySelectorAll: () => [],
+  };
+
+  const softened = await helpers.softRefreshLibraryView(doc, win, { pivotDelay: 0 });
+
+  assert.equal(softened, true);
+  // First we navigate to a pivot route, then we restore the original empty hash.
+  assert.equal(hashes.length, 2);
+  assert.match(hashes[0], /^#\//);
+  assert.equal(hashes[1], '');
+});
+
+test('soft refresh hash navigation preserves a deep-link hash', async () => {
+  const hashes = [];
+  const original = '#/i,pz,UUID,42/';
+  const win = {
+    location: {
+      _hash: original,
+      get hash() {
+        return this._hash;
+      },
+      set hash(value) {
+        this._hash = value;
+        hashes.push(value);
+      },
+    },
+  };
+  const doc = {
+    getElementById: () => null,
+    querySelectorAll: () => [],
+  };
+
+  await helpers.softRefreshLibraryView(doc, win, { pivotDelay: 0 });
+
+  assert.equal(hashes.length, 2);
+  assert.notEqual(hashes[0], original);
+  assert.equal(hashes[1], original);
+});
+
+
 test('soft refresh navigates away from the library then back without reloading', async () => {
   const clicks = [];
   function makeItem(label) {
