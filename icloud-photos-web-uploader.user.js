@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.10.9
+// @version      1.11.0
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -1316,34 +1316,17 @@
     }
 
     // ── Overlay approach ──────────────────────────────────────────────────────
-    function findViewerContainer(el) {
-      // iCloud's photo viewer DOM (from DevTools analysis):
-      //   IMG
-      //   └ DIV.ProgressiveImageElement (overflow:visible)
-      //   └ DIV.OneUpCarouselItem-itemWrapper (overflow:hidden) ← clips image
-      //   └ DIV.OneUpCarouselItem (overflow:hidden)
-      //   └ DIV.ReactSwipeCarousel-item (overflow:visible)
-      //   └ DIV.ReactSwipeCarousel-items (overflow:visible)
-      //   └ DIV.ReactSwipeCarousel (overflow:hidden) ← clips carousel
-      //   └ DIV.OneUpCarousel (overflow:visible)
-      //   └ DIV.OneUp (position:fixed, full viewport) ← already full-screen
-      //
-      // Return the outermost clipping container we want to expand (ReactSwipeCarousel).
+    function findZoomTarget(el) {
+      // iCloud's native zoom applies transform on OneUpCarouselItem-itemWrapper.
+      // We do the same so overflow:hidden doesn't clip the zoomed content.
       let node = el.parentElement;
       let safety = 0;
-      let result = null;
-      while (node && node !== doc.body && node !== doc.documentElement && safety < 25) {
-        const cls = node.className || '';
-        if (cls.indexOf('ReactSwipeCarousel') !== -1 ||
-            cls.indexOf('OneUpCarouselItem') !== -1) {
-          result = node; // keep walking to find the outermost one
-        }
-        // Stop at OneUp — it's already fixed full-screen, no need to go further
-        if (cls.indexOf('OneUp ') !== -1 || cls === 'OneUp') break;
+      while (node && node !== doc.body && safety < 10) {
+        if ((node.className || '').indexOf('OneUpCarouselItem-itemWrapper') !== -1) return node;
         node = node.parentElement;
         safety += 1;
       }
-      return result;
+      return el; // fallback to the image itself
     }
 
     function attach(el) {
@@ -1353,74 +1336,28 @@
       state.scale = 1;
       state.tx = 0;
       state.ty = 0;
-      state.savedTransform = el.style.transform || '';
-      state.savedTransition = el.style.transition || '';
-      state.savedOrigin = el.style.transformOrigin || '';
-      state.savedCursor = el.style.cursor || '';
-      state.savedUserSelect = el.style.userSelect || '';
-      state.container = null;
-      state.savedContainerStyle = null;
 
-      // iCloud's OneUp viewer is already position:fixed and full-viewport-width.
-      // The only thing clipping the zoomed image is overflow:hidden on the
-      // carousel item wrappers. Remove those clips so the image can overflow
-      // into the black sidebar areas. No repositioning needed.
-      const clippedAncestors = [];
-      let node = el.parentElement;
-      let safety = 0;
-      while (node && node !== doc.body && node !== doc.documentElement && safety < 25) {
-        const cls = node.className || '';
-        // Stop at OneUp — it's already fixed full-screen
-        if (cls.indexOf('OneUp ') !== -1 || cls === 'OneUp') break;
-        const cs = win && win.getComputedStyle ? win.getComputedStyle(node) : null;
-        const ov = cs ? cs.overflow : '';
-        const ovx = cs ? cs.overflowX : '';
-        const ovy = cs ? cs.overflowY : '';
-        if (ov === 'hidden' || ov === 'clip' || ovx === 'hidden' || ovy === 'hidden') {
-          clippedAncestors.push({
-            node: node,
-            overflow: node.style.overflow,
-            overflowX: node.style.overflowX,
-            overflowY: node.style.overflowY,
-          });
-          node.style.overflow = 'visible';
-          node.style.overflowX = 'visible';
-          node.style.overflowY = 'visible';
-        }
-        node = node.parentElement;
-        safety += 1;
-      }
-      state.clippedAncestors = clippedAncestors;
+      // Find the wrapper that iCloud uses for its native zoom transform
+      state.zoomTarget = findZoomTarget(el);
+      state.savedTransform = state.zoomTarget.style.transform || '';
+      state.savedTransition = state.zoomTarget.style.transition || '';
+      state.savedCursor = state.zoomTarget.style.cursor || '';
 
-      el.style.transition = 'none';
-      el.style.transformOrigin = 'center center';
-      el.style.userSelect = 'none';
-      el.style.willChange = 'transform';
+      state.zoomTarget.style.transition = 'none';
+      state.zoomTarget.style.willChange = 'transform';
       startWatchdog();
     }
 
     function detach() {
       stopWatchdog();
-      const el = state.element;
-      if (!el) return;
-      // Restore clipped ancestors
-      if (state.clippedAncestors) {
-        for (let i = 0; i < state.clippedAncestors.length; i++) {
-          const entry = state.clippedAncestors[i];
-          entry.node.style.overflow = entry.overflow;
-          entry.node.style.overflowX = entry.overflowX;
-          entry.node.style.overflowY = entry.overflowY;
-        }
+      if (!state.element) return;
+      if (state.zoomTarget) {
+        state.zoomTarget.style.transform = state.savedTransform;
+        state.zoomTarget.style.transition = state.savedTransition;
+        state.zoomTarget.style.cursor = state.savedCursor;
+        state.zoomTarget.style.willChange = '';
       }
-      state.clippedAncestors = null;
-      state.container = null;
-      state.savedContainerStyle = null;
-      el.style.transform = state.savedTransform;
-      el.style.transition = state.savedTransition;
-      el.style.transformOrigin = state.savedOrigin;
-      el.style.cursor = state.savedCursor;
-      el.style.userSelect = state.savedUserSelect;
-      el.style.willChange = '';
+      state.zoomTarget = null;
       state.element = null;
       state.scale = 1;
       state.tx = 0;
@@ -1433,9 +1370,9 @@
     }
 
     function applyTransform() {
-      if (!state.element) return;
-      state.element.style.transform = expectedTransform();
-      state.element.style.cursor = state.scale > 1 ? (state.dragging ? 'grabbing' : 'grab') : '';
+      if (!state.zoomTarget) return;
+      state.zoomTarget.style.transform = expectedTransform();
+      state.zoomTarget.style.cursor = state.scale > 1 ? (state.dragging ? 'grabbing' : 'grab') : '';
     }
 
     function startWatchdog() {
@@ -1469,25 +1406,14 @@
             return;
           }
         }
-        // Keep the element's transform in sync.
-        if (state.element) {
+        // Keep the zoom target's transform in sync.
+        if (state.zoomTarget) {
           const expected = expectedTransform();
-          if (state.element.style.transform !== expected) {
-            state.element.style.transform = expected;
+          if (state.zoomTarget.style.transform !== expected) {
+            state.zoomTarget.style.transform = expected;
           }
-          if (state.element.style.transition !== 'none') {
-            state.element.style.transition = 'none';
-          }
-          // Re-assert overflow:visible on clipped ancestors in case React re-rendered them.
-          if (state.clippedAncestors) {
-            for (let i = 0; i < state.clippedAncestors.length; i++) {
-              const node = state.clippedAncestors[i].node;
-              if (node && node.isConnected && node.style.overflow !== 'visible') {
-                node.style.overflow = 'visible';
-                node.style.overflowX = 'visible';
-                node.style.overflowY = 'visible';
-              }
-            }
+          if (state.zoomTarget.style.transition !== 'none') {
+            state.zoomTarget.style.transition = 'none';
           }
         }
         state.rafId = raf(tick);
@@ -1557,12 +1483,8 @@
 
     function onMouseDown(event) {
       if (event.button !== 0) return;
-      const img = state.element;
-      if (!img || state.scale <= MIN_SCALE) return;
-      // The cursor may be over an iCloud overlay layered on top of the image
-      // rather than the image element itself. Accept the drag as long as the
-      // cursor is geometrically inside the image's current visible area.
-      const rect = img.getBoundingClientRect();
+      if (!state.zoomTarget || state.scale <= MIN_SCALE) return;
+      const rect = state.zoomTarget.getBoundingClientRect();
       if (event.clientX < rect.left || event.clientX > rect.right ||
           event.clientY < rect.top || event.clientY > rect.bottom) {
         return;
@@ -1572,7 +1494,7 @@
       state.startY = event.clientY;
       state.origTx = state.tx;
       state.origTy = state.ty;
-      img.style.cursor = 'grabbing';
+      state.zoomTarget.style.cursor = 'grabbing';
       event.preventDefault();
       event.stopPropagation();
     }
@@ -1588,7 +1510,7 @@
     function endDrag() {
       if (!state.dragging) return;
       state.dragging = false;
-      if (state.element) state.element.style.cursor = 'grab';
+      if (state.zoomTarget) state.zoomTarget.style.cursor = 'grab';
     }
 
     function onKeyDown(event) {
