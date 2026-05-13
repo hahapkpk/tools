@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.10.6
+// @version      1.10.7
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -1351,6 +1351,11 @@
       state.savedOrigin = el.style.transformOrigin || '';
       state.savedCursor = el.style.cursor || '';
       state.savedUserSelect = el.style.userSelect || '';
+
+      // Record the image's current viewport position BEFORE we move the container,
+      // so we can compensate for the container shift below.
+      const elRectBefore = el.getBoundingClientRect();
+
       // Expand the viewer container to fill the full viewport width/height so
       // the zoomed image can use the black sidebar space.
       const container = findViewerContainer(el);
@@ -1376,12 +1381,18 @@
         container.style.maxWidth = 'none';
         container.style.maxHeight = 'none';
         container.style.zIndex = '2147483640';
+
+        // After repositioning the container, the image may have shifted.
+        // Compute the delta and bake it into the initial translation so the
+        // image appears to stay exactly where it was.
+        const elRectAfter = el.getBoundingClientRect();
+        state.tx = elRectBefore.left - elRectAfter.left;
+        state.ty = elRectBefore.top - elRectAfter.top;
       } else {
         state.container = null;
         state.savedContainerStyle = null;
       }
-      // Do NOT set any attribute on the element — iCloud's own CSS may react to
-      // unknown attributes and change the rendering (e.g. show a red placeholder).
+
       el.style.transition = 'none';
       el.style.transformOrigin = 'center center';
       el.style.userSelect = 'none';
