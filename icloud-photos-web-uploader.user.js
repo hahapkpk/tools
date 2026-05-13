@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.10.8
+// @version      1.10.9
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -1477,6 +1477,17 @@
           }
           if (state.element.style.transition !== 'none') {
             state.element.style.transition = 'none';
+          }
+          // Re-assert overflow:visible on clipped ancestors in case React re-rendered them.
+          if (state.clippedAncestors) {
+            for (let i = 0; i < state.clippedAncestors.length; i++) {
+              const node = state.clippedAncestors[i].node;
+              if (node && node.isConnected && node.style.overflow !== 'visible') {
+                node.style.overflow = 'visible';
+                node.style.overflowX = 'visible';
+                node.style.overflowY = 'visible';
+              }
+            }
           }
         }
         state.rafId = raf(tick);
