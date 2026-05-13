@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.10.0
+// @version      1.10.1
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -1571,22 +1571,6 @@
       }
     }
 
-    function onDoubleClick(event) {
-      const img = findPreviewImage(event.target, event.clientX, event.clientY);
-      if (!img) return;
-      if (state.element === img && state.scale > MIN_SCALE) {
-        detach();
-      } else {
-        attach(img);
-        state.scale = 2;
-        const rect = img.getBoundingClientRect();
-        state.tx = -(event.clientX - rect.left - rect.width / 2);
-        state.ty = -(event.clientY - rect.top - rect.height / 2);
-        applyTransform();
-        event.preventDefault();
-      }
-    }
-
     // Capture phase so we run before iCloud's own wheel/drag handlers.
     const targets = [doc];
     if (win && win !== doc) targets.unshift(win);
@@ -1601,7 +1585,6 @@
       target.addEventListener('mouseup', endDrag, true);
       target.addEventListener('mouseleave', endDrag, true);
       target.addEventListener('keydown', onKeyDown, true);
-      target.addEventListener('dblclick', onDoubleClick, true);
     });
   }
 
