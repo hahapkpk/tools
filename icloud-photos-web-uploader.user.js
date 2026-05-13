@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.10.5
+// @version      1.10.6
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -1316,6 +1316,29 @@
     }
 
     // ── Overlay approach ──────────────────────────────────────────────────────
+    function findViewerContainer(el) {
+      // Walk up to find the nearest ancestor that is narrower than the viewport
+      // and has a fixed/absolute/relative position — that is the viewer pane
+      // iCloud constrains to the center column.
+      const vw = (win && win.innerWidth) || doc.documentElement.clientWidth;
+      let node = el.parentElement;
+      let safety = 0;
+      while (node && node !== doc.body && node !== doc.documentElement && safety < 20) {
+        const rect = node.getBoundingClientRect();
+        const cs = win && win.getComputedStyle ? win.getComputedStyle(node) : null;
+        const pos = cs ? cs.position : '';
+        // A container that is clearly narrower than the viewport and positioned
+        // is the viewer pane we want to expand.
+        if (rect.width > 0 && rect.width < vw * 0.85 &&
+            (pos === 'absolute' || pos === 'fixed' || pos === 'relative' || pos === 'sticky')) {
+          return node;
+        }
+        node = node.parentElement;
+        safety += 1;
+      }
+      return null;
+    }
+
     function attach(el) {
       if (state.element === el) return;
       if (state.element) detach();
@@ -1328,6 +1351,35 @@
       state.savedOrigin = el.style.transformOrigin || '';
       state.savedCursor = el.style.cursor || '';
       state.savedUserSelect = el.style.userSelect || '';
+      // Expand the viewer container to fill the full viewport width/height so
+      // the zoomed image can use the black sidebar space.
+      const container = findViewerContainer(el);
+      if (container) {
+        state.container = container;
+        state.savedContainerStyle = {
+          position: container.style.position,
+          left: container.style.left,
+          top: container.style.top,
+          width: container.style.width,
+          height: container.style.height,
+          maxWidth: container.style.maxWidth,
+          maxHeight: container.style.maxHeight,
+          zIndex: container.style.zIndex,
+          transition: container.style.transition,
+        };
+        container.style.transition = 'none';
+        container.style.position = 'fixed';
+        container.style.left = '0';
+        container.style.top = '0';
+        container.style.width = '100vw';
+        container.style.height = '100vh';
+        container.style.maxWidth = 'none';
+        container.style.maxHeight = 'none';
+        container.style.zIndex = '2147483640';
+      } else {
+        state.container = null;
+        state.savedContainerStyle = null;
+      }
       // Do NOT set any attribute on the element — iCloud's own CSS may react to
       // unknown attributes and change the rendering (e.g. show a red placeholder).
       el.style.transition = 'none';
@@ -1341,6 +1393,22 @@
       stopWatchdog();
       const el = state.element;
       if (!el) return;
+      // Restore the viewer container.
+      if (state.container && state.savedContainerStyle) {
+        const c = state.container;
+        const s = state.savedContainerStyle;
+        c.style.position = s.position;
+        c.style.left = s.left;
+        c.style.top = s.top;
+        c.style.width = s.width;
+        c.style.height = s.height;
+        c.style.maxWidth = s.maxWidth;
+        c.style.maxHeight = s.maxHeight;
+        c.style.zIndex = s.zIndex;
+        c.style.transition = s.transition;
+      }
+      state.container = null;
+      state.savedContainerStyle = null;
       el.style.transform = state.savedTransform;
       el.style.transition = state.savedTransition;
       el.style.transformOrigin = state.savedOrigin;
