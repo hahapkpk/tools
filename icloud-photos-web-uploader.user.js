@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.11.0
+// @version      1.12.0
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -1076,14 +1076,68 @@
       panel.classList.remove('is-pending-reload');
     }
 
-    function scheduleRefresh(delayMs) {
+    function scheduleRefresh() {
       clearPendingReload();
       panel.classList.add('is-pending-reload');
       panel.title = '点击立即刷新图库';
-      pendingReload = setTimeout(function () {
-        pendingReload = null;
-        doReload();
-      }, delayMs);
+      pollSyncTokenAndRefresh();
+    }
+
+    async function fetchSyncToken() {
+      // Find the CloudKit zones/list URL from performance entries
+      var entries = (win.performance || performance).getEntriesByType('resource');
+      var ckEntry = null;
+      for (var i = entries.length - 1; i >= 0; i--) {
+        if (entries[i].name.indexOf('ckdatabasews') !== -1 &&
+            entries[i].name.indexOf('photos.cloud') !== -1 &&
+            entries[i].name.indexOf('zones/list') !== -1) {
+          ckEntry = entries[i]; break;
+        }
+      }
+      if (!ckEntry) return null;
+      try {
+        var resp = await win.fetch(ckEntry.name, { credentials: 'include' });
+        if (!resp.ok) return null;
+        var data = await resp.json();
+        return data.zones && data.zones[0] ? data.zones[0].syncToken : null;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    async function pollSyncTokenAndRefresh() {
+      var baseToken = await fetchSyncToken();
+      if (!baseToken) {
+        // Can't poll, fall back to timed refresh
+        status('⏳ 等待服务器处理…');
+        pendingReload = setTimeout(function () { pendingReload = null; doReload(); }, 5000);
+        return;
+      }
+      status('⏳ 等待服务器确认…');
+      var attempts = 0;
+      var maxAttempts = 15; // 15 * 2s = 30s max wait
+
+      function poll() {
+        attempts += 1;
+        fetchSyncToken().then(function (token) {
+          if (!panel.classList.contains('is-pending-reload')) return; // cancelled
+          if (token && token !== baseToken) {
+            // Sync token changed — server processed the upload
+            status('✓ 服务器已确认，刷新中…');
+            doReload();
+          } else if (attempts >= maxAttempts) {
+            // Timeout — refresh anyway
+            status('⏳ 超时，强制刷新…');
+            doReload();
+          } else {
+            pendingReload = setTimeout(poll, 2000);
+          }
+        }).catch(function () {
+          // Network error, just refresh after a short delay
+          pendingReload = setTimeout(function () { doReload(); }, 3000);
+        });
+      }
+      pendingReload = setTimeout(poll, 2000);
     }
 
     async function send(files) {
@@ -1102,10 +1156,8 @@
         panel.classList.remove('is-busy');
       }
       if (uploaded) {
-        const delay = Math.min(12000, Math.max(3000, (2 + images.length) * 1000));
-        const secs = Math.round(delay / 1000);
-        status('✓ 已发送 ' + images.length + ' 张，' + secs + ' 秒后自动刷新图库');
-        scheduleRefresh(delay);
+        status('✓ 已发送 ' + images.length + ' 张，等待服务器确认…');
+        scheduleRefresh();
       }
     }
 
