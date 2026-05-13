@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.10.1
+// @version      1.10.2
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -1338,15 +1338,11 @@
             overflowX: node.style.overflowX,
             overflowY: node.style.overflowY,
             clipPath: node.style.clipPath,
-            zIndex: node.style.zIndex,
           });
           node.style.overflow = 'visible';
           node.style.overflowX = 'visible';
           node.style.overflowY = 'visible';
           node.style.clipPath = 'none';
-          // Lift the container above neighbouring stacking contexts so the
-          // overflowing zoom is not occluded by sibling toolbars.
-          if (!node.style.zIndex) node.style.zIndex = '999';
         }
         node = node.parentElement;
         safety += 1;
@@ -1364,7 +1360,6 @@
         node.style.overflowX = entry.overflowX;
         node.style.overflowY = entry.overflowY;
         node.style.clipPath = entry.clipPath;
-        node.style.zIndex = entry.zIndex;
       }
     }
 
@@ -1432,25 +1427,41 @@
           state.rafActive = false;
           return;
         }
-        // Element may have been replaced by React. Try to recover by
-        // re-locating the largest visible media in the viewport.
+        // Element may have been replaced by React. Decide whether to migrate.
         if (!state.element.isConnected) {
+          const oldSrc = (state.element && (state.element.currentSrc || state.element.src)) || '';
           const replacement = findLargestMediaInViewport();
-          if (replacement && replacement !== state.element) {
-            debugLog('element replaced, switching to', replacement.tagName);
-            // Save the new element's prior styles before we overwrite.
-            const oldScale = state.scale;
-            const oldTx = state.tx;
-            const oldTy = state.ty;
-            // Reset state.element pointer so attach re-saves originals.
-            state.element = null;
+          const newSrc = (replacement && (replacement.currentSrc || replacement.src)) || '';
+          // Restore the old element's modified ancestors no matter what we do
+          // next, so leaked overflow/clip-path overrides do not stack up.
+          restoreAncestorClipping(state.savedAncestors);
+          state.savedAncestors = null;
+
+          // Only migrate when the new media looks like the same photo just
+          // re-rendered. If the user navigated to a different photo (different
+          // src), drop the zoom and let the next interaction start fresh.
+          const sameImage =
+            replacement && replacement !== state.element &&
+            oldSrc && newSrc && oldSrc === newSrc;
+          if (sameImage) {
+            debugLog('element re-rendered, re-anchoring zoom');
+            const keepScale = state.scale;
+            const keepTx = state.tx;
+            const keepTy = state.ty;
+            state.element = null; // prevent attach() from trying to detach again
             attach(replacement);
-            state.scale = oldScale;
-            state.tx = oldTx;
-            state.ty = oldTy;
+            state.scale = keepScale;
+            state.tx = keepTx;
+            state.ty = keepTy;
           } else {
-            debugLog('element replaced and no replacement found, detaching');
-            detach();
+            debugLog('user navigated away or no replacement, detaching');
+            // Element is disconnected; we just need to forget it and stop.
+            state.element = null;
+            state.scale = 1;
+            state.tx = 0;
+            state.ty = 0;
+            state.dragging = false;
+            state.rafActive = false;
             return;
           }
         }
