@@ -1,112 +1,134 @@
 // ==UserScript==
 // @name         iCloud 备忘录图片粘贴增强
 // @namespace    https://www.icloud.com.cn/
-// @version      7.1
+// @version      9.0
 // @description  启用 iCloud 备忘录 Web 版隐藏的图片粘贴功能
 // @match        https://www.icloud.com.cn/notes*
-// @match        https://www.icloud.com.cn/applications/notes3/*
 // @match        https://www.icloud.com/notes*
-// @match        https://www.icloud.com/applications/notes3/*
-// @noframes     false
 // @grant        none
-// @run-at       document-start
+// @run-at       document-idle
 // ==/UserScript==
 
 (function() {
   'use strict';
 
-  const isNotesApp = location.pathname.includes('/applications/notes3/');
+  // Strategy: After the notes app loads, find the editor's input div and
+  // add a capture-phase paste listener that handles image files directly.
+  // The app's digest layer blocks image paste (preventDefault + skip),
+  // so we intercept BEFORE it and handle the image ourselves.
 
-  if (isNotesApp) {
-    patchNotesApp();
-  } else if (location.pathname.includes('/notes')) {
-    patchMainPage();
+  function setup() {
+    const iframe = document.querySelector('iframe#early-child');
+    if (!iframe) { setTimeout(setup, 1000); return; }
+
+    let doc, win;
+    try { doc = iframe.contentDocument; win = iframe.contentWindow; } catch(e) { setTimeout(setup, 1000); return; }
+    if (!doc || !win || !win.NotesApp) { setTimeout(setup, 1000); return; }
+
+    const inputDiv = doc.querySelector('.ct-input-manager > [tabindex]');
+    if (!inputDiv) { setTimeout(setup, 1000); return; }
+    if (inputDiv.__imgPaste) return;
+    inputDiv.__imgPaste = true;
+
+    // Add capture-phase paste handler that runs BEFORE the app's digest handler
+    inputDiv.addEventListener('paste', function(e) {
+      const cd = e.clipboardData;
+      if (!cd || !cd.files || !cd.files.length) return;
+      const imageFile = Array.from(cd.files).find(f => f.type.startsWith('image/'));
+      if (!imageFile) return;
+
+      // Stop the event from reaching the digest handler (which would skip it)
+      e.stopImmediatePropagation();
+      e.preventDefault();
+
+      // Insert image via the app's internal API
+      insertImage(win, doc, imageFile);
+    }, {capture: true});
+
+    // Also handle beforeinput to prevent digest from blocking
+    inputDiv.addEventListener('beforeinput', function(e) {
+      if (e.inputType === 'insertFromPaste') {
+        const dt = e.dataTransfer;
+        if (dt && dt.files && dt.files.length &&
+            Array.from(dt.files).some(f => f.type.startsWith('image/'))) {
+          e.stopImmediatePropagation();
+          // Don't preventDefault - let the editor handle it if possible
+        }
+      }
+    }, {capture: true});
+
+    console.log('[Notes Paste] ✅ Image paste handler active');
   }
 
-  // === Inside notes3 iframe: intercept and patch main.js ===
-  function patchNotesApp() {
-    const origAppendChild = Node.prototype.appendChild;
-    const origInsertBefore = Node.prototype.insertBefore;
+  async function insertImage(win, doc, imageFile) {
+    const dm = win.NotesApp.dataManager;
 
-    function tryPatchScript(script) {
-      if (!script || script.tagName !== 'SCRIPT' || script.__np) return false;
-      if (!script.src || !script.src.includes('main.js')) return false;
-      script.__np = true;
-
-      const origSrc = script.src;
-      script.removeAttribute('src');
-      script.type = 'text/plain'; // Block execution
-
-      fetch(origSrc).then(r => r.text()).then(src => {
-        let patched = src;
-
-        // Patch 1: attachmentInsert flag
-        patched = patched.replace(
-          'attachmentInsert:{configurable:!1,type:Boolean,value:!1}',
-          'attachmentInsert:{configurable:!1,type:Boolean,value:!0}'
-        );
-
-        // Patch 2: digest beforeinput - don't block file paste
-        // Original: if(null===(r=n.dataTransfer)||void 0===r?void 0:r.files.length)n.preventDefault()
-        // Replace with: noop (let it through to editor handler)
-        patched = patched.replace(
-          'if(null===(r=n.dataTransfer)||void 0===r?void 0:r.files.length)n.preventDefault()',
-          'if(null===(r=n.dataTransfer)||void 0===r?void 0:r.files.length){/* paste-patch: pass through */}'
-        );
-
-        // Patch 3: digest paste - don't skip file paste
-        // Original: (null===(r=n.clipboardData)||void 0===r?void 0:r.files.length)||e.paste(...)
-        // This means: if files exist, skip e.paste(). We want it to NOT skip.
-        // Actually this is fine - the paste handler for text doesn't need to run for images.
-        // The editor's own beforeInput handler will handle it now that featureFlag is true.
-
-        if (patched !== src) {
-          console.log('[Notes Paste] ✅ Patches applied');
-        } else {
-          console.warn('[Notes Paste] ⚠️ No patches matched');
-        }
-
-        const s = document.createElement('script');
-        s.__np = true;
-        s.textContent = patched;
-        (document.head || document.documentElement).appendChild(s);
-      }).catch(err => {
-        console.error('[Notes Paste] ❌ Failed:', err);
-        script.type = 'text/javascript';
-        script.src = origSrc;
-      });
-
-      return true;
+    // Find the currently selected/editing note
+    const selectedEl = doc.querySelector('.list-item.is-selected .note-list-item-title, .note-list-item-container.cw-selected .note-list-item-title');
+    if (!selectedEl) {
+      showToast(doc, '❌ 请先选择一条备忘录');
+      return;
     }
 
-    // Hook appendChild/insertBefore
-    Node.prototype.appendChild = function(child) {
-      if (child && child.tagName === 'SCRIPT' && tryPatchScript(child)) {
-        return origAppendChild.call(this, child);
+    const titleText = selectedEl.innerText.trim();
+    let currentNote = null;
+    for (const note of dm.allNotes) {
+      if (note.Title && note.Title.startsWith(titleText.substring(0, 30))) {
+        currentNote = note;
+        break;
       }
-      return origAppendChild.call(this, child);
-    };
-    Node.prototype.insertBefore = function(child, ref) {
-      if (child && child.tagName === 'SCRIPT' && tryPatchScript(child)) {
-        return origInsertBefore.call(this, child, ref);
-      }
-      return origInsertBefore.call(this, child, ref);
-    };
+    }
 
-    // MutationObserver for scripts already in HTML
-    new MutationObserver(muts => {
-      for (const m of muts) for (const n of m.addedNodes) {
-        if (n.tagName === 'SCRIPT') tryPatchScript(n);
-      }
-    }).observe(document.documentElement, { childList: true, subtree: true });
+    if (!currentNote) {
+      showToast(doc, '❌ 无法找到当前备忘录');
+      return;
+    }
 
-    console.log('[Notes Paste] 🔧 Interceptor active in notes3 iframe');
+    // Convert image to data URL and insert as inline image via the editor
+    const reader = new FileReader();
+    reader.onload = function() {
+      const dataUrl = reader.result;
+
+      // Try to use the app's internal attachment mechanism
+      // The editor uses a "topoTextManager" for text operations
+      // Since we can't easily call attachmentPaste (featureFlag blocks it),
+      // we'll use an alternative: paste as HTML with an <img> tag
+
+      // Create a synthetic paste event with HTML containing the image
+      const htmlContent = `<img src="${dataUrl}" style="max-width:100%">`;
+      const dt = new DataTransfer();
+      dt.setData('text/html', htmlContent);
+
+      // Dispatch as a paste event without files (so digest won't block it)
+      const syntheticPaste = new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: dt
+      });
+
+      // Temporarily remove our handler to avoid infinite loop
+      const inputDiv = doc.querySelector('.ct-input-manager > [tabindex]');
+      inputDiv.__imgPaste = false;
+      inputDiv.dispatchEvent(syntheticPaste);
+      inputDiv.__imgPaste = true;
+
+      showToast(doc, '✅ 图片已粘贴');
+    };
+    reader.readAsDataURL(imageFile);
   }
 
-  // === Main page: ensure iframe gets patched ===
-  function patchMainPage() {
-    // Tampermonkey should auto-run in the iframe via @match
-    // But as fallback, we can also try to inject into iframe manually
-    console.log('[Notes Paste] Main page ready (iframe patched via @match)');
+  function showToast(doc, msg) {
+    let toast = doc.getElementById('__paste-toast');
+    if (!toast) {
+      toast = doc.createElement('div');
+      toast.id = '__paste-toast';
+      toast.style.cssText = 'position:fixed;top:20px;right:20px;padding:10px 16px;background:#333;color:#fff;border-radius:8px;font-size:14px;z-index:99999;transition:opacity 0.3s;pointer-events:none;';
+      doc.body.appendChild(toast);
+    }
+    toast.textContent = msg;
+    toast.style.opacity = '1';
+    setTimeout(() => { toast.style.opacity = '0'; }, 2000);
   }
+
+  setup();
 })();
