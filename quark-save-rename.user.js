@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘保存并重命名
 // @namespace    local.codex
-// @version      0.8.1
+// @version      0.8.2
 // @description  在夸克网盘分享页面，保存文件夹到网盘后自动重命名为指定名称。
 // @match        https://pan.quark.cn/s/*
 // @match        https://pan.quark.cn/list*
@@ -59,6 +59,7 @@
           <div style="display:flex;gap:8px">
             <button id="qr-del-sel" style="padding:4px 12px;background:#ef4444;color:#fff;border:0;border-radius:5px;cursor:pointer;display:none">彻底删除</button>
             <button id="qr-restore-sel" style="padding:4px 12px;background:#2563eb;color:#fff;border:0;border-radius:5px;cursor:pointer;display:none">还原选中</button>
+            <button id="qr-refresh" style="padding:4px 10px;background:#f1f5f9;border:0;border-radius:5px;cursor:pointer">↻</button>
             <button id="qr-close" style="padding:4px 10px;background:#f1f5f9;border:0;border-radius:5px;cursor:pointer">✕</button>
           </div>
         </div>
@@ -66,6 +67,7 @@
       document.body.appendChild(panel);
 
       panel.querySelector('#qr-close').onclick = () => panel.remove();
+      panel.querySelector('#qr-refresh').onclick = () => loadRecycleList(panel);
       panel.querySelector('#qr-restore-sel').onclick = () => {
         const checked = [...panel.querySelectorAll('.qr-cb:checked')].map(cb => cb.dataset.fid);
         if (checked.length) restoreRecycleFiles(panel, checked);
