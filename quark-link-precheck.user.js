@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘链接预检
 // @namespace    local.codex
-// @version      0.4.1
+// @version      0.4.2
 // @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。
 // @match        *://*/*
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
@@ -115,7 +115,7 @@
   }
 
   function collectLinks() {
-    const byId = new Map();
+    const byId = new Map(links.map((item) => [item.id, item]));
 
     for (const anchor of document.querySelectorAll('a[href], area[href]')) {
       const raw = `${anchor.href || ''} ${anchor.getAttribute('href') || ''} ${anchor.textContent || ''}`;
@@ -598,6 +598,7 @@
     GM_registerMenuCommand('夸克链接预检：清除本页缓存', clearCache);
 
     const observer = new MutationObserver(() => {
+      if (checking) return;
       const before = links.length;
       collectLinks();
       insertInlineButton();
