@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘保存并重命名
 // @namespace    local.codex
-// @version      0.7.1
+// @version      0.7.2
 // @description  在夸克网盘分享页面，保存文件夹到网盘后自动重命名为指定名称。
 // @match        https://pan.quark.cn/s/*
 // @match        https://pan.quark.cn/list*
@@ -57,19 +57,18 @@
         <div style="padding:12px 16px;border-bottom:1px solid #f0f0f0;display:flex;justify-content:space-between;align-items:center">
           <strong>回收站</strong>
           <div style="display:flex;gap:8px">
-            <button id="qr-del-sel" style="padding:4px 12px;background:#ef4444;color:#fff;border:0;border-radius:5px;cursor:pointer;display:none">删除选中</button>
-            <button id="qr-clear" style="padding:4px 12px;background:#ef4444;color:#fff;border:0;border-radius:5px;cursor:pointer">清空回收站</button>
+            <button id="qr-restore-sel" style="padding:4px 12px;background:#2563eb;color:#fff;border:0;border-radius:5px;cursor:pointer;display:none">还原选中</button>
             <button id="qr-close" style="padding:4px 10px;background:#f1f5f9;border:0;border-radius:5px;cursor:pointer">✕</button>
           </div>
         </div>
+        <div style="padding:6px 16px;background:#fef3c7;font-size:12px;color:#92400e">⚠️ 夸克网页版不支持彻底删除回收站文件，只能还原。如需彻底删除请使用夸克 App。</div>
         <div id="qr-list" style="padding:8px 16px;color:#64748b">加载中…</div>`;
       document.body.appendChild(panel);
 
       panel.querySelector('#qr-close').onclick = () => panel.remove();
-      panel.querySelector('#qr-clear').onclick = () => deleteRecycleFiles(panel, null);
-      panel.querySelector('#qr-del-sel').onclick = () => {
+      panel.querySelector('#qr-restore-sel').onclick = () => {
         const checked = [...panel.querySelectorAll('.qr-cb:checked')].map(cb => cb.dataset.fid);
-        if (checked.length) deleteRecycleFiles(panel, checked);
+        if (checked.length) restoreRecycleFiles(panel, checked);
       };
 
       await loadRecycleList(panel);
@@ -98,61 +97,34 @@
         // Full-select checkbox
         panel.querySelector('#qr-all').onchange = (e) => {
           panel.querySelectorAll('.qr-cb').forEach(cb => cb.checked = e.target.checked);
-          updateDelBtn(panel);
+          updateRestoreBtn(panel);
         };
-        panel.querySelectorAll('.qr-cb').forEach(cb => cb.onchange = () => updateDelBtn(panel));
+        panel.querySelectorAll('.qr-cb').forEach(cb => cb.onchange = () => updateRestoreBtn(panel));
       } catch (e) { listEl.textContent = '加载失败'; }
     }
 
-    function updateDelBtn(panel) {
+    function updateRestoreBtn(panel) {
       const count = panel.querySelectorAll('.qr-cb:checked').length;
-      const btn = panel.querySelector('#qr-del-sel');
+      const btn = panel.querySelector('#qr-restore-sel');
       btn.style.display = count ? 'block' : 'none';
-      btn.textContent = `删除选中 (${count})`;
+      btn.textContent = `还原选中 (${count})`;
     }
 
-    async function deleteRecycleFiles(panel, fids) {
-      const isAll = !fids;
-      const msg = isAll ? '确定要清空回收站吗？此操作不可恢复！' : `确定要彻底删除选中的 ${fids.length} 个文件吗？不可恢复！`;
-      if (!confirm(msg)) return;
-
+    async function restoreRecycleFiles(panel, fids) {
+      if (!confirm(`确定要还原选中的 ${fids.length} 个文件吗？`)) return;
       const listEl = panel.querySelector('#qr-list');
-      listEl.textContent = '删除中…';
-
+      listEl.textContent = '还原中…';
       try {
-        // Get fids to delete
-        let targetFids = fids;
-        if (isAll) {
-          const res = await fetch(`https://drive-pc.quark.cn/1/clouddrive/file/recycle/list?${PARAMS}&_page=1&_size=200`, { credentials: 'include' });
-          const d = await res.json();
-          targetFids = (d.data?.list || []).map(f => f.fid);
-        }
-        if (!targetFids.length) { listEl.textContent = '没有文件'; return; }
-
-        // Step 1: Restore files back to drive
-        const r1 = await fetch(`https://drive-pc.quark.cn/1/clouddrive/file/recycle/recover?${PARAMS}`, {
+        const r = await fetch(`https://drive-pc.quark.cn/1/clouddrive/file/recycle/recover?${PARAMS}`, {
           method: 'POST', credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fids: targetFids, select_mode: 1 })
+          body: JSON.stringify({ fids, select_mode: 1 })
         }).then(r => r.json());
-
-        if (r1.code !== 0) { listEl.textContent = '还原失败: ' + r1.message; return; }
-
-        // Wait for restore task
-        await new Promise(r => setTimeout(r, 1500));
-
-        // Step 2: Permanently delete restored files
-        const r2 = await fetch(`https://drive-pc.quark.cn/1/clouddrive/file/delete?${PARAMS}`, {
-          method: 'POST', credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action_type: 2, filelist: targetFids, exclude_fids: [] })
-        }).then(r => r.json());
-
-        if (r2.code === 0) {
-          listEl.textContent = `已删除 ${targetFids.length} 个文件`;
-          setTimeout(() => loadRecycleList(panel), 1000);
+        if (r.code === 0) {
+          listEl.textContent = `已还原 ${fids.length} 个文件`;
+          setTimeout(() => loadRecycleList(panel), 1500);
         } else {
-          listEl.textContent = `删除失败: ${r2.message}`;
+          listEl.textContent = `还原失败: ${r.message}`;
         }
       } catch (e) { listEl.textContent = '操作失败: ' + e.message; }
     }
