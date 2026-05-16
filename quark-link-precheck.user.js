@@ -1,14 +1,16 @@
 // ==UserScript==
 // @name         夸克网盘链接预检
 // @namespace    local.codex
-// @version      0.1.0
-// @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。
+// @version      0.2.0
+// @description  扫描当前页面的夸克网盘分享链接和站内跳转资源，手动批量预检是否有效、是否需要提取码或是否疑似失效。
 // @match        https://www.xn--wcv59z.com/*
 // @match        https://xn--wcv59z.com/*
 // @include      https://www.教父.com/*
 // @include      https://教父.com/*
 // @connect      drive-h.quark.cn
 // @connect      pan.quark.cn
+// @connect      www.xn--wcv59z.com
+// @connect      xn--wcv59z.com
 // @run-at       document-idle
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
@@ -31,6 +33,7 @@
 
   const STATE = {
     idle: { text: '未检测', color: '#64748b', bg: '#f1f5f9' },
+    resolving: { text: '解析中', color: '#0f766e', bg: '#ccfbf1' },
     checking: { text: '检测中', color: '#1d4ed8', bg: '#dbeafe' },
     ok: { text: '可用', color: '#047857', bg: '#d1fae5' },
     partial: { text: '部分违规', color: '#b45309', bg: '#fef3c7' },
@@ -43,6 +46,7 @@
   const log = (...args) => DEBUG && console.log(`[${SCRIPT_ID}]`, ...args);
 
   let links = [];
+  let candidates = [];
   let panelVisible = false;
   let checking = false;
 
@@ -74,44 +78,127 @@
     return cnPwd ? cnPwd[1] : '';
   }
 
+  function addDirectLink(byId, url, options = {}) {
+    const normalized = normalizeUrl(url);
+    const id = extractId(normalized);
+    if (!id) return null;
+
+    const existing = byId.get(id);
+    if (existing) {
+      if (options.anchor && !existing.anchors.includes(options.anchor)) {
+        existing.anchors.push(options.anchor);
+      }
+      if (!existing.passcode && options.passcode) {
+        existing.passcode = options.passcode;
+      }
+      return existing;
+    }
+
+    const item = {
+      id,
+      url: normalized,
+      passcode: options.passcode || '',
+      anchors: options.anchor ? [options.anchor] : [],
+      status: 'idle',
+      message: options.message || ''
+    };
+    byId.set(id, item);
+    return item;
+  }
+
+  function addCandidate(byKey, anchor, reason) {
+    const rawHref = anchor.getAttribute('href') || '';
+    if (!rawHref || rawHref === '#' || rawHref.startsWith('javascript:')) return;
+
+    let url = '';
+    try {
+      url = new URL(rawHref, location.href).href;
+    } catch (_) {
+      return;
+    }
+
+    if (/\/user\/(?:login|historys)|^mailto:|^tel:/i.test(url)) return;
+    if (!/^https?:/i.test(url)) return;
+
+    const key = `${url}|${anchor.textContent.trim()}`;
+    if (byKey.has(key)) return;
+
+    byKey.set(key, {
+      url,
+      anchors: [anchor],
+      passcode: findPasscode(nearbyText(anchor)),
+      label: anchor.textContent.trim() || url,
+      reason
+    });
+  }
+
+  function isVisible(el) {
+    return Boolean(el && el.getClientRects && el.getClientRects().length);
+  }
+
+  function findQuarkResourceCandidates() {
+    const byKey = new Map();
+
+    for (const anchor of document.querySelectorAll('a[href], area[href]')) {
+      const raw = `${anchor.href || ''} ${anchor.getAttribute('href') || ''} ${anchor.textContent || ''} ${nearbyText(anchor)}`;
+      if (QUARK_LINK_RE.test(raw)) {
+        QUARK_LINK_RE.lastIndex = 0;
+        continue;
+      }
+      QUARK_LINK_RE.lastIndex = 0;
+
+      const rowText = anchor.closest('tr')?.innerText || '';
+      const hostText = anchor.closest('table, .table, .resources, .download, main')?.innerText || '';
+      const near = nearbyText(anchor);
+
+      if (rowText && document.body.innerText.includes('夸克网盘') && isVisible(anchor.closest('tr') || anchor)) {
+        addCandidate(byKey, anchor, '夸克资源表格行');
+      } else if (/夸克网盘|pan\.quark\.cn/i.test(`${hostText} ${near}`)) {
+        addCandidate(byKey, anchor, '夸克资源区域');
+      }
+    }
+
+    return Array.from(byKey.values());
+  }
+
   function collectLinks() {
     const byId = new Map();
 
     for (const anchor of document.querySelectorAll('a[href], area[href]')) {
       const raw = `${anchor.href || ''} ${anchor.getAttribute('href') || ''} ${anchor.textContent || ''}`;
       for (const match of raw.matchAll(QUARK_LINK_RE)) {
-        const url = normalizeUrl(match[0]);
-        const id = extractId(url);
-        if (!id || byId.has(id)) continue;
-        byId.set(id, {
-          id,
-          url,
-          passcode: findPasscode(nearbyText(anchor)),
-          anchors: [anchor],
-          status: 'idle',
-          message: ''
+        addDirectLink(byId, match[0], {
+          anchor,
+          passcode: findPasscode(nearbyText(anchor))
         });
       }
     }
 
     const pageText = document.body?.innerText || '';
     for (const match of pageText.matchAll(QUARK_LINK_RE)) {
-      const url = normalizeUrl(match[0]);
-      const id = extractId(url);
-      if (!id || byId.has(id)) continue;
       const start = Math.max(0, match.index - 80);
       const end = Math.min(pageText.length, match.index + match[0].length + 80);
-      byId.set(id, {
-        id,
-        url,
+      addDirectLink(byId, match[0], {
         passcode: findPasscode(pageText.slice(start, end)),
-        anchors: [],
-        status: 'idle',
         message: '文本链接'
       });
     }
 
+    for (const el of document.querySelectorAll('[href], [data-url], [data-href], [data-link], [data-clipboard-text], [onclick], script')) {
+      const attrText = el.tagName === 'SCRIPT'
+        ? el.textContent || ''
+        : Array.from(el.attributes || []).map((attr) => attr.value).join(' ');
+      for (const match of attrText.matchAll(QUARK_LINK_RE)) {
+        addDirectLink(byId, match[0], {
+          anchor: el.matches?.('a[href]') ? el : null,
+          passcode: findPasscode(`${attrText} ${el.textContent || ''}`),
+          message: '隐藏链接'
+        });
+      }
+    }
+
     links = Array.from(byId.values());
+    candidates = findQuarkResourceCandidates();
     links.forEach(addBadge);
     return links;
   }
@@ -184,13 +271,18 @@
         url: options.url,
         data: options.data,
         timeout: options.timeout || 20000,
-        responseType: 'json',
+        responseType: options.responseType || 'json',
         headers: Object.assign({
           'Accept': 'application/json, text/plain, */*'
         }, options.headers || {}),
         onload: (response) => {
           const body = response.response || safeJson(response.responseText) || response.responseText;
-          resolve({ status: response.status, body });
+          resolve({
+            status: response.status,
+            body,
+            text: response.responseText || '',
+            finalUrl: response.finalUrl || options.url
+          });
         },
         ontimeout: () => reject(new Error('请求超时')),
         onerror: () => reject(new Error('网络请求失败'))
@@ -304,12 +396,95 @@
     return detailResult;
   }
 
+  function upsertResolvedLink(url, source) {
+    const byId = new Map(links.map((item) => [item.id, item]));
+    const item = addDirectLink(byId, url, {
+      anchor: source.anchors?.[0] || null,
+      passcode: source.passcode || '',
+      message: source.label ? `来自：${source.label}` : '从站内跳转解析'
+    });
+    links = Array.from(byId.values());
+    if (item) addBadge(item);
+    return item;
+  }
+
+  function extractQuarkLinksFromText(text) {
+    const found = [];
+    for (const match of String(text || '').matchAll(QUARK_LINK_RE)) {
+      const url = normalizeUrl(match[0]);
+      if (url && !found.includes(url)) found.push(url);
+    }
+    return found;
+  }
+
+  async function resolveCandidate(candidate) {
+    for (const anchor of candidate.anchors || []) {
+      const badge = document.createElement('span');
+      badge.className = `${SCRIPT_ID}-badge`;
+      badge.dataset.quarkId = `candidate-${Math.random().toString(36).slice(2)}`;
+      anchor.insertAdjacentElement('afterend', badge);
+      paintBadge(badge, 'resolving');
+      badge.title = '正在解析站内跳转';
+    }
+
+    const direct = extractQuarkLinksFromText(candidate.url);
+    if (direct.length) return direct.map((url) => upsertResolvedLink(url, candidate)).filter(Boolean);
+
+    const response = await gmRequest({
+      url: candidate.url,
+      responseType: 'text',
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8'
+      }
+    });
+
+    const urls = [
+      ...extractQuarkLinksFromText(response.finalUrl),
+      ...extractQuarkLinksFromText(response.text),
+      ...extractQuarkLinksFromText(typeof response.body === 'string' ? response.body : JSON.stringify(response.body || {}))
+    ];
+
+    return Array.from(new Set(urls)).map((url) => upsertResolvedLink(url, candidate)).filter(Boolean);
+  }
+
+  async function resolveCandidates() {
+    collectLinks();
+    if (!candidates.length) return;
+
+    const knownIds = new Set(links.map((item) => item.id));
+    const queue = candidates.slice(0, 120);
+    let resolved = 0;
+
+    for (const candidate of queue) {
+      try {
+        const items = await resolveCandidate(candidate);
+        for (const item of items) {
+          if (!knownIds.has(item.id)) {
+            knownIds.add(item.id);
+            resolved++;
+          }
+        }
+      } catch (err) {
+        log('resolve failed', candidate.url, err);
+      }
+      renderPanel();
+      await sleep(180);
+    }
+
+    if (!resolved && !links.length && candidates.length) {
+      panelVisible = true;
+      renderPanel('已找到疑似夸克资源行，但没有解析出真实 pan.quark.cn 链接。可能需要登录态、点击弹窗或站点接口变更。');
+    }
+  }
+
   async function runChecks(force = false) {
     if (checking) return;
     checking = true;
     collectLinks();
     panelVisible = true;
     renderPanel();
+
+    await resolveCandidates();
 
     const queue = links.filter((item) => force || item.status === 'idle' || item.status === 'unknown' || item.status === 'error');
     let index = 0;
@@ -424,7 +599,7 @@
     return `<span class="status" style="color:${state.color};background:${state.bg}">${state.text}</span>`;
   }
 
-  function renderPanel() {
+  function renderPanel(notice = '') {
     const root = ensureRoot();
     const total = links.length;
     const counts = links.reduce((acc, item) => {
@@ -451,6 +626,8 @@
             <strong>夸克链接预检</strong>
             <span style="color:#64748b;font-size:12px">${checking ? '检测中...' : '空闲'}</span>
           </div>
+          ${notice ? `<div style="margin-bottom:8px;color:#b45309;background:#fef3c7;border-radius:6px;padding:7px">${escapeHtml(notice)}</div>` : ''}
+          ${candidates.length ? `<div style="margin-bottom:8px;color:#64748b;font-size:12px">已识别 ${candidates.length} 个疑似站内资源入口，会先解析真实夸克地址。</div>` : ''}
           ${total ? rows : '<div style="color:#64748b">当前页面没有识别到夸克网盘链接。</div>'}
         </div>
       ` : ''}
@@ -468,6 +645,48 @@
     root.querySelector('[data-action="scan"]')?.addEventListener('click', () => {
       runChecks(false);
     });
+  }
+
+  function insertInlineButton() {
+    if (document.getElementById(`${SCRIPT_ID}-inline`)) return;
+
+    const textNodes = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+    while (walker.nextNode()) {
+      const el = walker.currentNode;
+      const text = el.textContent?.trim();
+      if ((text === '网盘下载' || text === '夸克网盘') && isVisible(el)) {
+        textNodes.push(el);
+      }
+    }
+
+    const target = textNodes[0] || document.querySelector('main, body');
+    if (!target) return;
+
+    const btn = document.createElement('button');
+    btn.id = `${SCRIPT_ID}-inline`;
+    btn.type = 'button';
+    btn.textContent = '检测夸克链接';
+    btn.style.cssText = [
+      'appearance:none',
+      'border:0',
+      'background:#2563eb',
+      'color:#fff',
+      'border-radius:7px',
+      'padding:8px 12px',
+      'margin:8px 0 8px 10px',
+      'cursor:pointer',
+      'font:14px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+      'vertical-align:middle',
+      'box-shadow:0 2px 8px rgba(37,99,235,.22)'
+    ].join(';');
+    btn.addEventListener('click', () => runChecks(false));
+
+    if (/^(H1|H2|H3|H4|DIV|SECTION)$/i.test(target.tagName)) {
+      target.insertAdjacentElement('afterend', btn);
+    } else {
+      target.appendChild(btn);
+    }
   }
 
   function escapeHtml(value) {
@@ -497,6 +716,7 @@
     document.documentElement.dataset[SCRIPT_ID] = '1';
 
     collectLinks();
+    insertInlineButton();
     renderPanel();
     log('links', links);
 
@@ -506,6 +726,7 @@
     const observer = new MutationObserver(() => {
       const before = links.length;
       collectLinks();
+      insertInlineButton();
       if (links.length !== before) renderPanel();
     });
     observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
