@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘保存并重命名
 // @namespace    local.codex
-// @version      0.5.2
+// @version      0.5.3
 // @description  在夸克网盘分享页面，保存文件夹到网盘后自动重命名为指定名称。
 // @match        https://pan.quark.cn/s/*
 // @match        https://pan.quark.cn/list*
@@ -192,26 +192,27 @@
   }
 
   function cleanMovieName(raw) {
-    // Extract year if present
+    // Extract year
     const yearMatch = raw.match(/[\(\（](\d{4})[\)\）]/);
     const year = yearMatch ? yearMatch[1] : '';
 
-    // Remove emoji, special markers, brackets and their contents (keep Chinese/English text)
-    let name = raw
-      .replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}]/gu, '') // emoji
-      .replace(/[🔥✅⭐★☆▶️🎬🎥💎🌟]/g, '')
-      .replace(/【[^】]*】/g, ' ')   // 【...】
-      .replace(/\[[^\]]*\]/g, ' ')   // [...]
-      .replace(/（[^）]*）/g, ' ')   // （...）
-      .replace(/\([^)]*\)/g, ' ')    // (...) — remove after extracting year
-      .replace(/[\/\\:*?"<>|]/g, '') // illegal chars
+    // If title is wrapped in 【】, extract it first
+    const bracketTitle = raw.match(/^[^【\[（(a-zA-Z\u4e00-\u9fff]*【([^】]+)】/);
+    let name = bracketTitle ? bracketTitle[1] : raw;
+
+    name = name
+      .replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}]/gu, '')
+      .replace(/[🔥✅⭐★☆▶️🎬🎥💎🌟✨🎞️📽️]/g, '')
+      .replace(/【[^】]*】/g, ' ')
+      .replace(/\[[^\]]*\]/g, ' ')
+      .replace(/（[^）]*）/g, ' ')
+      .replace(/\([^)]*\)/g, ' ')
+      .replace(/[\/\\:*?"<>|]/g, '')
+      .replace(/[ˍ˜~·•]/g, '')
       .replace(/\s+/g, ' ')
       .trim();
 
-    // Re-append year
-    if (year && !name.includes(year)) name = `${name} (${year})`;
-    else if (year) name = `${name.replace(year, '').trim()} (${year})`;
-
+    if (year) name = `${name} (${year})`.replace(/\s+/g, ' ').trim();
     return name.slice(0, 100);
   }
 
