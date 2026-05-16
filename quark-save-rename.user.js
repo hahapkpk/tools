@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘保存并重命名
 // @namespace    local.codex
-// @version      0.1.0
+// @version      0.1.1
 // @description  在夸克网盘分享页面，保存文件夹到网盘后自动重命名为指定名称。
 // @match        https://pan.quark.cn/s/*
 // @run-at       document-idle
@@ -14,7 +14,8 @@
   if (window.top !== window.self) return;
 
   const SCRIPT_ID = 'quark-save-rename';
-  const API = 'https://drive-pc.quark.cn/1/clouddrive';
+  const API_TASK = 'https://drive-pc.quark.cn/1/clouddrive';
+  const API_FILE = 'https://drive-h.quark.cn/1/clouddrive';
   const PARAMS = 'pr=ucpro&fr=pc&uc_param_str=';
 
   // ── UI ──────────────────────────────────────────────────────────────────────
@@ -114,7 +115,7 @@
     for (let i = 0; i < retries; i++) {
       await sleep(800);
       try {
-        const res = await fetch(`${API}/task?${PARAMS}&task_id=${taskId}&retry_index=${i}`);
+        const res = await fetch(`${API_TASK}/task?${PARAMS}&task_id=${taskId}&retry_index=${i}`);
         const data = await res.json();
         const status = data?.data?.status;
         // status 2 = done; grab fid from save_as list
@@ -130,9 +131,10 @@
 
   async function renameFile(fid, newName) {
     try {
-      const res = await fetch(`${API}/file/rename?${PARAMS}`, {
+      const res = await fetch(`${API_FILE}/file/rename?${PARAMS}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ fid, file_name: newName })
       });
       const data = await res.json();
