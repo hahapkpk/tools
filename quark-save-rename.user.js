@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘保存并重命名
 // @namespace    local.codex
-// @version      0.5.1
+// @version      0.5.2
 // @description  在夸克网盘分享页面，保存文件夹到网盘后自动重命名为指定名称。
 // @match        https://pan.quark.cn/s/*
 // @match        https://pan.quark.cn/list*
@@ -56,7 +56,7 @@
   function injectUI() {
     if (document.getElementById(SCRIPT_ID)) return;
 
-    const savedTitle = getSourceTitle();
+    const savedTitle = getSourceTitle() ? cleanMovieName(getSourceTitle()) : '';
 
     const bar = document.createElement('div');
     bar.id = SCRIPT_ID;
@@ -134,8 +134,7 @@
   async function onSaveTaskCreated(taskId) {
     const rawName = document.getElementById(`${SCRIPT_ID}-input`)?.value?.trim();
     if (!rawName) return;
-    // Remove characters not allowed in filenames
-    const newName = rawName.replace(/[\/\\:*?"<>|]/g, '').replace(/\s+/g, ' ').trim().slice(0, 255);
+    const newName = cleanMovieName(rawName);
 
     setStatus('保存中…', '#0f766e');
 
@@ -190,6 +189,30 @@
     } catch (_) {
       return false;
     }
+  }
+
+  function cleanMovieName(raw) {
+    // Extract year if present
+    const yearMatch = raw.match(/[\(\（](\d{4})[\)\）]/);
+    const year = yearMatch ? yearMatch[1] : '';
+
+    // Remove emoji, special markers, brackets and their contents (keep Chinese/English text)
+    let name = raw
+      .replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}]/gu, '') // emoji
+      .replace(/[🔥✅⭐★☆▶️🎬🎥💎🌟]/g, '')
+      .replace(/【[^】]*】/g, ' ')   // 【...】
+      .replace(/\[[^\]]*\]/g, ' ')   // [...]
+      .replace(/（[^）]*）/g, ' ')   // （...）
+      .replace(/\([^)]*\)/g, ' ')    // (...) — remove after extracting year
+      .replace(/[\/\\:*?"<>|]/g, '') // illegal chars
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    // Re-append year
+    if (year && !name.includes(year)) name = `${name} (${year})`;
+    else if (year) name = `${name.replace(year, '').trim()} (${year})`;
+
+    return name.slice(0, 100);
   }
 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
