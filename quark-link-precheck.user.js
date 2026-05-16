@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘链接预检
 // @namespace    local.codex
-// @version      0.4.4
+// @version      0.4.5
 // @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。
 // @match        *://*/*
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
@@ -589,9 +589,17 @@
       return;
     }
 
-    // 自动选择夸克网盘 tab
-    for (const li of document.querySelectorAll('ul.dragscroll li')) {
-      if (/^夸克网盘/.test(li.textContent.trim())) { li.click(); break; }
+    // 自动选择夸克网盘 tab（等待动态加载）
+    function clickQuarkTab() {
+      for (const li of document.querySelectorAll('ul.dragscroll li')) {
+        if (/^夸克网盘/.test(li.textContent.trim())) { li.click(); return true; }
+      }
+      return false;
+    }
+    if (!clickQuarkTab()) {
+      const tabOb = new MutationObserver((_, ob) => { if (clickQuarkTab()) ob.disconnect(); });
+      tabOb.observe(document.body || document.documentElement, { childList: true, subtree: true });
+      setTimeout(() => tabOb.disconnect(), 8000);
     }
 
     collectLinks();
