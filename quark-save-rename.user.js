@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘保存并重命名
 // @namespace    local.codex
-// @version      0.5.0
+// @version      0.5.1
 // @description  在夸克网盘分享页面，保存文件夹到网盘后自动重命名为指定名称。
 // @match        https://pan.quark.cn/s/*
 // @match        https://pan.quark.cn/list*
@@ -132,8 +132,10 @@
   // ── After save: poll task → get fid → rename ─────────────────────────────────
 
   async function onSaveTaskCreated(taskId) {
-    const newName = document.getElementById(`${SCRIPT_ID}-input`)?.value?.trim();
-    if (!newName) return;
+    const rawName = document.getElementById(`${SCRIPT_ID}-input`)?.value?.trim();
+    if (!rawName) return;
+    // Remove characters not allowed in filenames
+    const newName = rawName.replace(/[\/\\:*?"<>|]/g, '').replace(/\s+/g, ' ').trim().slice(0, 255);
 
     setStatus('保存中…', '#0f766e');
 
