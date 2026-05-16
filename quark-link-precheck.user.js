@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘链接预检
 // @namespace    local.codex
-// @version      0.4.0
+// @version      0.4.1
 // @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。
 // @match        *://*/*
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
@@ -23,8 +23,8 @@
   const SCRIPT_ID = 'codex-quark-link-precheck';
   const CACHE_PREFIX = `${SCRIPT_ID}:cache:`;
   const CACHE_TTL = 6 * 60 * 60 * 1000;
-  const CONCURRENCY = 2;
-  const CHECK_INTERVAL = 450;
+  const CONCURRENCY = 6;
+  const CHECK_INTERVAL = 200;
   const DEBUG = false;
 
   const QUARK_LINK_RE = /https?:\/\/pan\.quark\.cn\/s\/([A-Za-z0-9_-]{6,})(?:[/?#][^\s"'<>]*)?/gi;
