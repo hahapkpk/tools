@@ -1,16 +1,16 @@
 // ==UserScript==
 // @name         夸克网盘链接预检
 // @namespace    local.codex
-// @version      0.2.0
+// @version      0.3.0
 // @description  扫描当前页面的夸克网盘分享链接和站内跳转资源，手动批量预检是否有效、是否需要提取码或是否疑似失效。
-// @match        https://www.xn--wcv59z.com/*
-// @match        https://xn--wcv59z.com/*
-// @include      https://www.教父.com/*
-// @include      https://教父.com/*
+// @match        *://*/*
+// @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
+// @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
 // @connect      drive-h.quark.cn
 // @connect      pan.quark.cn
 // @connect      www.xn--wcv59z.com
 // @connect      xn--wcv59z.com
+// @connect      *
 // @run-at       document-idle
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
@@ -31,6 +31,8 @@
 
   const QUARK_LINK_RE = /https?:\/\/pan\.quark\.cn\/s\/([A-Za-z0-9_-]{6,})(?:[/?#][^\s"'<>]*)?/gi;
 
+  if (window.top !== window.self) return;
+
   const STATE = {
     idle: { text: '未检测', color: '#64748b', bg: '#f1f5f9' },
     resolving: { text: '解析中', color: '#0f766e', bg: '#ccfbf1' },
@@ -49,6 +51,16 @@
   let candidates = [];
   let panelVisible = false;
   let checking = false;
+
+  function shouldActivate() {
+    const href = location.href;
+    const host = location.hostname;
+    const text = document.body?.innerText || '';
+    return /xn--wcv59z\.com$/i.test(host) ||
+      /教父\.com$/i.test(host) ||
+      /pan\.quark\.cn\/s\//i.test(document.documentElement.innerHTML) ||
+      /夸克网盘|网盘下载/.test(text);
+  }
 
   function normalizeUrl(raw) {
     try {
@@ -649,6 +661,7 @@
 
   function insertInlineButton() {
     if (document.getElementById(`${SCRIPT_ID}-inline`)) return;
+    if (!document.body) return;
 
     const textNodes = [];
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
@@ -714,6 +727,11 @@
   function init() {
     if (document.documentElement.dataset[SCRIPT_ID]) return;
     document.documentElement.dataset[SCRIPT_ID] = '1';
+
+    if (!shouldActivate()) {
+      log('inactive page', location.href);
+      return;
+    }
 
     collectLinks();
     insertInlineButton();
