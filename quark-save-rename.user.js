@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘保存并重命名
 // @namespace    local.codex
-// @version      0.5.3
+// @version      0.6.0
 // @description  在夸克网盘分享页面，保存文件夹到网盘后自动重命名为指定名称。
 // @match        https://pan.quark.cn/s/*
 // @match        https://pan.quark.cn/list*
@@ -17,26 +17,99 @@
   const CHANNEL = new BroadcastChannel('quark-save-rename');
   const PARAMS = 'pr=ucpro&fr=pc&uc_param_str=';
 
-  // ── 网盘列表页：接收重命名指令 ───────────────────────────────────────────────
+  // ── 网盘列表页：接收重命名指令 + 回收站入口 ──────────────────────────────────
   if (location.pathname.startsWith('/list')) {
     CHANNEL.onmessage = async (e) => {
       const { fid, name } = e.data || {};
       if (!fid || !name) return;
-      console.log('[quark-rename] renaming', fid, '->', name);
       try {
         const res = await fetch(`https://drive-pc.quark.cn/1/clouddrive/file/rename?${PARAMS}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
           body: JSON.stringify({ fid, file_name: name })
         });
         const d = await res.json();
         console.log('[quark-rename] result:', d.code, d.message);
-      } catch (err) {
-        console.error('[quark-rename] error:', err);
-      }
+      } catch (err) { console.error('[quark-rename] error:', err); }
     };
-    return; // 列表页只监听，不注入 UI
+
+    // Inject recycle bin button into sidebar
+    function injectRecycleBtn() {
+      if (document.getElementById('quark-recycle-btn')) return;
+      const menu = document.querySelector('.ant-menu');
+      if (!menu) return;
+
+      const btn = document.createElement('li');
+      btn.id = 'quark-recycle-btn';
+      btn.style.cssText = 'padding:0 16px;height:40px;line-height:40px;cursor:pointer;color:#595959;font-size:14px;display:flex;align-items:center;gap:8px;';
+      btn.innerHTML = `<span>🗑️</span><span>回收站</span>`;
+      btn.onclick = () => showRecyclePanel();
+      menu.appendChild(btn);
+    }
+
+    async function showRecyclePanel() {
+      let panel = document.getElementById('quark-recycle-panel');
+      if (panel) { panel.remove(); return; }
+
+      panel = document.createElement('div');
+      panel.id = 'quark-recycle-panel';
+      panel.style.cssText = 'position:fixed;top:60px;left:200px;width:500px;max-height:70vh;overflow:auto;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.15);z-index:9999;font:13px/1.5 -apple-system,sans-serif;';
+      panel.innerHTML = `<div style="padding:12px 16px;border-bottom:1px solid #f0f0f0;display:flex;justify-content:space-between;align-items:center"><strong>回收站</strong><div style="display:flex;gap:8px"><button id="qr-clear" style="padding:4px 12px;background:#ef4444;color:#fff;border:0;border-radius:5px;cursor:pointer">清空回收站</button><button id="qr-close" style="padding:4px 10px;background:#f1f5f9;border:0;border-radius:5px;cursor:pointer">✕</button></div></div><div id="qr-list" style="padding:8px 16px;color:#64748b">加载中…</div>`;
+      document.body.appendChild(panel);
+
+      panel.querySelector('#qr-close').onclick = () => panel.remove();
+      panel.querySelector('#qr-clear').onclick = () => clearRecycle(panel);
+
+      await loadRecycleList(panel);
+    }
+
+    async function loadRecycleList(panel) {
+      const listEl = panel.querySelector('#qr-list');
+      try {
+        const res = await fetch(`https://drive-pc.quark.cn/1/clouddrive/file/recycle/list?${PARAMS}&_page=1&_size=100&_fetch_total=1`, { credentials: 'include' });
+        const d = await res.json();
+        const files = d.data?.list || [];
+        const total = d.data?.metadata?._total || 0;
+        if (!files.length) { listEl.textContent = '回收站为空'; return; }
+        listEl.innerHTML = `<div style="margin-bottom:8px;color:#94a3b8">共 ${total} 个文件</div>` +
+          files.map(f => `<div style="padding:6px 0;border-bottom:1px solid #f8fafc;display:flex;justify-content:space-between"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:380px">${f.file_name}</span><span style="color:#94a3b8;white-space:nowrap;margin-left:8px">${new Date(f.updated_at).toLocaleDateString()}</span></div>`).join('');
+      } catch (e) { listEl.textContent = '加载失败'; }
+    }
+
+    async function clearRecycle(panel) {
+      if (!confirm('确定要清空回收站吗？此操作不可恢复！')) return;
+      const listEl = panel.querySelector('#qr-list');
+      listEl.textContent = '清空中…';
+      try {
+        // Get all files grouped by pdir_fid
+        const res = await fetch(`https://drive-pc.quark.cn/1/clouddrive/file/recycle/list?${PARAMS}&_page=1&_size=200`, { credentials: 'include' });
+        const d = await res.json();
+        const files = d.data?.list || [];
+        if (!files.length) { listEl.textContent = '回收站已经是空的'; return; }
+
+        // Group by pdir_fid and delete each group
+        const groups = {};
+        files.forEach(f => { groups[f.pdir_fid] = groups[f.pdir_fid] || []; groups[f.pdir_fid].push(f.fid); });
+
+        let ok = 0;
+        for (const pdir_fid of Object.keys(groups)) {
+          const r = await fetch(`https://drive-pc.quark.cn/1/clouddrive/file/delete?${PARAMS}`, {
+            method: 'POST', credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action_type: 2, current_dir_fid: pdir_fid })
+          });
+          const rd = await r.json();
+          if (rd.code === 0) ok++;
+        }
+        listEl.textContent = `清空完成（${ok}/${Object.keys(groups).length} 个目录）`;
+      } catch (e) { listEl.textContent = '清空失败: ' + e.message; }
+    }
+
+    // Wait for sidebar to render
+    const ob = new MutationObserver(() => { if (document.querySelector('.ant-menu')) { injectRecycleBtn(); } });
+    ob.observe(document.body, { childList: true, subtree: true });
+    setTimeout(injectRecycleBtn, 2000);
+
+    return;
   }
   const API_TASK = 'https://drive-pc.quark.cn/1/clouddrive';
   const API_FILE = 'https://drive-h.quark.cn/1/clouddrive';
