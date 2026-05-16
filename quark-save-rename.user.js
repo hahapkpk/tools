@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘保存并重命名
 // @namespace    local.codex
-// @version      0.3.0
+// @version      0.4.0
 // @description  在夸克网盘分享页面，保存文件夹到网盘后自动重命名为指定名称。
 // @match        https://pan.quark.cn/s/*
 // @run-at       document-start
@@ -76,36 +76,34 @@
 
     XMLHttpRequest.prototype.open = function (method, url, ...rest) {
       this._url = url;
-      this._method = method;
       return origOpen.call(this, method, url, ...rest);
     };
-
     XMLHttpRequest.prototype.send = function (body) {
       if (/sharepage\/save/.test(this._url)) {
         this.addEventListener('load', function () {
-          try {
-            const res = JSON.parse(this.responseText);
-            const taskId = res?.data?.task_id;
-            if (taskId) onSaveTaskCreated(taskId);
-          } catch (_) {}
+          try { const d = JSON.parse(this.responseText); if (d?.data?.task_id) onSaveTaskCreated(d.data.task_id); } catch (_) {}
         });
       }
       return origSend.call(this, body);
     };
 
-    // Also hook fetch
-    const origFetch = window.fetch;
-    window.fetch = function (input, init) {
-      const url = typeof input === 'string' ? input : input?.url || '';
-      const p = origFetch.call(this, input, init);
-      if (/sharepage\/save/.test(url)) {
-        p.then(res => res.clone().json().then(data => {
-          const taskId = data?.data?.task_id;
-          if (taskId) onSaveTaskCreated(taskId);
-        }).catch(() => {})).catch(() => {});
-      }
-      return p;
-    };
+    // Use defineProperty so page JS can't overwrite our hook
+    let _fetch = window.fetch;
+    Object.defineProperty(window, 'fetch', {
+      get() { return _fetch; },
+      set(fn) {
+        const wrapped = function (input, init) {
+          const url = typeof input === 'string' ? input : input?.url || '';
+          const p = fn.call(this, input, init);
+          if (/sharepage\/save/.test(url)) {
+            p.then(r => r.clone().json().then(d => { if (d?.data?.task_id) onSaveTaskCreated(d.data.task_id); }).catch(() => {})).catch(() => {});
+          }
+          return p;
+        };
+        _fetch = wrapped;
+      },
+      configurable: true
+    });
   }
 
   // ── After save: poll task → get fid → rename ─────────────────────────────────

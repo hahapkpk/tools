@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘链接预检
 // @namespace    local.codex
-// @version      0.5.2
+// @version      0.5.3
 // @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。
 // @match        *://*/*
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
@@ -650,13 +650,14 @@
     });
     observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
 
-    // 点击夸克链接时，把当前页面标题编码到链接 hash 传给夸克页面
+    // 点击夸克链接时，把链接文字编码到 URL hash 传给夸克页面
     document.addEventListener('click', (e) => {
       const a = e.target.closest('a[href*="pan.quark.cn/s/"]');
       if (!a) return;
       try {
+        const linkText = a.textContent.trim().replace(/\s+/g, ' ');
         const url = new URL(a.href);
-        url.hash = '/list/share?_title=' + encodeURIComponent(document.title);
+        url.hash = '/list/share?_title=' + encodeURIComponent(linkText);
         a.href = url.toString();
       } catch (_) {}
     }, true);
