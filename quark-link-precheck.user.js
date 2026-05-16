@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘链接预检
 // @namespace    local.codex
-// @version      0.4.6
+// @version      0.5.0
 // @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。
 // @match        *://*/*
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
@@ -23,8 +23,8 @@
   const SCRIPT_ID = 'codex-quark-link-precheck';
   const CACHE_PREFIX = `${SCRIPT_ID}:cache:`;
   const CACHE_TTL = 6 * 60 * 60 * 1000;
-  const CONCURRENCY = 6;
-  const CHECK_INTERVAL = 200;
+  let CONCURRENCY = Number(GM_getValue('concurrency', 6));
+  let CHECK_INTERVAL = Number(GM_getValue('interval', 200));
   const DEBUG = false;
 
   const QUARK_LINK_RE = /https?:\/\/pan\.quark\.cn\/s\/([A-Za-z0-9_-]{6,})(?:[/?#][^\s"'<>]*)?/gi;
@@ -46,6 +46,7 @@
 
   let links = [];
   let panelVisible = false;
+  let settingsVisible = false;
   let checking = false;
 
   function shouldActivate() {
@@ -494,8 +495,22 @@
         <div class="box">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px">
             <strong>夸克链接预检</strong>
-            <span style="color:#64748b;font-size:12px">${checking ? '检测中...' : '空闲'}</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="color:#64748b;font-size:12px">${checking ? '检测中...' : '空闲'}</span>
+              <button class="secondary" data-action="settings" style="padding:2px 7px;font-size:12px">⚙</button>
+            </div>
           </div>
+          ${settingsVisible ? `
+            <div style="margin-bottom:10px;padding:10px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0">
+              <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 10px;align-items:center;font-size:12px">
+                <label>并发线程数</label>
+                <input data-setting="concurrency" type="number" min="1" max="20" value="${CONCURRENCY}" style="width:60px;padding:2px 6px;border:1px solid #cbd5e1;border-radius:4px">
+                <label>检测间隔(ms)</label>
+                <input data-setting="interval" type="number" min="0" max="2000" value="${CHECK_INTERVAL}" style="width:60px;padding:2px 6px;border:1px solid #cbd5e1;border-radius:4px">
+              </div>
+              <button data-action="save-settings" style="margin-top:8px;padding:3px 10px;font-size:12px;background:#2563eb;color:#fff;border:0;border-radius:5px;cursor:pointer">保存</button>
+            </div>
+          ` : ''}
           ${notice ? `<div style="margin-bottom:8px;color:#b45309;background:#fef3c7;border-radius:6px;padding:7px">${escapeHtml(notice)}</div>` : ''}
           ${total ? rows : '<div style="color:#64748b">当前页面没有识别到夸克网盘链接。</div>'}
         </div>
@@ -513,6 +528,20 @@
 
     root.querySelector('[data-action="scan"]')?.addEventListener('click', () => {
       runChecks(false);
+    });
+
+    root.querySelector('[data-action="settings"]')?.addEventListener('click', () => {
+      settingsVisible = !settingsVisible;
+      renderPanel();
+    });
+
+    root.querySelector('[data-action="save-settings"]')?.addEventListener('click', () => {
+      const c = Number(root.querySelector('[data-setting="concurrency"]')?.value);
+      const i = Number(root.querySelector('[data-setting="interval"]')?.value);
+      if (c >= 1 && c <= 20) { CONCURRENCY = c; GM_setValue('concurrency', c); }
+      if (i >= 0 && i <= 2000) { CHECK_INTERVAL = i; GM_setValue('interval', i); }
+      settingsVisible = false;
+      renderPanel();
     });
   }
 
