@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘保存并重命名
 // @namespace    local.codex
-// @version      0.8.0
+// @version      0.8.1
 // @description  在夸克网盘分享页面，保存文件夹到网盘后自动重命名为指定名称。
 // @match        https://pan.quark.cn/s/*
 // @match        https://pan.quark.cn/list*
@@ -128,8 +128,8 @@
           body: JSON.stringify({ select_mode: 2, record_list: recordIds })
         }).then(r => r.json());
         if (r.code === 0) {
-          listEl.textContent = `已彻底删除 ${recordIds.length} 个文件`;
-          setTimeout(() => loadRecycleList(panel), 1000);
+          listEl.textContent = `已彻底删除 ${recordIds.length} 个文件，3秒后刷新…`;
+          setTimeout(() => loadRecycleList(panel), 3000);
         } else {
           listEl.textContent = `删除失败: ${r.message}`;
         }
