@@ -1,22 +1,45 @@
 // ==UserScript==
 // @name         夸克网盘保存并重命名
 // @namespace    local.codex
-// @version      0.4.1
+// @version      0.5.0
 // @description  在夸克网盘分享页面，保存文件夹到网盘后自动重命名为指定名称。
 // @match        https://pan.quark.cn/s/*
+// @match        https://pan.quark.cn/list*
 // @run-at       document-start
 // @grant        none
 // ==/UserScript==
 
 (function () {
   'use strict';
-
   if (window.top !== window.self) return;
 
   const SCRIPT_ID = 'quark-save-rename';
+  const CHANNEL = new BroadcastChannel('quark-save-rename');
+  const PARAMS = 'pr=ucpro&fr=pc&uc_param_str=';
+
+  // ── 网盘列表页：接收重命名指令 ───────────────────────────────────────────────
+  if (location.pathname.startsWith('/list')) {
+    CHANNEL.onmessage = async (e) => {
+      const { fid, name } = e.data || {};
+      if (!fid || !name) return;
+      console.log('[quark-rename] renaming', fid, '->', name);
+      try {
+        const res = await fetch(`https://drive-pc.quark.cn/1/clouddrive/file/rename?${PARAMS}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ fid, file_name: name })
+        });
+        const d = await res.json();
+        console.log('[quark-rename] result:', d.code, d.message);
+      } catch (err) {
+        console.error('[quark-rename] error:', err);
+      }
+    };
+    return; // 列表页只监听，不注入 UI
+  }
   const API_TASK = 'https://drive-pc.quark.cn/1/clouddrive';
   const API_FILE = 'https://drive-h.quark.cn/1/clouddrive';
-  const PARAMS = 'pr=ucpro&fr=pc&uc_param_str=';
 
   // ── Hook fetch/XHR immediately (document-start) ──────────────────────────────
 
@@ -110,7 +133,7 @@
 
   async function onSaveTaskCreated(taskId) {
     const newName = document.getElementById(`${SCRIPT_ID}-input`)?.value?.trim();
-    if (!newName) return; // No rename needed if input is empty
+    if (!newName) return;
 
     setStatus('保存中…', '#0f766e');
 
@@ -118,8 +141,20 @@
     if (!fid) { setStatus('获取 fid 失败', '#b91c1c'); return; }
 
     setStatus('重命名中…', '#7c3aed');
-    const ok = await renameFile(fid, newName);
-    setStatus(ok ? `✓ 已重命名` : '重命名失败', ok ? '#047857' : '#b91c1c');
+    // Post message to any open list page, or open one
+    CHANNEL.postMessage({ fid, name: newName });
+    // Also try direct rename after a short delay (in case list page is already open)
+    setTimeout(async () => {
+      try {
+        const res = await fetch(`https://drive-pc.quark.cn/1/clouddrive/file/rename?${PARAMS}`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fid, file_name: newName })
+        });
+        const d = await res.json();
+        setStatus(d.code === 0 ? '✓ 已重命名' : `失败: ${d.message}`, d.code === 0 ? '#047857' : '#b91c1c');
+      } catch (e) { setStatus('重命名失败', '#b91c1c'); }
+    }, 500);
   }
 
   async function pollTask(taskId, retries = 15) {
