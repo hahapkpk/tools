@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘链接预检
 // @namespace    local.codex
-// @version      0.3.0
+// @version      0.3.1
 // @description  扫描当前页面的夸克网盘分享链接和站内跳转资源，手动批量预检是否有效、是否需要提取码或是否疑似失效。
 // @match        *://*/*
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
@@ -217,8 +217,8 @@
 
   function addBadge(item) {
     for (const anchor of item.anchors) {
-      if (anchor.dataset[SCRIPT_ID]) continue;
-      anchor.dataset[SCRIPT_ID] = item.id;
+      if (anchor.getAttribute('data-' + SCRIPT_ID)) continue;
+      anchor.setAttribute('data-' + SCRIPT_ID, item.id);
       const badge = document.createElement('span');
       badge.className = `${SCRIPT_ID}-badge`;
       badge.dataset.quarkId = item.id;
@@ -725,8 +725,8 @@
   }
 
   function init() {
-    if (document.documentElement.dataset[SCRIPT_ID]) return;
-    document.documentElement.dataset[SCRIPT_ID] = '1';
+    if (document.documentElement.getAttribute('data-' + SCRIPT_ID)) return;
+    document.documentElement.setAttribute('data-' + SCRIPT_ID, '1');
 
     if (!shouldActivate()) {
       log('inactive page', location.href);
