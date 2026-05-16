@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘链接预检
 // @namespace    local.codex
-// @version      0.4.5
+// @version      0.4.6
 // @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。
 // @match        *://*/*
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
@@ -372,6 +372,7 @@
 
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
     checking = false;
+    panelVisible = false;
     renderPanel();
   }
 
