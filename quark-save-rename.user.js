@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘保存并重命名
 // @namespace    local.codex
-// @version      0.7.0
+// @version      0.7.1
 // @description  在夸克网盘分享页面，保存文件夹到网盘后自动重命名为指定名称。
 // @match        https://pan.quark.cn/s/*
 // @match        https://pan.quark.cn/list*
@@ -142,13 +142,10 @@
         await new Promise(r => setTimeout(r, 1500));
 
         // Step 2: Permanently delete restored files
-        // Files are restored to their original pdir, delete them one by one
-        // Actually we need to find them - they'll be in their original location
-        // Simpler: use the task result or just delete by fid from root
         const r2 = await fetch(`https://drive-pc.quark.cn/1/clouddrive/file/delete?${PARAMS}`, {
           method: 'POST', credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action_type: 2, filelist: targetFids.map(fid => ({ fid })) })
+          body: JSON.stringify({ action_type: 2, filelist: targetFids, exclude_fids: [] })
         }).then(r => r.json());
 
         if (r2.code === 0) {
