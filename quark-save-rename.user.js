@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘保存并重命名
 // @namespace    local.codex
-// @version      0.4.0
+// @version      0.4.1
 // @description  在夸克网盘分享页面，保存文件夹到网盘后自动重命名为指定名称。
 // @match        https://pan.quark.cn/s/*
 // @run-at       document-start
@@ -126,7 +126,7 @@
     for (let i = 0; i < retries; i++) {
       await sleep(800);
       try {
-        const res = await fetch(`${API_TASK}/task?${PARAMS}&task_id=${taskId}&retry_index=${i}`);
+        const res = await fetch(`${API_TASK}/task?${PARAMS}&task_id=${taskId}&retry_index=${i}`, { credentials: 'include' });
         const data = await res.json();
         const status = data?.data?.status;
         // status 2 = done; grab fid from save_as list
