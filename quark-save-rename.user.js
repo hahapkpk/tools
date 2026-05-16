@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         夸克网盘保存并重命名
 // @namespace    local.codex
-// @version      0.2.0
+// @version      0.3.0
 // @description  在夸克网盘分享页面，保存文件夹到网盘后自动重命名为指定名称。
 // @match        https://pan.quark.cn/s/*
-// @run-at       document-idle
+// @run-at       document-start
 // @grant        none
 // ==/UserScript==
 
@@ -18,13 +18,22 @@
   const API_FILE = 'https://drive-h.quark.cn/1/clouddrive';
   const PARAMS = 'pr=ucpro&fr=pc&uc_param_str=';
 
+  // ── Hook fetch/XHR immediately (document-start) ──────────────────────────────
+
+  hookSaveAPI();
+
   // ── UI ──────────────────────────────────────────────────────────────────────
+
+  function getSourceTitle() {
+    // Read title from URL hash: #/list/share?_title=xxx
+    const m = location.hash.match(/_title=([^&]+)/);
+    return m ? decodeURIComponent(m[1]) : '';
+  }
 
   function injectUI() {
     if (document.getElementById(SCRIPT_ID)) return;
 
-    // Read title saved from source page
-    const savedTitle = localStorage.getItem('quark-save-rename:title') || '';
+    const savedTitle = getSourceTitle();
 
     const bar = document.createElement('div');
     bar.id = SCRIPT_ID;
@@ -52,8 +61,6 @@
       bar.style.cssText += ';position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:2147483647;background:rgba(255,255,255,.96);border:1px solid #e2e8f0;border-radius:8px;padding:6px 10px;box-shadow:0 4px 16px rgba(15,23,42,.15)';
       document.body.appendChild(bar);
     }
-
-    hookSaveAPI();
   }
 
   function setStatus(text, color = '#64748b') {
