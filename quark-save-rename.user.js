@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘保存并重命名
 // @namespace    local.codex
-// @version      0.1.1
+// @version      0.2.0
 // @description  在夸克网盘分享页面，保存文件夹到网盘后自动重命名为指定名称。
 // @match        https://pan.quark.cn/s/*
 // @run-at       document-idle
@@ -23,36 +23,42 @@
   function injectUI() {
     if (document.getElementById(SCRIPT_ID)) return;
 
+    // Read title saved from source page
+    const savedTitle = localStorage.getItem('quark-save-rename:title') || '';
+
     const bar = document.createElement('div');
     bar.id = SCRIPT_ID;
     bar.style.cssText = [
-      'position:fixed', 'bottom:70px', 'right:14px', 'z-index:2147483647',
-      'display:flex', 'gap:6px', 'align-items:center',
-      'background:rgba(255,255,255,.96)', 'border:1px solid #e2e8f0',
-      'border-radius:8px', 'padding:8px 10px',
-      'box-shadow:0 4px 16px rgba(15,23,42,.15)',
-      'font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif'
+      'display:inline-flex', 'gap:6px', 'align-items:center',
+      'font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+      'margin-left:12px', 'vertical-align:middle'
     ].join(';');
 
     bar.innerHTML = `
-      <span style="color:#64748b;white-space:nowrap">保存后重命名：</span>
-      <input id="${SCRIPT_ID}-input" type="text" placeholder="输入正确的文件夹名称"
-        style="width:260px;padding:4px 8px;border:1px solid #cbd5e1;border-radius:5px;font:inherit;outline:none">
-      <button id="${SCRIPT_ID}-btn"
-        style="padding:4px 12px;background:#2563eb;color:#fff;border:0;border-radius:5px;cursor:pointer;font:inherit;white-space:nowrap">
-        等待保存…
-      </button>
+      <input id="${SCRIPT_ID}-input" type="text" placeholder="保存后重命名（可选）"
+        value="${savedTitle.replace(/"/g, '&quot;')}"
+        style="width:280px;padding:4px 8px;border:1px solid #cbd5e1;border-radius:5px;font:inherit;outline:none;height:32px;box-sizing:border-box">
+      <span id="${SCRIPT_ID}-status" style="color:#64748b;font-size:12px;white-space:nowrap"></span>
     `;
 
-    document.body.appendChild(bar);
+    // Insert into the share-info-wrap area (top header, red box position)
+    const insertTarget = document.querySelector('.share-info-wrap, [class*="share-info-wrap"]');
+    if (insertTarget) {
+      insertTarget.style.display = 'flex';
+      insertTarget.style.alignItems = 'center';
+      insertTarget.appendChild(bar);
+    } else {
+      // Fallback: fixed position
+      bar.style.cssText += ';position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:2147483647;background:rgba(255,255,255,.96);border:1px solid #e2e8f0;border-radius:8px;padding:6px 10px;box-shadow:0 4px 16px rgba(15,23,42,.15)';
+      document.body.appendChild(bar);
+    }
 
-    // Hook the save API response
     hookSaveAPI();
   }
 
-  function setStatus(text, color = '#2563eb') {
-    const btn = document.getElementById(`${SCRIPT_ID}-btn`);
-    if (btn) { btn.textContent = text; btn.style.background = color; }
+  function setStatus(text, color = '#64748b') {
+    const el = document.getElementById(`${SCRIPT_ID}-status`);
+    if (el) { el.textContent = text; el.style.color = color; }
   }
 
   // ── API hook ─────────────────────────────────────────────────────────────────
