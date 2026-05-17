@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Advanced Search Helper
 // @namespace    local.codex
-// @version      0.4.0
+// @version      0.5.0
 // @description  Add a floating Chinese advanced-search builder to X explore/search pages.
 // @match        https://x.com/explore*
 // @match        https://x.com/search*
@@ -18,9 +18,10 @@
   const STYLE_ID = `${SCRIPT_ID}-style`;
   const BUTTON_ID = `${SCRIPT_ID}-button`;
   const PANEL_ID = `${SCRIPT_ID}-panel`;
-  const VERSION = '0.4.0';
+  const VERSION = '0.5.0';
   const ICON_URL = 'https://raw.githubusercontent.com/hahapkpk/tools/main/grok.png';
   const POSITION_KEY = `${SCRIPT_ID}:button-position`;
+  const SETTINGS_KEY = `${SCRIPT_ID}:settings`;
   const DEBUG = false;
   const log = (...args) => DEBUG && console.log(`[${SCRIPT_ID}]`, ...args);
 
@@ -195,9 +196,11 @@
         bottom: 86px;
         width: 52px;
         height: 52px;
-        border: 1px solid rgba(113, 118, 123, .5);
+        display: grid;
+        place-items: center;
+        border: 1px solid rgba(231, 233, 234, .9);
         border-radius: 999px;
-        background: #000 url("${ICON_URL}") center / 76% 76% no-repeat;
+        background: rgb(247, 249, 249);
         color: transparent;
         box-shadow: 0 10px 28px rgba(0, 0, 0, .35);
         cursor: grab;
@@ -207,6 +210,14 @@
       }
       #${BUTTON_ID}.xas-dragging { cursor: grabbing; }
       #${BUTTON_ID}:hover { filter: brightness(1.08); }
+      #${BUTTON_ID} img {
+        width: 76%;
+        height: 76%;
+        display: block;
+        object-fit: contain;
+        pointer-events: none;
+        filter: invert(1);
+      }
       #${PANEL_ID} {
         position: fixed;
         right: 22px;
@@ -392,6 +403,49 @@
     return (rowControl(key, 'value')?.value || '').trim();
   }
 
+  function collectSettings(root = panel()) {
+    if (!root) return null;
+    const settings = {
+      base: root.querySelector('[data-xas-base]')?.value || '',
+      checks: {},
+      values: {}
+    };
+    for (const param of PARAMS) {
+      settings.checks[param.key] = isChecked(param.key);
+      settings.values[param.key] = inputValue(param.key);
+    }
+    return settings;
+  }
+
+  function saveSettings(root = panel()) {
+    const settings = collectSettings(root);
+    if (!settings) return;
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  }
+
+  function readSavedSettings() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(SETTINGS_KEY) || 'null');
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function applySavedSettings(root) {
+    const settings = readSavedSettings();
+    if (!settings) return false;
+    const base = root.querySelector('[data-xas-base]');
+    if (base) base.value = settings.base || '';
+    for (const param of PARAMS) {
+      const check = root.querySelector(`[data-xas-check="${param.key}"]`);
+      const value = root.querySelector(`[data-xas-value="${param.key}"]`);
+      if (check) check.checked = !!settings.checks?.[param.key];
+      if (value) value.value = settings.values?.[param.key] || '';
+    }
+    return true;
+  }
+
   function buildQuery() {
     const root = panel();
     if (!root) return '';
@@ -412,6 +466,7 @@
     const root = panel();
     if (!root) return;
     root.querySelector('[data-xas-preview]').value = buildQuery();
+    saveSettings(root);
   }
 
   function openPanel() {
@@ -537,6 +592,7 @@
     root.querySelectorAll('[data-xas-value]').forEach((input) => {
       input.value = '';
     });
+    localStorage.removeItem(SETTINGS_KEY);
     updatePreview();
     setStatus('已清空');
   }
@@ -649,6 +705,7 @@
       ])
     ]);
 
+    applySavedSettings(root);
     root.addEventListener('input', updatePreview);
     root.addEventListener('change', updatePreview);
     return root;
@@ -661,7 +718,10 @@
       'data-xas-version': VERSION,
       title: '打开 X 高级搜索参数',
       'aria-label': '打开 X 高级搜索参数'
-    }, '');
+    }, el('img', {
+      src: ICON_URL,
+      alt: ''
+    }));
     enableButtonDrag(button);
     restoreButtonPosition(button);
     return button;
