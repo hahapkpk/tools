@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Advanced Search Helper
 // @namespace    local.codex
-// @version      0.8.0
+// @version      0.9.0
 // @description  Add a floating Chinese advanced-search builder to X explore/search pages.
 // @match        https://x.com/explore*
 // @match        https://x.com/search*
@@ -18,7 +18,7 @@
   const STYLE_ID = `${SCRIPT_ID}-style`;
   const BUTTON_ID = `${SCRIPT_ID}-button`;
   const PANEL_ID = `${SCRIPT_ID}-panel`;
-  const VERSION = '0.8.0';
+  const VERSION = '0.9.0';
   const POSITION_KEY = `${SCRIPT_ID}:button-position`;
   const SETTINGS_KEY = `${SCRIPT_ID}:settings`;
   const DEBUG = false;
@@ -478,11 +478,11 @@
       .trim();
   }
 
-  function updatePreview() {
+  function updatePreview(shouldSave = true) {
     const root = panel();
     if (!root) return;
     root.querySelector('[data-xas-preview]').value = buildQuery();
-    saveSettings(root);
+    if (shouldSave) saveSettings(root);
   }
 
   function openPanel() {
@@ -491,7 +491,7 @@
     root.hidden = false;
     const base = root.querySelector('[data-xas-base]');
     if (!base.value.trim()) base.value = currentQuery();
-    updatePreview();
+    updatePreview(false);
     base.focus();
   }
 
@@ -609,7 +609,7 @@
       input.value = '';
     });
     localStorage.removeItem(SETTINGS_KEY);
-    updatePreview();
+    updatePreview(false);
     setStatus('已清空');
   }
 
@@ -786,7 +786,7 @@
       document.body.append(createPanel());
       log('mounted floating search helper');
     }
-    updatePreview();
+    updatePreview(false);
   }
 
   window.addEventListener('resize', () => {
@@ -798,9 +798,6 @@
     clearTimeout(scheduleMount.timer);
     scheduleMount.timer = setTimeout(mount, 120);
   }
-
-  const observer = new MutationObserver(scheduleMount);
-  observer.observe(document.documentElement, { childList: true, subtree: true });
 
   let lastHref = location.href;
   setInterval(() => {
