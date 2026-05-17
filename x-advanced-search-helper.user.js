@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Advanced Search Helper
 // @namespace    local.codex
-// @version      0.7.0
+// @version      0.8.0
 // @description  Add a floating Chinese advanced-search builder to X explore/search pages.
 // @match        https://x.com/explore*
 // @match        https://x.com/search*
@@ -18,7 +18,7 @@
   const STYLE_ID = `${SCRIPT_ID}-style`;
   const BUTTON_ID = `${SCRIPT_ID}-button`;
   const PANEL_ID = `${SCRIPT_ID}-panel`;
-  const VERSION = '0.7.0';
+  const VERSION = '0.8.0';
   const POSITION_KEY = `${SCRIPT_ID}:button-position`;
   const SETTINGS_KEY = `${SCRIPT_ID}:settings`;
   const DEBUG = false;
@@ -384,7 +384,7 @@
   function currentQuery() {
     const fromUrl = new URL(location.href).searchParams.get('q');
     const input = getSearchInput();
-    return (fromUrl || input?.value || '').trim();
+    return stripAdvancedSyntax(fromUrl || input?.value || '');
   }
 
   function panel() {
@@ -413,7 +413,7 @@
   function collectSettings(root = panel()) {
     if (!root) return null;
     const settings = {
-      base: root.querySelector('[data-xas-base]')?.value || '',
+      base: stripAdvancedSyntax(root.querySelector('[data-xas-base]')?.value || ''),
       checks: {},
       values: {}
     };
@@ -443,7 +443,7 @@
     const settings = readSavedSettings();
     if (!settings) return false;
     const base = root.querySelector('[data-xas-base]');
-    if (base) base.value = settings.base || '';
+    if (base) base.value = stripAdvancedSyntax(settings.base || '');
     for (const param of PARAMS) {
       const check = root.querySelector(`[data-xas-check="${param.key}"]`);
       const value = root.querySelector(`[data-xas-value="${param.key}"]`);
@@ -457,7 +457,7 @@
     const root = panel();
     if (!root) return '';
     const parts = [];
-    const base = root.querySelector('[data-xas-base]')?.value.trim();
+    const base = stripAdvancedSyntax(root.querySelector('[data-xas-base]')?.value || '');
     if (base) parts.push(base);
 
     for (const param of PARAMS) {
@@ -467,6 +467,15 @@
     }
 
     return parts.join(' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function stripAdvancedSyntax(query) {
+    return String(query || '')
+      .replace(/(^|\s)-?filter:(?:links|images|videos|replies)\b/gi, ' ')
+      .replace(/(^|\s)(?:from|since|until|min_faves|min_retweets|min_replies|lang):[^\s]+/gi, ' ')
+      .replace(/(^|\s)is:verified\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   function updatePreview() {
