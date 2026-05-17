@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Advanced Search Helper
 // @namespace    local.codex
-// @version      0.2.0
+// @version      0.4.0
 // @description  Add a floating Chinese advanced-search builder to X explore/search pages.
 // @match        https://x.com/explore*
 // @match        https://x.com/search*
@@ -18,7 +18,9 @@
   const STYLE_ID = `${SCRIPT_ID}-style`;
   const BUTTON_ID = `${SCRIPT_ID}-button`;
   const PANEL_ID = `${SCRIPT_ID}-panel`;
-  const VERSION = '0.2.0';
+  const VERSION = '0.4.0';
+  const ICON_URL = 'https://raw.githubusercontent.com/hahapkpk/tools/main/grok.png';
+  const POSITION_KEY = `${SCRIPT_ID}:button-position`;
   const DEBUG = false;
   const log = (...args) => DEBUG && console.log(`[${SCRIPT_ID}]`, ...args);
 
@@ -145,6 +147,20 @@
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : '';
   }
 
+  function formatLocalDate(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  function dateDaysAgo(days) {
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() - days);
+    return formatLocalDate(date);
+  }
+
   function isTargetRoute() {
     return /^\/(explore|search)/.test(location.pathname);
   }
@@ -177,17 +193,19 @@
         position: fixed;
         right: 22px;
         bottom: 86px;
-        width: 48px;
-        height: 48px;
-        border: 1px solid rgba(29, 155, 240, .7);
+        width: 52px;
+        height: 52px;
+        border: 1px solid rgba(113, 118, 123, .5);
         border-radius: 999px;
-        background: rgb(29, 155, 240);
-        color: white;
-        font: 700 20px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #000 url("${ICON_URL}") center / 76% 76% no-repeat;
+        color: transparent;
         box-shadow: 0 10px 28px rgba(0, 0, 0, .35);
-        cursor: pointer;
+        cursor: grab;
+        touch-action: none;
+        user-select: none;
         z-index: 10000;
       }
+      #${BUTTON_ID}.xas-dragging { cursor: grabbing; }
       #${BUTTON_ID}:hover { filter: brightness(1.08); }
       #${PANEL_ID} {
         position: fixed;
@@ -236,6 +254,11 @@
       #${PANEL_ID} .xas-help,
       #${PANEL_ID} .xas-status {
         color: rgb(113, 118, 123);
+      }
+      #${PANEL_ID} .xas-date-shortcuts {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
       }
       #${PANEL_ID} input,
       #${PANEL_ID} textarea {
@@ -413,6 +436,98 @@
     else closePanel();
   }
 
+  function clamp(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+  }
+
+  function readSavedButtonPosition() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(POSITION_KEY) || 'null');
+      if (!parsed || typeof parsed.left !== 'number' || typeof parsed.top !== 'number') return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  function setButtonPosition(button, left, top) {
+    const margin = 8;
+    const maxLeft = Math.max(margin, window.innerWidth - button.offsetWidth - margin);
+    const maxTop = Math.max(margin, window.innerHeight - button.offsetHeight - margin);
+    const nextLeft = clamp(left, margin, maxLeft);
+    const nextTop = clamp(top, margin, maxTop);
+    button.style.left = `${nextLeft}px`;
+    button.style.top = `${nextTop}px`;
+    button.style.right = 'auto';
+    button.style.bottom = 'auto';
+    return { left: nextLeft, top: nextTop };
+  }
+
+  function saveButtonPosition(button) {
+    const rect = button.getBoundingClientRect();
+    const pos = setButtonPosition(button, rect.left, rect.top);
+    localStorage.setItem(POSITION_KEY, JSON.stringify(pos));
+  }
+
+  function restoreButtonPosition(button) {
+    const saved = readSavedButtonPosition();
+    if (!saved) return;
+    requestAnimationFrame(() => setButtonPosition(button, saved.left, saved.top));
+  }
+
+  function enableButtonDrag(button) {
+    let state = null;
+
+    button.addEventListener('pointerdown', (event) => {
+      if (event.button != null && event.button !== 0) return;
+      const rect = button.getBoundingClientRect();
+      state = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        left: rect.left,
+        top: rect.top,
+        moved: false
+      };
+      button.setPointerCapture?.(event.pointerId);
+    });
+
+    button.addEventListener('pointermove', (event) => {
+      if (!state || event.pointerId !== state.pointerId) return;
+      const dx = event.clientX - state.startX;
+      const dy = event.clientY - state.startY;
+      if (Math.hypot(dx, dy) > 4) state.moved = true;
+      if (!state.moved) return;
+      button.classList.add('xas-dragging');
+      setButtonPosition(button, state.left + dx, state.top + dy);
+    });
+
+    function finishDrag(event) {
+      if (!state || event.pointerId !== state.pointerId) return;
+      button.releasePointerCapture?.(event.pointerId);
+      button.classList.remove('xas-dragging');
+      if (state.moved) {
+        button.dataset.xasSuppressClick = '1';
+        saveButtonPosition(button);
+        setTimeout(() => {
+          delete button.dataset.xasSuppressClick;
+        }, 0);
+      }
+      state = null;
+    }
+
+    button.addEventListener('pointerup', finishDrag);
+    button.addEventListener('pointercancel', finishDrag);
+    button.addEventListener('click', (event) => {
+      if (button.dataset.xasSuppressClick === '1') {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      togglePanel();
+    });
+  }
+
   function clearAll() {
     const root = panel();
     root.querySelector('[data-xas-base]').value = '';
@@ -460,6 +575,19 @@
     location.assign(url.toString());
   }
 
+  function applySinceShortcut(daysAgo) {
+    const sinceCheck = rowControl('since', 'check');
+    const sinceValue = rowControl('since', 'value');
+    const untilCheck = rowControl('until', 'check');
+    const untilValue = rowControl('until', 'value');
+    if (sinceCheck) sinceCheck.checked = true;
+    if (sinceValue) sinceValue.value = dateDaysAgo(daysAgo);
+    if (untilCheck) untilCheck.checked = false;
+    if (untilValue) untilValue.value = '';
+    updatePreview();
+    setStatus(daysAgo === 0 ? '已选择今天' : `已选择近 ${daysAgo} 天`);
+  }
+
   function createParamRow(param) {
     const checkbox = el('input', {
       type: 'checkbox',
@@ -479,6 +607,14 @@
         ...param.input,
         'data-xas-value': param.key
       }));
+    }
+
+    if (param.key === 'since') {
+      children.push(el('div', { className: 'xas-date-shortcuts' }, [
+        el('button', { type: 'button', onclick: () => applySinceShortcut(0) }, '今天'),
+        el('button', { type: 'button', onclick: () => applySinceShortcut(7) }, '近一周'),
+        el('button', { type: 'button', onclick: () => applySinceShortcut(30) }, '近一月')
+      ]));
     }
 
     return el('div', { className: 'xas-row' }, [
@@ -519,14 +655,16 @@
   }
 
   function createButton() {
-    return el('button', {
+    const button = el('button', {
       id: BUTTON_ID,
       type: 'button',
       'data-xas-version': VERSION,
       title: '打开 X 高级搜索参数',
-      'aria-label': '打开 X 高级搜索参数',
-      onclick: togglePanel
-    }, '搜');
+      'aria-label': '打开 X 高级搜索参数'
+    }, '');
+    enableButtonDrag(button);
+    restoreButtonPosition(button);
+    return button;
   }
 
   function mount() {
@@ -547,6 +685,11 @@
     }
     updatePreview();
   }
+
+  window.addEventListener('resize', () => {
+    const button = document.getElementById(BUTTON_ID);
+    if (button) saveButtonPosition(button);
+  });
 
   function scheduleMount() {
     clearTimeout(scheduleMount.timer);
