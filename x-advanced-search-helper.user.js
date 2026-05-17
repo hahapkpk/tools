@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Advanced Search Helper
 // @namespace    local.codex
-// @version      0.5.0
+// @version      0.6.0
 // @description  Add a floating Chinese advanced-search builder to X explore/search pages.
 // @match        https://x.com/explore*
 // @match        https://x.com/search*
@@ -18,12 +18,17 @@
   const STYLE_ID = `${SCRIPT_ID}-style`;
   const BUTTON_ID = `${SCRIPT_ID}-button`;
   const PANEL_ID = `${SCRIPT_ID}-panel`;
-  const VERSION = '0.5.0';
+  const VERSION = '0.6.0';
   const ICON_URL = 'https://raw.githubusercontent.com/hahapkpk/tools/main/grok.png';
   const POSITION_KEY = `${SCRIPT_ID}:button-position`;
   const SETTINGS_KEY = `${SCRIPT_ID}:settings`;
   const DEBUG = false;
   const log = (...args) => DEBUG && console.log(`[${SCRIPT_ID}]`, ...args);
+  const NUMBER_SHORTCUTS = {
+    minFaves: [100, 500, 1000, 5000, 10000],
+    minRetweets: [10, 50, 100, 500, 1000],
+    minReplies: [10, 50, 100, 500, 1000]
+  };
 
   const SEARCH_INPUT_SELECTOR = [
     'input[data-testid="SearchBox_Search_Input"]',
@@ -267,6 +272,11 @@
         color: rgb(113, 118, 123);
       }
       #${PANEL_ID} .xas-date-shortcuts {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      #${PANEL_ID} .xas-number-shortcuts {
         display: flex;
         flex-wrap: wrap;
         gap: 6px;
@@ -644,6 +654,16 @@
     setStatus(daysAgo === 0 ? '已选择今天' : `已选择近 ${daysAgo} 天`);
   }
 
+  function applyNumberShortcut(key, value) {
+    const check = rowControl(key, 'check');
+    const input = rowControl(key, 'value');
+    if (check) check.checked = true;
+    if (input) input.value = String(value);
+    updatePreview();
+    const param = PARAMS.find((item) => item.key === key);
+    setStatus(`已设置${param?.label || '数值'}：${value}`);
+  }
+
   function createParamRow(param) {
     const checkbox = el('input', {
       type: 'checkbox',
@@ -671,6 +691,12 @@
         el('button', { type: 'button', onclick: () => applySinceShortcut(7) }, '近一周'),
         el('button', { type: 'button', onclick: () => applySinceShortcut(30) }, '近一月')
       ]));
+    }
+
+    if (NUMBER_SHORTCUTS[param.key]) {
+      children.push(el('div', { className: 'xas-number-shortcuts' }, NUMBER_SHORTCUTS[param.key].map((value) => (
+        el('button', { type: 'button', onclick: () => applyNumberShortcut(param.key, value) }, String(value))
+      ))));
     }
 
     return el('div', { className: 'xas-row' }, [
