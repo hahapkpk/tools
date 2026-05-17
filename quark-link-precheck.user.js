@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘链接预检
 // @namespace    local.codex
-// @version      0.5.3
+// @version      0.5.4
 // @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。
 // @match        *://*/*
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
@@ -48,6 +48,7 @@
   let panelVisible = false;
   let settingsVisible = false;
   let checking = false;
+  let activationObserver = null;
 
   function shouldActivate() {
     const href = location.href;
@@ -545,6 +546,15 @@
     });
   }
 
+  function isVisible(el) {
+    if (!el || !el.isConnected) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) {
+      return false;
+    }
+    return Boolean(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  }
+
   function insertInlineButton() {
     if (document.getElementById(`${SCRIPT_ID}-inline`)) return;
     if (!document.body) return;
@@ -610,14 +620,34 @@
     renderPanel();
   }
 
+  function waitForActivation() {
+    if (activationObserver) return;
+    if (!document.body && !document.documentElement) return;
+
+    activationObserver = new MutationObserver(() => {
+      if (!shouldActivate()) return;
+      activationObserver.disconnect();
+      activationObserver = null;
+      init();
+    });
+    activationObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
+    setTimeout(() => {
+      if (!activationObserver) return;
+      activationObserver.disconnect();
+      activationObserver = null;
+    }, 10000);
+  }
+
   function init() {
     if (document.documentElement.getAttribute('data-' + SCRIPT_ID)) return;
-    document.documentElement.setAttribute('data-' + SCRIPT_ID, '1');
 
     if (!shouldActivate()) {
-      log('inactive page', location.href);
+      waitForActivation();
+      log('waiting for quark links', location.href);
       return;
     }
+
+    document.documentElement.setAttribute('data-' + SCRIPT_ID, '1');
 
     // 自动选择夸克网盘 tab（等待动态加载）
     function clickQuarkTab() {
