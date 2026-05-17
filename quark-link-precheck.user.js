@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘链接预检
 // @namespace    local.codex
-// @version      0.5.4
+// @version      0.5.5
 // @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。
 // @match        *://*/*
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
@@ -28,6 +28,7 @@
   const DEBUG = false;
 
   const QUARK_LINK_RE = /https?:\/\/pan\.quark\.cn\/s\/([A-Za-z0-9_-]{6,})(?:[/?#][^\s"'<>]*)?/gi;
+  const NETDISK_TAB_RE = /(百度网盘|夸克网盘|迅雷网盘|UC网盘|123网盘|阿里网盘|天翼网盘|移动云盘|115网盘)/;
 
   if (window.top !== window.self) return;
 
@@ -638,6 +639,37 @@
     }, 10000);
   }
 
+  function isActiveTab(el) {
+    return /\b(active|on|current|selected)\b/i.test(String(el.className || '')) ||
+      el.getAttribute('aria-selected') === 'true';
+  }
+
+  function findQuarkTab() {
+    const candidates = Array.from(document.querySelectorAll('li, button, a, [role="tab"], [data-tab], [data-target]'));
+    return candidates.find((el) => {
+      const text = el.textContent?.trim().replace(/\s+/g, '') || '';
+      if (!/^夸克网盘/.test(text)) return false;
+      const groupText = el.parentElement?.textContent || '';
+      return NETDISK_TAB_RE.test(groupText);
+    }) || null;
+  }
+
+  function hasMultipleNetdiskTabs(tab) {
+    const groupText = tab?.parentElement?.textContent || '';
+    const matched = groupText.match(new RegExp(NETDISK_TAB_RE.source, 'g')) || [];
+    return new Set(matched).size > 1;
+  }
+
+  function autoSelectQuarkTab() {
+    const tab = findQuarkTab();
+    if (!tab || !hasMultipleNetdiskTabs(tab) || !isVisible(tab) || isActiveTab(tab)) {
+      return false;
+    }
+    tab.click();
+    log('selected quark tab', tab.textContent?.trim());
+    return true;
+  }
+
   function init() {
     if (document.documentElement.getAttribute('data-' + SCRIPT_ID)) return;
 
@@ -649,15 +681,9 @@
 
     document.documentElement.setAttribute('data-' + SCRIPT_ID, '1');
 
-    // 自动选择夸克网盘 tab（等待动态加载）
-    function clickQuarkTab() {
-      for (const li of document.querySelectorAll('ul.dragscroll li')) {
-        if (/^夸克网盘/.test(li.textContent.trim())) { li.click(); return true; }
-      }
-      return false;
-    }
-    if (!clickQuarkTab()) {
-      const tabOb = new MutationObserver((_, ob) => { if (clickQuarkTab()) ob.disconnect(); });
+    // 多个网盘分类同时存在时，优先切到夸克网盘页。
+    if (!autoSelectQuarkTab()) {
+      const tabOb = new MutationObserver((_, ob) => { if (autoSelectQuarkTab()) ob.disconnect(); });
       tabOb.observe(document.body || document.documentElement, { childList: true, subtree: true });
       setTimeout(() => tabOb.disconnect(), 8000);
     }
@@ -674,6 +700,7 @@
     const observer = new MutationObserver(() => {
       if (checking) return;
       const before = links.length;
+      autoSelectQuarkTab();
       collectLinks();
       insertInlineButton();
       if (links.length !== before) renderPanel();
