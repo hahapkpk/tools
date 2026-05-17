@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Advanced Search Helper
 // @namespace    local.codex
-// @version      0.6.0
+// @version      0.7.0
 // @description  Add a floating Chinese advanced-search builder to X explore/search pages.
 // @match        https://x.com/explore*
 // @match        https://x.com/search*
@@ -18,8 +18,7 @@
   const STYLE_ID = `${SCRIPT_ID}-style`;
   const BUTTON_ID = `${SCRIPT_ID}-button`;
   const PANEL_ID = `${SCRIPT_ID}-panel`;
-  const VERSION = '0.6.0';
-  const ICON_URL = 'https://raw.githubusercontent.com/hahapkpk/tools/main/grok.png';
+  const VERSION = '0.7.0';
   const POSITION_KEY = `${SCRIPT_ID}:button-position`;
   const SETTINGS_KEY = `${SCRIPT_ID}:settings`;
   const DEBUG = false;
@@ -199,29 +198,27 @@
         position: fixed;
         right: 22px;
         bottom: 86px;
-        width: 52px;
-        height: 52px;
+        width: 54px;
+        height: 54px;
         display: grid;
         place-items: center;
-        border: 1px solid rgba(231, 233, 234, .9);
+        border: 0;
         border-radius: 999px;
-        background: rgb(247, 249, 249);
-        color: transparent;
-        box-shadow: 0 10px 28px rgba(0, 0, 0, .35);
+        background: rgb(0, 0, 0);
+        color: rgb(231, 233, 234);
+        box-shadow: none;
         cursor: grab;
         touch-action: none;
         user-select: none;
         z-index: 10000;
       }
       #${BUTTON_ID}.xas-dragging { cursor: grabbing; }
-      #${BUTTON_ID}:hover { filter: brightness(1.08); }
-      #${BUTTON_ID} img {
-        width: 76%;
-        height: 76%;
+      #${BUTTON_ID}:hover { background: rgb(24, 24, 24); }
+      #${BUTTON_ID} svg {
+        width: 34px;
+        height: 34px;
         display: block;
-        object-fit: contain;
         pointer-events: none;
-        filter: invert(1);
       }
       #${PANEL_ID} {
         position: fixed;
@@ -744,13 +741,24 @@
       'data-xas-version': VERSION,
       title: '打开 X 高级搜索参数',
       'aria-label': '打开 X 高级搜索参数'
-    }, el('img', {
-      src: ICON_URL,
-      alt: ''
-    }));
+    }, createGrokIcon());
     enableButtonDrag(button);
     restoreButtonPosition(button);
     return button;
+  }
+
+  function createGrokIcon() {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 48 48');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+    svg.innerHTML = `
+      <path d="M8 40 23.5 24.5" fill="none" stroke="currentColor" stroke-width="4.2" stroke-linecap="round"/>
+      <path d="M24.5 23.5 40 8 32.5 22.5 25.5 26.5 21.5 32.5 8 40Z" fill="currentColor"/>
+      <path d="M34.5 13.5A19 19 0 1 0 36 32" fill="none" stroke="currentColor" stroke-width="5.4" stroke-linecap="round"/>
+      <path d="M14 34.5A19 19 0 0 0 36.5 31" fill="none" stroke="currentColor" stroke-width="5.4" stroke-linecap="round"/>
+    `;
+    return svg;
   }
 
   function mount() {
