@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘保存并重命名
 // @namespace    local.codex
-// @version      0.8.5
+// @version      0.8.6
 // @description  在夸克网盘分享页面，保存文件夹到网盘后自动重命名为指定名称。
 // @match        https://pan.quark.cn/s/*
 // @match        https://pan.quark.cn/list*
@@ -87,7 +87,7 @@
       panel.querySelector('#qr-del-sel').style.display = 'none';
       panel.querySelector('#qr-restore-sel').style.display = 'none';
       try {
-        const res = await fetch(`https://drive-pc.quark.cn/1/clouddrive/file/deep_recycle/list?_page=1&_size=100&fetch_pdir_file_name=1&sort=move_recycle_at:desc&_t=${Date.now()}`, { credentials: 'include' });
+        const res = await fetch(`https://drive-pc.quark.cn/1/clouddrive/file/deep_recycle/list?${PARAMS}&_page=1&_size=100&fetch_pdir_file_name=1&sort=move_recycle_at:desc&_t=${Date.now()}`, { credentials: 'include' });
         const d = await res.json();
         const files = d.data?.list || [];
         const total = d.data?.deep_recycle_stat?.deep_recycle_count || files.length;
