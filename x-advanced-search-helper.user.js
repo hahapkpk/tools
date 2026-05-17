@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         X Advanced Search Helper
 // @namespace    local.codex
-// @version      0.1.0
-// @description  Add a compact advanced-search builder to X explore/search pages.
+// @version      0.2.0
+// @description  Add a floating Chinese advanced-search builder to X explore/search pages.
 // @match        https://x.com/explore*
 // @match        https://x.com/search*
 // @match        https://twitter.com/explore*
@@ -16,11 +16,13 @@
 
   const SCRIPT_ID = 'x-advanced-search-helper';
   const STYLE_ID = `${SCRIPT_ID}-style`;
+  const BUTTON_ID = `${SCRIPT_ID}-button`;
   const PANEL_ID = `${SCRIPT_ID}-panel`;
+  const VERSION = '0.2.0';
   const DEBUG = false;
   const log = (...args) => DEBUG && console.log(`[${SCRIPT_ID}]`, ...args);
 
-  const SELECTORS = [
+  const SEARCH_INPUT_SELECTOR = [
     'input[data-testid="SearchBox_Search_Input"]',
     'input[aria-label="查询词条"]',
     'input[aria-label="Search query"]',
@@ -29,25 +31,119 @@
     'input[placeholder="Search"]'
   ].join(',');
 
-  const FILTERS = [
-    { key: 'links', label: '链接', value: 'filter:links' },
-    { key: 'images', label: '图片', value: 'filter:images' },
-    { key: 'videos', label: '视频', value: 'filter:videos' },
-    { key: 'noReplies', label: '排除回复', value: '-filter:replies' },
-    { key: 'verified', label: '认证用户', value: 'is:verified' }
+  const PARAMS = [
+    {
+      key: 'from',
+      label: '指定用户',
+      syntax: 'from:用户名',
+      help: '只看某个用户发布的帖子',
+      input: { type: 'text', placeholder: '用户名，不用输入 @' },
+      build: (value) => value ? `from:${value.replace(/^@/, '')}` : ''
+    },
+    {
+      key: 'since',
+      label: '起始日期',
+      syntax: 'since:2026-05-01',
+      help: '只看这个日期之后发布的帖子',
+      input: { type: 'date' },
+      build: (value) => /^\d{4}-\d{2}-\d{2}$/.test(value) ? `since:${value}` : ''
+    },
+    {
+      key: 'until',
+      label: '结束日期',
+      syntax: 'until:2026-05-17',
+      help: '只看这个日期之前发布的帖子',
+      input: { type: 'date' },
+      build: (value) => /^\d{4}-\d{2}-\d{2}$/.test(value) ? `until:${value}` : ''
+    },
+    {
+      key: 'minFaves',
+      label: '最低点赞数',
+      syntax: 'min_faves:1000',
+      help: '点赞数至少达到指定数量',
+      input: { type: 'number', min: '1', step: '1', placeholder: '1000' },
+      build: (value) => positiveInteger(value) ? `min_faves:${positiveInteger(value)}` : ''
+    },
+    {
+      key: 'minRetweets',
+      label: '最低转发数',
+      syntax: 'min_retweets:100',
+      help: '转发数至少达到指定数量',
+      input: { type: 'number', min: '1', step: '1', placeholder: '100' },
+      build: (value) => positiveInteger(value) ? `min_retweets:${positiveInteger(value)}` : ''
+    },
+    {
+      key: 'minReplies',
+      label: '最低评论数',
+      syntax: 'min_replies:50',
+      help: '评论数至少达到指定数量',
+      input: { type: 'number', min: '1', step: '1', placeholder: '50' },
+      build: (value) => positiveInteger(value) ? `min_replies:${positiveInteger(value)}` : ''
+    },
+    {
+      key: 'lang',
+      label: '中文帖子',
+      syntax: 'lang:zh',
+      help: '只看中文内容',
+      build: () => 'lang:zh'
+    },
+    {
+      key: 'links',
+      label: '带链接',
+      syntax: 'filter:links',
+      help: '只看包含链接的帖子',
+      build: () => 'filter:links'
+    },
+    {
+      key: 'images',
+      label: '带图片',
+      syntax: 'filter:images',
+      help: '只看包含图片的帖子',
+      build: () => 'filter:images'
+    },
+    {
+      key: 'videos',
+      label: '带视频',
+      syntax: 'filter:videos',
+      help: '只看包含视频的帖子',
+      build: () => 'filter:videos'
+    },
+    {
+      key: 'noReplies',
+      label: '排除回复',
+      syntax: '-filter:replies',
+      help: '排除回复内容，只看更像主帖的结果',
+      build: () => '-filter:replies'
+    },
+    {
+      key: 'verified',
+      label: '认证用户',
+      syntax: 'is:verified',
+      help: '只看认证用户发布的帖子',
+      build: () => 'is:verified'
+    },
+    {
+      key: 'phrase',
+      label: '完整词组',
+      syntax: '"完整词组"',
+      help: '精确匹配一整段词组',
+      input: { type: 'text', placeholder: '完整词组' },
+      build: (value) => value ? `"${value.replace(/^"+|"+$/g, '').replace(/"/g, '\\"')}"` : ''
+    },
+    {
+      key: 'or',
+      label: '或搜索',
+      syntax: 'A OR B',
+      help: '两个关键词任意命中一个即可',
+      input: { type: 'text', placeholder: 'AI OR ChatGPT' },
+      build: (value) => value ? value.replace(/\s*\|\s*/g, ' OR ') : ''
+    }
   ];
 
-  const QUICK_TOKENS = [
-    'lang:zh',
-    'filter:links',
-    'filter:images',
-    'filter:videos',
-    '-filter:replies',
-    'is:verified',
-    'min_faves:500',
-    'min_retweets:100',
-    'min_replies:50'
-  ];
+  function positiveInteger(value) {
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : '';
+  }
 
   function isTargetRoute() {
     return /^\/(explore|search)/.test(location.pathname);
@@ -75,25 +171,42 @@
       style = el('style', { id: STYLE_ID });
       document.head.append(style);
     }
+    style.dataset.xasVersion = VERSION;
     style.textContent = `
-      #${PANEL_ID} {
-        box-sizing: border-box;
+      #${BUTTON_ID} {
         position: fixed;
-        top: 86px;
-        right: max(12px, calc((100vw - 1280px) / 2 + 16px));
-        width: min(560px, calc(100vw - 24px));
-        max-height: calc(100vh - 110px);
-        overflow: auto;
-        margin: 0;
-        padding: 10px;
-        border: 1px solid rgba(113, 118, 123, .42);
-        border-radius: 8px;
-        background: rgba(0, 0, 0, .96);
-        color: rgb(231, 233, 234);
-        font: 13px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, .38);
-        z-index: 9999;
+        right: 22px;
+        bottom: 86px;
+        width: 48px;
+        height: 48px;
+        border: 1px solid rgba(29, 155, 240, .7);
+        border-radius: 999px;
+        background: rgb(29, 155, 240);
+        color: white;
+        font: 700 20px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, .35);
+        cursor: pointer;
+        z-index: 10000;
       }
+      #${BUTTON_ID}:hover { filter: brightness(1.08); }
+      #${PANEL_ID} {
+        position: fixed;
+        right: 22px;
+        bottom: 144px;
+        width: min(560px, calc(100vw - 28px));
+        max-height: min(720px, calc(100vh - 172px));
+        overflow: auto;
+        box-sizing: border-box;
+        border: 1px solid rgba(113, 118, 123, .42);
+        border-radius: 10px;
+        background: rgba(0, 0, 0, .97);
+        color: rgb(231, 233, 234);
+        padding: 14px;
+        font: 14px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        box-shadow: 0 18px 48px rgba(0, 0, 0, .45);
+        z-index: 10000;
+      }
+      #${PANEL_ID}[hidden] { display: none !important; }
       html:not([style*="color-scheme: dark"]) #${PANEL_ID} {
         background: rgba(255, 255, 255, .98);
         color: rgb(15, 20, 25);
@@ -103,57 +216,93 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 8px;
-        margin-bottom: 8px;
+        gap: 10px;
+        margin-bottom: 12px;
       }
-      #${PANEL_ID} .xas-title { font-weight: 700; font-size: 14px; }
-      #${PANEL_ID} .xas-grid {
+      #${PANEL_ID} .xas-title { font-size: 18px; font-weight: 800; }
+      #${PANEL_ID} .xas-close {
+        width: 32px;
+        height: 32px;
+        border-radius: 999px;
+        padding: 0;
+        font-size: 18px;
+      }
+      #${PANEL_ID} .xas-base {
         display: grid;
-        grid-template-columns: repeat(6, minmax(0, 1fr));
-        gap: 7px;
+        gap: 6px;
+        margin-bottom: 12px;
       }
-      #${PANEL_ID} label { display: grid; gap: 3px; min-width: 0; color: rgb(113, 118, 123); }
-      #${PANEL_ID} .xas-span-2 { grid-column: span 2; }
-      #${PANEL_ID} .xas-span-3 { grid-column: span 3; }
-      #${PANEL_ID} .xas-span-6 { grid-column: 1 / -1; }
+      #${PANEL_ID} .xas-base-note,
+      #${PANEL_ID} .xas-help,
+      #${PANEL_ID} .xas-status {
+        color: rgb(113, 118, 123);
+      }
       #${PANEL_ID} input,
-      #${PANEL_ID} select,
       #${PANEL_ID} textarea {
         width: 100%;
         min-width: 0;
         border: 1px solid rgba(113, 118, 123, .45);
-        border-radius: 6px;
+        border-radius: 7px;
         background: transparent;
         color: inherit;
-        padding: 6px 8px;
+        padding: 8px 9px;
         outline: none;
       }
-      #${PANEL_ID} textarea { resize: vertical; min-height: 38px; }
+      #${PANEL_ID} textarea { resize: vertical; min-height: 68px; }
       #${PANEL_ID} input:focus,
-      #${PANEL_ID} select:focus,
       #${PANEL_ID} textarea:focus { border-color: rgb(29, 155, 240); }
-      #${PANEL_ID} .xas-checks,
-      #${PANEL_ID} .xas-tokens,
+      #${PANEL_ID} .xas-list {
+        display: grid;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      #${PANEL_ID} .xas-row {
+        display: grid;
+        grid-template-columns: 24px minmax(0, 1fr);
+        gap: 8px;
+        padding: 9px;
+        border: 1px solid rgba(113, 118, 123, .25);
+        border-radius: 8px;
+      }
+      #${PANEL_ID} .xas-row input[type="checkbox"] {
+        width: 17px;
+        height: 17px;
+        margin-top: 2px;
+      }
+      #${PANEL_ID} .xas-row-main {
+        display: grid;
+        gap: 6px;
+      }
+      #${PANEL_ID} .xas-row-top {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 6px;
+      }
+      #${PANEL_ID} .xas-label { font-weight: 700; }
+      #${PANEL_ID} .xas-syntax {
+        color: rgb(29, 155, 240);
+        font-family: Consolas, "SFMono-Regular", Menlo, monospace;
+        font-size: 12px;
+      }
+      #${PANEL_ID} .xas-preview-label {
+        display: grid;
+        gap: 6px;
+        margin-bottom: 12px;
+      }
       #${PANEL_ID} .xas-actions {
         display: flex;
         flex-wrap: wrap;
-        gap: 6px;
         align-items: center;
+        gap: 8px;
       }
-      #${PANEL_ID} .xas-check {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        width: auto;
-        color: inherit;
-      }
-      #${PANEL_ID} .xas-check input { width: auto; }
       #${PANEL_ID} button {
         border: 1px solid rgba(113, 118, 123, .45);
         border-radius: 999px;
         background: transparent;
         color: inherit;
-        padding: 5px 10px;
+        padding: 7px 12px;
         cursor: pointer;
         white-space: nowrap;
       }
@@ -162,26 +311,24 @@
         border-color: rgb(29, 155, 240);
         background: rgb(29, 155, 240);
         color: white;
-        font-weight: 700;
+        font-weight: 800;
       }
-      #${PANEL_ID} .xas-status { color: rgb(113, 118, 123); min-height: 18px; }
+      #${PANEL_ID} .xas-secondary { margin-left: auto; }
       @media (max-width: 700px) {
+        #${BUTTON_ID} { right: 14px; bottom: 72px; }
         #${PANEL_ID} {
-          top: 74px;
-          left: 10px;
           right: 10px;
+          left: 10px;
+          bottom: 132px;
           width: auto;
+          max-height: calc(100vh - 150px);
         }
-        #${PANEL_ID} .xas-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        #${PANEL_ID} .xas-span-2,
-        #${PANEL_ID} .xas-span-3,
-        #${PANEL_ID} .xas-span-6 { grid-column: 1 / -1; }
       }
     `;
   }
 
   function getSearchInput() {
-    return document.querySelector(SELECTORS);
+    return document.querySelector(SEARCH_INPUT_SELECTOR);
   }
 
   function nativeSetValue(input, value) {
@@ -193,100 +340,97 @@
     input.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
-  function setStatus(text, isError = false) {
-    const status = document.querySelector(`#${PANEL_ID} .xas-status`);
-    if (!status) return;
-    status.textContent = text || '';
-    status.style.color = isError ? 'rgb(244, 33, 46)' : 'rgb(113, 118, 123)';
-  }
-
-  function field(panel, name) {
-    return panel.querySelector(`[data-xas-field="${name}"]`);
-  }
-
-  function appendToken(token) {
-    const panel = document.getElementById(PANEL_ID);
-    const base = field(panel, 'base');
-    const current = base.value.trim();
-    const parts = new Set(current.split(/\s+/).filter(Boolean));
-    if (!parts.has(token)) base.value = current ? `${current} ${token}` : token;
-    updatePreview();
-  }
-
-  function normalizeDate(value) {
-    return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : '';
-  }
-
-  function normalizeNumber(value) {
-    const n = Number(value);
-    return Number.isFinite(n) && n > 0 ? Math.floor(n) : '';
-  }
-
-  function buildQuery() {
-    const panel = document.getElementById(PANEL_ID);
-    const parts = [];
-    const base = field(panel, 'base').value.trim();
-    const phrase = field(panel, 'phrase').value.trim().replace(/^"+|"+$/g, '');
-    const orText = field(panel, 'or').value.trim();
-    const from = field(panel, 'from').value.trim().replace(/^@/, '');
-    const since = normalizeDate(field(panel, 'since').value);
-    const until = normalizeDate(field(panel, 'until').value);
-    const langSelect = field(panel, 'lang').value;
-    const langCustom = field(panel, 'langCustom').value.trim().replace(/^lang:/, '');
-    const minFaves = normalizeNumber(field(panel, 'minFaves').value);
-    const minRetweets = normalizeNumber(field(panel, 'minRetweets').value);
-    const minReplies = normalizeNumber(field(panel, 'minReplies').value);
-
-    if (base) parts.push(base);
-    if (phrase) parts.push(`"${phrase.replace(/"/g, '\\"')}"`);
-    if (orText) parts.push(orText.includes(' OR ') ? orText : orText.replace(/\s*\|\s*/g, ' OR '));
-    if (from) parts.push(`from:${from}`);
-    if (since) parts.push(`since:${since}`);
-    if (until) parts.push(`until:${until}`);
-    if (minFaves) parts.push(`min_faves:${minFaves}`);
-    if (minRetweets) parts.push(`min_retweets:${minRetweets}`);
-    if (minReplies) parts.push(`min_replies:${minReplies}`);
-    if (langSelect === 'custom' && langCustom) parts.push(`lang:${langCustom}`);
-    else if (langSelect) parts.push(`lang:${langSelect}`);
-
-    for (const item of FILTERS) {
-      if (field(panel, item.key).checked) parts.push(item.value);
-    }
-
-    return parts.join(' ').replace(/\s+/g, ' ').trim();
-  }
-
-  function updatePreview() {
-    const panel = document.getElementById(PANEL_ID);
-    if (!panel) return;
-    const query = buildQuery();
-    field(panel, 'preview').value = query;
-  }
-
   function currentQuery() {
     const fromUrl = new URL(location.href).searchParams.get('q');
     const input = getSearchInput();
     return (fromUrl || input?.value || '').trim();
   }
 
-  function readCurrent() {
-    const panel = document.getElementById(PANEL_ID);
-    field(panel, 'base').value = currentQuery();
-    updatePreview();
-    setStatus('已读取当前搜索词');
+  function panel() {
+    return document.getElementById(PANEL_ID);
   }
 
-  function clearFields() {
-    const panel = document.getElementById(PANEL_ID);
-    panel.querySelectorAll('input[type="text"], input[type="number"], input[type="date"]').forEach((input) => {
-      input.value = '';
-    });
-    panel.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+  function rowControl(key, suffix) {
+    return panel()?.querySelector(`[data-xas-${suffix}="${key}"]`);
+  }
+
+  function setStatus(text, isError = false) {
+    const status = panel()?.querySelector('.xas-status');
+    if (!status) return;
+    status.textContent = text || '';
+    status.style.color = isError ? 'rgb(244, 33, 46)' : 'rgb(113, 118, 123)';
+  }
+
+  function isChecked(key) {
+    return !!rowControl(key, 'check')?.checked;
+  }
+
+  function inputValue(key) {
+    return (rowControl(key, 'value')?.value || '').trim();
+  }
+
+  function buildQuery() {
+    const root = panel();
+    if (!root) return '';
+    const parts = [];
+    const base = root.querySelector('[data-xas-base]')?.value.trim();
+    if (base) parts.push(base);
+
+    for (const param of PARAMS) {
+      if (!isChecked(param.key)) continue;
+      const token = param.build(inputValue(param.key));
+      if (token) parts.push(token);
+    }
+
+    return parts.join(' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function updatePreview() {
+    const root = panel();
+    if (!root) return;
+    root.querySelector('[data-xas-preview]').value = buildQuery();
+  }
+
+  function openPanel() {
+    const root = panel();
+    if (!root) return;
+    root.hidden = false;
+    const base = root.querySelector('[data-xas-base]');
+    if (!base.value.trim()) base.value = currentQuery();
+    updatePreview();
+    base.focus();
+  }
+
+  function closePanel() {
+    const root = panel();
+    if (root) root.hidden = true;
+  }
+
+  function togglePanel() {
+    const root = panel();
+    if (!root) return;
+    if (root.hidden) openPanel();
+    else closePanel();
+  }
+
+  function clearAll() {
+    const root = panel();
+    root.querySelector('[data-xas-base]').value = '';
+    root.querySelectorAll('[data-xas-check]').forEach((input) => {
       input.checked = false;
     });
-    field(panel, 'lang').value = '';
+    root.querySelectorAll('[data-xas-value]').forEach((input) => {
+      input.value = '';
+    });
     updatePreview();
     setStatus('已清空');
+  }
+
+  function readCurrent() {
+    const root = panel();
+    root.querySelector('[data-xas-base]').value = currentQuery();
+    updatePreview();
+    setStatus('已读取当前搜索词');
   }
 
   function applyToInput() {
@@ -305,7 +449,7 @@
   function goSearch(mode = 'top') {
     const query = buildQuery();
     if (!query) {
-      setStatus('请先输入关键词或选择参数', true);
+      setStatus('请先输入关键词，或勾选至少一个搜索参数', true);
       return;
     }
     applyToInput();
@@ -316,92 +460,90 @@
     location.assign(url.toString());
   }
 
-  function createPanel() {
-    const panel = el('section', { id: PANEL_ID, 'data-xas-mounted': '1' }, [
-      el('div', { className: 'xas-head' }, [
-        el('div', { className: 'xas-title', text: '高级搜索' }),
-        el('button', { type: 'button', title: '读取当前搜索词', onclick: readCurrent }, '读取当前')
+  function createParamRow(param) {
+    const checkbox = el('input', {
+      type: 'checkbox',
+      'data-xas-check': param.key,
+      title: `启用：${param.label}`
+    });
+    const children = [
+      el('div', { className: 'xas-row-top' }, [
+        el('span', { className: 'xas-label', text: param.label }),
+        el('span', { className: 'xas-syntax', text: param.syntax })
       ]),
-      el('div', { className: 'xas-grid' }, [
-        el('label', { className: 'xas-span-3' }, [
-          '关键词',
-          el('input', { type: 'text', 'data-xas-field': 'base', placeholder: 'AI 工具 / from:user / A OR B' })
-        ]),
-        el('label', { className: 'xas-span-3' }, [
-          '完整词组',
-          el('input', { type: 'text', 'data-xas-field': 'phrase', placeholder: '完整词组' })
-        ]),
-        el('label', { className: 'xas-span-2' }, [
-          'from',
-          el('input', { type: 'text', 'data-xas-field': 'from', placeholder: '用户名' })
-        ]),
-        el('label', { className: 'xas-span-2' }, [
-          'OR',
-          el('input', { type: 'text', 'data-xas-field': 'or', placeholder: 'A OR B' })
-        ]),
-        el('label', { className: 'xas-span-2' }, [
-          '语言',
-          el('select', { 'data-xas-field': 'lang' }, [
-            el('option', { value: '', text: '不限语言' }),
-            el('option', { value: 'zh', text: '中文 lang:zh' }),
-            el('option', { value: 'en', text: '英文 lang:en' }),
-            el('option', { value: 'ja', text: '日文 lang:ja' }),
-            el('option', { value: 'custom', text: '自定义' })
-          ])
-        ]),
-        el('label', {}, ['since', el('input', { type: 'date', 'data-xas-field': 'since' })]),
-        el('label', {}, ['until', el('input', { type: 'date', 'data-xas-field': 'until' })]),
-        el('label', {}, ['min_faves', el('input', { type: 'number', min: '1', step: '1', 'data-xas-field': 'minFaves', placeholder: '500' })]),
-        el('label', {}, ['min_retweets', el('input', { type: 'number', min: '1', step: '1', 'data-xas-field': 'minRetweets', placeholder: '100' })]),
-        el('label', {}, ['min_replies', el('input', { type: 'number', min: '1', step: '1', 'data-xas-field': 'minReplies', placeholder: '50' })]),
-        el('label', {}, ['lang', el('input', { type: 'text', 'data-xas-field': 'langCustom', placeholder: 'zh' })]),
-        el('div', { className: 'xas-span-6 xas-checks' }, FILTERS.map((item) => (
-          el('label', { className: 'xas-check' }, [
-            el('input', { type: 'checkbox', 'data-xas-field': item.key }),
-            item.label
-          ])
-        ))),
-        el('div', { className: 'xas-span-6 xas-tokens' }, QUICK_TOKENS.map((token) => (
-          el('button', { type: 'button', title: `追加 ${token}`, onclick: () => appendToken(token) }, token)
-        ))),
-        el('label', { className: 'xas-span-6' }, [
-          '预览',
-          el('textarea', { readonly: true, 'data-xas-field': 'preview' })
-        ]),
-        el('div', { className: 'xas-span-6 xas-actions' }, [
-          el('button', { type: 'button', className: 'xas-primary', onclick: () => goSearch('top') }, '搜索'),
-          el('button', { type: 'button', onclick: () => goSearch('latest') }, '最新'),
-          el('button', { type: 'button', onclick: applyToInput }, '只填入搜索框'),
-          el('button', { type: 'button', onclick: clearFields }, '清空'),
-          el('span', { className: 'xas-status', text: '' })
-        ])
+      el('div', { className: 'xas-help', text: param.help })
+    ];
+
+    if (param.input) {
+      children.push(el('input', {
+        ...param.input,
+        'data-xas-value': param.key
+      }));
+    }
+
+    return el('div', { className: 'xas-row' }, [
+      checkbox,
+      el('div', { className: 'xas-row-main' }, children)
+    ]);
+  }
+
+  function createPanel() {
+    const root = el('section', { id: PANEL_ID, hidden: true, 'data-xas-version': VERSION }, [
+      el('div', { className: 'xas-head' }, [
+        el('div', { className: 'xas-title', text: 'X 高级搜索参数' }),
+        el('button', { type: 'button', className: 'xas-close', title: '关闭', onclick: closePanel }, '×')
+      ]),
+      el('label', { className: 'xas-base' }, [
+        el('span', { text: '关键词' }),
+        el('input', { type: 'text', 'data-xas-base': true, placeholder: '例如：AI' }),
+        el('span', { className: 'xas-base-note', text: '例如：AI 表示帖子里包含 “AI” 关键词。下面勾选的参数会追加到关键词后面。' })
+      ]),
+      el('div', { className: 'xas-list' }, PARAMS.map(createParamRow)),
+      el('label', { className: 'xas-preview-label' }, [
+        el('span', { text: '将要执行的搜索命令' }),
+        el('textarea', { readonly: true, 'data-xas-preview': true })
+      ]),
+      el('div', { className: 'xas-actions' }, [
+        el('button', { type: 'button', className: 'xas-primary', onclick: () => goSearch('top') }, '确定并刷新'),
+        el('button', { type: 'button', onclick: () => goSearch('latest') }, '按最新刷新'),
+        el('button', { type: 'button', onclick: applyToInput }, '只填入搜索框'),
+        el('button', { type: 'button', onclick: readCurrent }, '读取当前'),
+        el('button', { type: 'button', className: 'xas-secondary', onclick: clearAll }, '清空'),
+        el('span', { className: 'xas-status', text: '' })
       ])
     ]);
 
-    panel.addEventListener('input', updatePreview);
-    panel.addEventListener('change', updatePreview);
-    return panel;
+    root.addEventListener('input', updatePreview);
+    root.addEventListener('change', updatePreview);
+    return root;
+  }
+
+  function createButton() {
+    return el('button', {
+      id: BUTTON_ID,
+      type: 'button',
+      'data-xas-version': VERSION,
+      title: '打开 X 高级搜索参数',
+      'aria-label': '打开 X 高级搜索参数',
+      onclick: togglePanel
+    }, '搜');
   }
 
   function mount() {
-    if (!isTargetRoute()) return;
-    const input = getSearchInput();
-    if (!input) return;
-    addStyles();
-
-    let panel = document.getElementById(PANEL_ID);
-    if (!panel) {
-      panel = createPanel();
-      const query = currentQuery();
-      if (query) panel.querySelector('[data-xas-field="base"]').value = query;
-      updatePreview();
+    if (!isTargetRoute()) {
+      document.getElementById(BUTTON_ID)?.remove();
+      document.getElementById(PANEL_ID)?.remove();
+      return;
     }
-
-    const form = input.closest('form');
-    const anchor = form || input.parentElement;
-    if (anchor && panel.previousElementSibling !== anchor) {
-      anchor.insertAdjacentElement('afterend', panel);
-      log('mounted after search input');
+    addStyles();
+    const staleButton = document.getElementById(BUTTON_ID);
+    if (staleButton && staleButton.dataset.xasVersion !== VERSION) staleButton.remove();
+    const stalePanel = document.getElementById(PANEL_ID);
+    if (stalePanel && stalePanel.dataset.xasVersion !== VERSION) stalePanel.remove();
+    if (!document.getElementById(BUTTON_ID)) document.body.append(createButton());
+    if (!document.getElementById(PANEL_ID)) {
+      document.body.append(createPanel());
+      log('mounted floating search helper');
     }
     updatePreview();
   }
@@ -421,6 +563,10 @@
       scheduleMount();
     }
   }, 800);
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !panel()?.hidden) closePanel();
+  });
 
   scheduleMount();
 })();
