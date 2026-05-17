@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘保存并重命名
 // @namespace    local.codex
-// @version      0.8.4
+// @version      0.8.5
 // @description  在夸克网盘分享页面，保存文件夹到网盘后自动重命名为指定名称。
 // @match        https://pan.quark.cn/s/*
 // @match        https://pan.quark.cn/list*
@@ -87,7 +87,7 @@
       panel.querySelector('#qr-del-sel').style.display = 'none';
       panel.querySelector('#qr-restore-sel').style.display = 'none';
       try {
-        const res = await fetch(`https://drive-pc.quark.cn/1/clouddrive/file/deep_recycle/list?${PARAMS}&_page=1&_size=100&_fetch_total=1&_t=${Date.now()}`, { credentials: 'include' });
+        const res = await fetch(`https://drive-pc.quark.cn/1/clouddrive/file/deep_recycle/list?_page=1&_size=100&fetch_pdir_file_name=1&sort=move_recycle_at:desc&_t=${Date.now()}`, { credentials: 'include' });
         const d = await res.json();
         const files = d.data?.list || [];
         const total = d.data?.deep_recycle_stat?.deep_recycle_count || files.length;
@@ -126,7 +126,6 @@
     async function deleteRecycleFiles(panel, recordIds) {
       if (!confirm(`确定要彻底删除选中的 ${recordIds.length} 个文件吗？此操作不可恢复！`)) return;
       const listEl = panel.querySelector('#qr-list');
-      listEl.textContent = '删除中…';
       try {
         const r = await fetch(`https://drive-pc.quark.cn/1/clouddrive/file/recycle/remove?${PARAMS}`, {
           method: 'POST', credentials: 'include',
@@ -134,12 +133,20 @@
           body: JSON.stringify({ select_mode: 2, record_list: recordIds })
         }).then(r => r.json());
         if (r.code === 0) {
-          listEl.textContent = `已彻底删除 ${recordIds.length} 个文件，3秒后刷新…`;
-          setTimeout(() => loadRecycleList(panel), 3000);
+          // Remove deleted rows from DOM directly (API has cache delay)
+          recordIds.forEach(rid => {
+            const cb = panel.querySelector(`.qr-cb[data-record-id="${rid}"]`);
+            if (cb) cb.closest('div').remove();
+          });
+          updateRestoreBtn(panel);
+          // Update total count
+          const allCb = panel.querySelectorAll('.qr-cb').length;
+          const totalEl = panel.querySelector('#qr-all')?.parentElement;
+          if (totalEl) totalEl.querySelector('label').textContent = `全选（共 ${allCb} 个）`;
         } else {
-          listEl.textContent = `删除失败: ${r.message}`;
+          alert(`删除失败: ${r.message}`);
         }
-      } catch (e) { listEl.textContent = '操作失败: ' + e.message; }
+      } catch (e) { alert('操作失败: ' + e.message); }
     }
 
     async function restoreRecycleFiles(panel, fids) {
