@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘链接预检
 // @namespace    local.codex
-// @version      0.5.5
+// @version      0.5.6
 // @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。
 // @match        *://*/*
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
@@ -50,6 +50,7 @@
   let settingsVisible = false;
   let checking = false;
   let activationObserver = null;
+  let hasRunChecks = false;
 
   function shouldActivate() {
     const href = location.href;
@@ -354,8 +355,8 @@
   async function runChecks(force = false) {
     if (checking) return;
     checking = true;
+    hasRunChecks = true;
     collectLinks();
-    panelVisible = true;
     renderPanel();
 
     const queue = links.filter((item) => force || item.status === 'idle' || item.status === 'unknown' || item.status === 'error');
@@ -480,7 +481,12 @@
       return acc;
     }, {});
 
-    const summary = `夸克预检 ${total ? `${counts.ok || 0}/${total}` : '0'}`;
+    const done = total - (counts.idle || 0) - (counts.checking || 0);
+    const summary = checking
+      ? `检测中 ${done}/${total || 0}`
+      : hasRunChecks
+        ? `夸克预检 ${counts.ok || 0}/${total || 0}`
+        : `检测夸克链接${total ? ` ${total}` : ''}`;
     const rows = links.map((item) => `
       <div class="row">
         ${statusHtml(item.status)}
@@ -689,7 +695,6 @@
     }
 
     collectLinks();
-    if (links.length) panelVisible = true;
     insertInlineButton();
     renderPanel();
     log('links', links);
