@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘保存并重命名
 // @namespace    local.codex
-// @version      0.8.3
+// @version      0.8.4
 // @description  在夸克网盘分享页面，保存文件夹到网盘后自动重命名为指定名称。
 // @match        https://pan.quark.cn/s/*
 // @match        https://pan.quark.cn/list*
@@ -82,6 +82,10 @@
 
     async function loadRecycleList(panel) {
       const listEl = panel.querySelector('#qr-list');
+      listEl.textContent = '加载中…';
+      // Reset buttons
+      panel.querySelector('#qr-del-sel').style.display = 'none';
+      panel.querySelector('#qr-restore-sel').style.display = 'none';
       try {
         const res = await fetch(`https://drive-pc.quark.cn/1/clouddrive/file/deep_recycle/list?${PARAMS}&_page=1&_size=100&_fetch_total=1&_t=${Date.now()}`, { credentials: 'include' });
         const d = await res.json();
@@ -100,13 +104,13 @@
               <span style="color:#94a3b8;white-space:nowrap;font-size:12px">${new Date(f.updated_at || Date.now()).toLocaleDateString()}</span>
             </div>`).join('');
 
-        // Full-select checkbox
-        panel.querySelector('#qr-all').onchange = (e) => {
+        const allCb = panel.querySelector('#qr-all');
+        if (allCb) allCb.onchange = (e) => {
           panel.querySelectorAll('.qr-cb').forEach(cb => cb.checked = e.target.checked);
           updateRestoreBtn(panel);
         };
         panel.querySelectorAll('.qr-cb').forEach(cb => cb.onchange = () => updateRestoreBtn(panel));
-      } catch (e) { listEl.textContent = '加载失败'; }
+      } catch (e) { listEl.textContent = '加载失败: ' + e.message; }
     }
 
     function updateRestoreBtn(panel) {
