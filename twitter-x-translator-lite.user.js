@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         my Twitter X Translator Lite
 // @namespace    http://tampermonkey.net/
-// @version      20.2
+// @version      20.3
 // @description  Support Twitter/X and Discord real-time translation, user notes and VIP marking, with customizable translation font size and color, one-click local backup and restore.
 // @author       fl
 // @license      MIT
@@ -37,7 +37,8 @@
         deepseekApiBase: 'https://api.deepseek.com',
         deepseekModel: 'deepseek-v4-flash',
         deepseekApiKey: '',
-        transStyle: 'classic'
+        transStyle: 'classic',
+        deepseekLayout: 'plain'
     };
 
     const THEME_PRESETS = {
@@ -86,6 +87,12 @@
         subtle: '轻量提示',
         compact: '紧凑模式'
     };
+    const DEEPSEEK_LAYOUTS = {
+        plain: '普通译文',
+        sentence: '逐句分段',
+        readable: '易读段落',
+        highlights: '重点标记'
+    };
 
     const safeParse = (raw, fallback) => {
         try {
@@ -132,7 +139,8 @@
             deepseekApiBase: sanitizeEndpoint(merged.deepseekApiBase, DEFAULT_UI.deepseekApiBase),
             deepseekModel: String(merged.deepseekModel || DEFAULT_UI.deepseekModel).trim() || DEFAULT_UI.deepseekModel,
             deepseekApiKey: String(merged.deepseekApiKey || '').trim(),
-            transStyle: sanitizeChoice(merged.transStyle, Object.keys(TRANSLATION_STYLES), DEFAULT_UI.transStyle)
+            transStyle: sanitizeChoice(merged.transStyle, Object.keys(TRANSLATION_STYLES), DEFAULT_UI.transStyle),
+            deepseekLayout: sanitizeChoice(merged.deepseekLayout, Object.keys(DEEPSEEK_LAYOUTS), DEFAULT_UI.deepseekLayout)
         };
     };
 
@@ -194,7 +202,7 @@
         },
         export: () => {
             const config = { ...Storage.getConfig(), deepseekApiKey: '' };
-            const data = { ver: "20.2", ts: new Date().getTime(), notes: Storage.getNotes(), vips: Storage.getVips(), config };
+            const data = { ver: "20.3", ts: new Date().getTime(), notes: Storage.getNotes(), vips: Storage.getVips(), config };
             const blob = new Blob([JSON.stringify(data)], {type: 'text/plain'});
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a'); a.href = url;
@@ -290,6 +298,13 @@
         if (!cfg.deepseekApiKey) throw new Error('DeepSeek API Key is empty');
         const base = cfg.deepseekApiBase.replace(/\/$/, '');
         const apiUrl = base.endsWith('/chat/completions') ? base : `${base}/chat/completions`;
+        const layoutPrompts = {
+            plain: "输出自然、准确的简体中文译文。保留原文换行、语气、链接和 @用户名。只输出译文，不要解释。",
+            sentence: "输出自然、准确的简体中文译文。按原文语义逐句分段：短文保持紧凑，长文每 1-2 句空一行；保留列表符号、编号、链接和 @用户名。只输出译文，不要解释。",
+            readable: "输出适合快速阅读的简体中文译文。保留原意和语气，把长句拆成清楚段落；原文有列表时保留列表；不要添加原文没有的新观点。只输出译文，不要解释。",
+            highlights: "输出简体中文译文，并在适合时用 Markdown 做轻量重点标记：重要句子可用 **加粗**，列表保留为短要点。不要添加总结标题，除非原文本身有标题。只输出译文，不要解释。"
+        };
+        const layoutPrompt = layoutPrompts[cfg.deepseekLayout] || layoutPrompts.plain;
         const res = await gmRequest({
             method: "POST",
             url: apiUrl,
@@ -303,7 +318,7 @@
                 messages: [
                     {
                         role: "system",
-                        content: "你是专业翻译引擎。把用户提供的文本翻译为自然、准确的简体中文，保留原文换行、语气、链接和 @用户名。只输出译文，不要解释。"
+                        content: `你是专业翻译引擎。${layoutPrompt}`
                     },
                     { role: "user", content: text.slice(0, 6000) }
                 ]
@@ -518,7 +533,7 @@
                 <div class="ling-mini-btn" id="ling-btn-rs">📥 恢复</div>
             </div>
 
-            <div style="margin-top:8px;font-size:10px;color:#666;text-align:center;">V20.2 Lite</div>
+            <div style="margin-top:8px;font-size:10px;color:#666;text-align:center;">V20.3 Lite</div>
         `;
         document.body.appendChild(div);
 
@@ -543,7 +558,8 @@
             deepseekApiBase: Storage.getConfig().deepseekApiBase,
             deepseekModel: Storage.getConfig().deepseekModel,
             deepseekApiKey: Storage.getConfig().deepseekApiKey,
-            transStyle: Storage.getConfig().transStyle
+            transStyle: Storage.getConfig().transStyle,
+            deepseekLayout: Storage.getConfig().deepseekLayout
         });
     }
 
@@ -568,6 +584,11 @@
         let transStyleHTML = '';
         for (const [key, label] of Object.entries(TRANSLATION_STYLES)) {
             transStyleHTML += `<option value="${key}" ${cfg.transStyle === key ? 'selected' : ''}>${label}</option>`;
+        }
+
+        let deepseekLayoutHTML = '';
+        for (const [key, label] of Object.entries(DEEPSEEK_LAYOUTS)) {
+            deepseekLayoutHTML += `<option value="${key}" ${cfg.deepseekLayout === key ? 'selected' : ''}>${label}</option>`;
         }
 
         div.innerHTML = `
@@ -601,6 +622,7 @@
                     </select></div>
                     <div class="ling-row"><label>DeepSeek API</label><input type="text" id="c-ds-base" value="${escapeAttr(cfg.deepseekApiBase)}" style="width:190px;"></div>
                     <div class="ling-row"><label>模型</label><input type="text" id="c-ds-model" value="${escapeAttr(cfg.deepseekModel)}" style="width:190px;"></div>
+                    <div class="ling-row"><label>排版风格</label><select id="c-ds-layout" style="width:190px;">${deepseekLayoutHTML}</select></div>
                     <div class="ling-row"><label>API Key</label><input type="password" id="c-ds-key" value="${escapeAttr(cfg.deepseekApiKey)}" style="width:190px;" autocomplete="off"></div>
                 </div>
 
@@ -628,6 +650,7 @@
                 fallbackTranslator: document.getElementById('c-fallback').value,
                 deepseekApiBase: document.getElementById('c-ds-base').value,
                 deepseekModel: document.getElementById('c-ds-model').value,
+                deepseekLayout: document.getElementById('c-ds-layout').value,
                 deepseekApiKey: document.getElementById('c-ds-key').value,
                 transStyle: document.getElementById('c-style').value,
                 transFontSize: document.getElementById('c-ts').value,
