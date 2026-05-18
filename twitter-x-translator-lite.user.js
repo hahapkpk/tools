@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         my Twitter X Translator Lite
 // @namespace    http://tampermonkey.net/
-// @version      20.1
+// @version      20.2
 // @description  Support Twitter/X and Discord real-time translation, user notes and VIP marking, with customizable translation font size and color, one-click local backup and restore.
 // @author       fl
 // @license      MIT
@@ -17,6 +17,7 @@
 // @grant        GM_getValue
 // @grant        GM_registerMenuCommand
 // @connect      translate.googleapis.com
+// @connect      api.deepseek.com
 // ==/UserScript==
 
 (function() {
@@ -30,7 +31,13 @@
         transFontSize: '14px',
         noteColor: '#1D9BF0',
         noteFontSize: '11px',
-        vipColor: '#F3BA2F'
+        vipColor: '#F3BA2F',
+        translator: 'google',
+        fallbackTranslator: 'deepseek',
+        deepseekApiBase: 'https://api.deepseek.com',
+        deepseekModel: 'deepseek-v4-flash',
+        deepseekApiKey: '',
+        transStyle: 'classic'
     };
 
     const THEME_PRESETS = {
@@ -73,6 +80,12 @@
     };
 
     const INITIAL_VIP_MAP = {};
+    const TRANSLATION_STYLES = {
+        classic: '默认醒目',
+        native: '贴近原文',
+        subtle: '轻量提示',
+        compact: '紧凑模式'
+    };
 
     const safeParse = (raw, fallback) => {
         try {
@@ -85,6 +98,23 @@
 
     const sanitizeColor = (value, fallback) => /^#[0-9a-fA-F]{6}$/.test(value || '') ? value : fallback;
     const sanitizeFontSize = (value, fallback) => /^(?:1[0-9]|2[0-9]|30)px$/.test(value || '') ? value : fallback;
+    const sanitizeChoice = (value, allowed, fallback) => allowed.includes(value) ? value : fallback;
+    const sanitizeEndpoint = (value, fallback) => {
+        try {
+            const url = new URL(value || fallback);
+            if (url.protocol !== 'https:') return fallback;
+            return url.origin + url.pathname.replace(/\/$/, '');
+        } catch (err) {
+            return fallback;
+        }
+    };
+    const escapeAttr = (value) => String(value || '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+    })[ch]);
 
     const normalizeConfig = (cfg = {}) => {
         const merged = { ...DEFAULT_UI, ...cfg };
@@ -96,7 +126,13 @@
             transFontSize: sanitizeFontSize(merged.transFontSize, DEFAULT_UI.transFontSize),
             noteColor: sanitizeColor(merged.noteColor, DEFAULT_UI.noteColor),
             noteFontSize: sanitizeFontSize(merged.noteFontSize, DEFAULT_UI.noteFontSize),
-            vipColor: sanitizeColor(merged.vipColor, DEFAULT_UI.vipColor)
+            vipColor: sanitizeColor(merged.vipColor, DEFAULT_UI.vipColor),
+            translator: sanitizeChoice(merged.translator, ['google', 'deepseek'], DEFAULT_UI.translator),
+            fallbackTranslator: sanitizeChoice(merged.fallbackTranslator, ['none', 'google', 'deepseek'], DEFAULT_UI.fallbackTranslator),
+            deepseekApiBase: sanitizeEndpoint(merged.deepseekApiBase, DEFAULT_UI.deepseekApiBase),
+            deepseekModel: String(merged.deepseekModel || DEFAULT_UI.deepseekModel).trim() || DEFAULT_UI.deepseekModel,
+            deepseekApiKey: String(merged.deepseekApiKey || '').trim(),
+            transStyle: sanitizeChoice(merged.transStyle, Object.keys(TRANSLATION_STYLES), DEFAULT_UI.transStyle)
         };
     };
 
@@ -157,7 +193,8 @@
             Storage.setVips(vips);
         },
         export: () => {
-            const data = { ver: "20.1", ts: new Date().getTime(), notes: Storage.getNotes(), vips: Storage.getVips(), config: Storage.getConfig() };
+            const config = { ...Storage.getConfig(), deepseekApiKey: '' };
+            const data = { ver: "20.2", ts: new Date().getTime(), notes: Storage.getNotes(), vips: Storage.getVips(), config };
             const blob = new Blob([JSON.stringify(data)], {type: 'text/plain'});
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a'); a.href = url;
@@ -192,7 +229,12 @@
 
         const css = `
             .ling-trans-box { margin-top: 6px; padding: 8px 10px; background: ${cfg.transBgColor || '#0b0b0b'}; border-left: 3px solid ${cfg.transColor}; border-radius: 4px; color: ${cfg.transTextColor || cfg.transColor}; font-size: ${cfg.transFontSize}; line-height: 1.5; font-family: "Consolas", monospace; }
+            .ling-trans-box.native { padding: 2px 0 0 0; background: transparent; border-left: 0; border-radius: 0; color: ${cfg.transTextColor || '#8b98a5'}; font-size: inherit; line-height: inherit; font-family: inherit; opacity: 0.92; }
+            .ling-trans-box.native::before { content: "译文"; display: inline-block; margin-right: 6px; color: ${cfg.transColor}; font-size: 11px; font-weight: 700; }
+            .ling-trans-box.subtle { padding: 6px 0 0 10px; background: transparent; border-left: 2px solid ${cfg.transColor}; border-radius: 0; color: ${cfg.transTextColor || '#8b98a5'}; font-family: inherit; opacity: 0.9; }
+            .ling-trans-box.compact { display: inline-block; margin-top: 4px; padding: 3px 6px; background: rgba(29,155,240,0.08); border-left: 0; border-radius: 4px; color: ${cfg.transTextColor || cfg.transColor}; font-size: 13px; line-height: 1.35; font-family: inherit; }
             .ling-discord-box { margin-top: 4px; padding: 4px 8px; opacity: 0.9; background: rgba(0,0,0,0.5); border-left: 2px solid ${cfg.transColor}; }
+            .ling-discord-box.native, .ling-discord-box.subtle { background: transparent; }
             .ling-vip-tweet { border: 2px solid ${cfg.vipColor} !important; background: rgba(243, 186, 47, 0.05) !important; border-radius: 8px !important; }
             .ling-identity-badge { font-weight: 900; font-size: 10px; padding: 2px 5px; border-radius: 3px; margin-left: 5px; vertical-align: middle; display: inline-block; box-shadow: 0 1px 2px rgba(0,0,0,0.5); color: #000; background: ${cfg.vipColor}; }
             .ling-user-note { background-color: ${cfg.noteColor}; color: #fff; font-size: ${cfg.noteFontSize}; padding: 2px 6px; border-radius: 4px; margin-left: 5px; vertical-align: middle; display: inline-block; cursor: pointer; max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: bold; }
@@ -208,8 +250,9 @@
             .ling-mini-btn { flex: 1; background: #333; border: 1px solid #444; color: #ccc; padding: 5px; border-radius: 4px; font-size: 11px; cursor: pointer; text-align: center; }
             .ling-mini-btn:hover { background: #444; color: #fff; }
             #ling-settings-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 2147483647; display: flex; justify-content: center; align-items: center; }
-            #ling-settings-box { background: #16181c; border: 1px solid #333; border-radius: 12px; padding: 20px; width: 300px; color: #fff; font-family: sans-serif; }
+            #ling-settings-box { background: #16181c; border: 1px solid #333; border-radius: 12px; padding: 20px; width: 300px; max-height: 88vh; overflow: auto; color: #fff; font-family: sans-serif; }
             .ling-row { margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; }
+            .ling-row input, .ling-row select { background: #222; border: 1px solid #444; color: #fff; padding: 3px; border-radius: 4px; }
             .ling-btn { background: #00E676; color: #000; border: none; padding: 8px; border-radius: 5px; width: 100%; font-weight: bold; cursor: pointer; margin-top: 10px; }
             .ling-theme-btn { padding: 10px; border-radius: 8px; cursor: pointer; transition: all 0.2s; text-align: center; }
             .ling-theme-btn:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.5); opacity: 0.9; }
@@ -219,6 +262,77 @@
     }
 
     // ================= 3. 核心功能: 翻译 =================
+    function gmRequest(options) {
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                timeout: 15000,
+                ...options,
+                onload: (res) => {
+                    if (res.status >= 200 && res.status < 300) resolve(res);
+                    else reject(new Error(`HTTP ${res.status}`));
+                },
+                onerror: () => reject(new Error('Network error')),
+                ontimeout: () => reject(new Error('Request timeout'))
+            });
+        });
+    }
+
+    async function translateWithGoogle(text) {
+        const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-CN&dt=t&q=${encodeURIComponent(text.slice(0, 4500))}`;
+        const res = await gmRequest({ method: "GET", url });
+        const data = JSON.parse(res.responseText);
+        let transResult = "";
+        if (data && data[0]) data[0].forEach(i => { if(i[0]) transResult += i[0]; });
+        return transResult.trim();
+    }
+
+    async function translateWithDeepSeek(text, cfg) {
+        if (!cfg.deepseekApiKey) throw new Error('DeepSeek API Key is empty');
+        const base = cfg.deepseekApiBase.replace(/\/$/, '');
+        const apiUrl = base.endsWith('/chat/completions') ? base : `${base}/chat/completions`;
+        const res = await gmRequest({
+            method: "POST",
+            url: apiUrl,
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${cfg.deepseekApiKey}`
+            },
+            data: JSON.stringify({
+                model: cfg.deepseekModel,
+                temperature: 0.2,
+                messages: [
+                    {
+                        role: "system",
+                        content: "你是专业翻译引擎。把用户提供的文本翻译为自然、准确的简体中文，保留原文换行、语气、链接和 @用户名。只输出译文，不要解释。"
+                    },
+                    { role: "user", content: text.slice(0, 6000) }
+                ]
+            })
+        });
+        const data = JSON.parse(res.responseText);
+        return (data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '').trim();
+    }
+
+    async function translateText(text) {
+        const cfg = Storage.getConfig();
+        const providers = [cfg.translator];
+        if (cfg.fallbackTranslator !== 'none' && cfg.fallbackTranslator !== cfg.translator) {
+            providers.push(cfg.fallbackTranslator);
+        }
+
+        let lastError = null;
+        for (const provider of providers) {
+            try {
+                if (provider === 'deepseek') return await translateWithDeepSeek(text, cfg);
+                return await translateWithGoogle(text);
+            } catch (err) {
+                lastError = err;
+                console.warn(`[LingGe] ${provider} translation failed:`, err);
+            }
+        }
+        throw lastError || new Error('No translation provider available');
+    }
+
     function processContent(element, text, platform) {
         const sourceText = (text || '').trim();
         if (!sourceText || element.dataset.lingPending === "true") return;
@@ -233,30 +347,17 @@
         }
 
         if (needTrans) {
-            const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-CN&dt=t&q=${encodeURIComponent(sourceText.slice(0, 4500))}`;
             element.dataset.lingPending = "true";
-            GM_xmlhttpRequest({
-                method: "GET", url: url, timeout: 12000,
-                onload: (res) => {
-                    try {
-                        if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
-                        const data = JSON.parse(res.responseText);
-                        let transResult = "";
-                        if (data && data[0]) data[0].forEach(i => { if(i[0]) transResult += i[0]; });
-                        if (transResult) {
-                            renderBox(element, transResult, platform);
-                            element.dataset.lingProcessed = "true";
-                            element.dataset.lingText = sourceText;
-                        }
-                    } catch(e) {
-                        console.error('Translation error:', e);
-                    } finally {
-                        delete element.dataset.lingPending;
+            translateText(sourceText)
+                .then(transResult => {
+                    if (transResult) {
+                        renderBox(element, transResult, platform);
+                        element.dataset.lingProcessed = "true";
+                        element.dataset.lingText = sourceText;
                     }
-                },
-                onerror: () => { delete element.dataset.lingPending; },
-                ontimeout: () => { delete element.dataset.lingPending; }
-            });
+                })
+                .catch(err => console.error('Translation error:', err))
+                .finally(() => { delete element.dataset.lingPending; });
         } else {
             element.dataset.lingProcessed = "true";
             element.dataset.lingText = sourceText;
@@ -265,8 +366,9 @@
 
     function renderBox(element, transText, platform) {
         if (!transText) return;
+        const cfg = Storage.getConfig();
         const container = document.createElement('div');
-        container.className = platform === 'discord' ? 'ling-trans-box ling-discord-box' : 'ling-trans-box';
+        container.className = platform === 'discord' ? `ling-trans-box ling-discord-box ${cfg.transStyle}` : `ling-trans-box ${cfg.transStyle}`;
         container.textContent = transText;
 
         if (platform === 'twitter') {
@@ -416,7 +518,7 @@
                 <div class="ling-mini-btn" id="ling-btn-rs">📥 恢复</div>
             </div>
 
-            <div style="margin-top:8px;font-size:10px;color:#666;text-align:center;">V20.1 Lite</div>
+            <div style="margin-top:8px;font-size:10px;color:#666;text-align:center;">V20.2 Lite</div>
         `;
         document.body.appendChild(div);
 
@@ -435,7 +537,13 @@
             transTextColor: theme.textColor,
             transFontSize: Storage.getConfig().transFontSize || '14px',
             noteColor: '#1D9BF0',
-            vipColor: Storage.getConfig().vipColor || '#F3BA2F'
+            vipColor: Storage.getConfig().vipColor || '#F3BA2F',
+            translator: Storage.getConfig().translator,
+            fallbackTranslator: Storage.getConfig().fallbackTranslator,
+            deepseekApiBase: Storage.getConfig().deepseekApiBase,
+            deepseekModel: Storage.getConfig().deepseekModel,
+            deepseekApiKey: Storage.getConfig().deepseekApiKey,
+            transStyle: Storage.getConfig().transStyle
         });
     }
 
@@ -457,6 +565,11 @@
             `;
         }
 
+        let transStyleHTML = '';
+        for (const [key, label] of Object.entries(TRANSLATION_STYLES)) {
+            transStyleHTML += `<option value="${key}" ${cfg.transStyle === key ? 'selected' : ''}>${label}</option>`;
+        }
+
         div.innerHTML = `
             <div id="ling-settings-box" style="max-width:400px;width:90%;">
                 <h3 style="margin-top:0;color:#F3BA2F;border-bottom:1px solid #333;padding-bottom:10px;">⚙️ 终端设置</h3>
@@ -470,8 +583,25 @@
 
                 <div style="border-top:1px dashed #333;margin:15px 0;padding-top:15px;">
                     <label style="display:block;margin-bottom:8px;color:#ccc;font-size:12px;">🎯 自定义配置</label>
-                    <div class="ling-row"><label>翻译字号</label><input type="text" id="c-ts" value="${cfg.transFontSize}" style="width:60px;background:#222;border:1px solid #444;color:#fff;padding:2px;"></div>
+                    <div class="ling-row"><label>显示样式</label><select id="c-style" style="width:120px;">${transStyleHTML}</select></div>
+                    <div class="ling-row"><label>翻译字号</label><input type="text" id="c-ts" value="${escapeAttr(cfg.transFontSize)}" style="width:60px;"></div>
                     <div class="ling-row"><label>VIP框色</label><input type="color" id="c-vc" value="${cfg.vipColor}"></div>
+                </div>
+
+                <div style="border-top:1px dashed #333;margin:15px 0;padding-top:15px;">
+                    <label style="display:block;margin-bottom:8px;color:#ccc;font-size:12px;">🌐 翻译服务</label>
+                    <div class="ling-row"><label>主接口</label><select id="c-translator" style="width:120px;">
+                        <option value="google" ${cfg.translator === 'google' ? 'selected' : ''}>Google 免费</option>
+                        <option value="deepseek" ${cfg.translator === 'deepseek' ? 'selected' : ''}>DeepSeek</option>
+                    </select></div>
+                    <div class="ling-row"><label>备用接口</label><select id="c-fallback" style="width:120px;">
+                        <option value="deepseek" ${cfg.fallbackTranslator === 'deepseek' ? 'selected' : ''}>DeepSeek</option>
+                        <option value="google" ${cfg.fallbackTranslator === 'google' ? 'selected' : ''}>Google 免费</option>
+                        <option value="none" ${cfg.fallbackTranslator === 'none' ? 'selected' : ''}>不启用</option>
+                    </select></div>
+                    <div class="ling-row"><label>DeepSeek API</label><input type="text" id="c-ds-base" value="${escapeAttr(cfg.deepseekApiBase)}" style="width:190px;"></div>
+                    <div class="ling-row"><label>模型</label><input type="text" id="c-ds-model" value="${escapeAttr(cfg.deepseekModel)}" style="width:190px;"></div>
+                    <div class="ling-row"><label>API Key</label><input type="password" id="c-ds-key" value="${escapeAttr(cfg.deepseekApiKey)}" style="width:190px;" autocomplete="off"></div>
                 </div>
 
                 <button class="ling-btn" id="ling-save">保存自定义配置</button>
@@ -494,6 +624,12 @@
             const currentCfg = Storage.getConfig();
             Storage.setConfig({
                 ...currentCfg,
+                translator: document.getElementById('c-translator').value,
+                fallbackTranslator: document.getElementById('c-fallback').value,
+                deepseekApiBase: document.getElementById('c-ds-base').value,
+                deepseekModel: document.getElementById('c-ds-model').value,
+                deepseekApiKey: document.getElementById('c-ds-key').value,
+                transStyle: document.getElementById('c-style').value,
                 transFontSize: document.getElementById('c-ts').value,
                 vipColor: document.getElementById('c-vc').value
             });
