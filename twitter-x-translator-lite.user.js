@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         my Twitter X Translator Lite
 // @namespace    http://tampermonkey.net/
-// @version      20.5
+// @version      20.6
 // @description  Support Twitter/X and Discord real-time translation, user notes and VIP marking, with customizable translation font size and color, one-click local backup and restore.
 // @author       fl
 // @license      MIT
@@ -38,7 +38,8 @@
         deepseekModel: 'deepseek-v4-flash',
         deepseekApiKey: '',
         transStyle: 'classic',
-        deepseekLayout: 'plain'
+        deepseekLayout: 'plain',
+        transFontFamily: 'mono'
     };
 
     const THEME_PRESETS = {
@@ -93,6 +94,28 @@
         readable: '易读段落',
         highlights: '重点标记'
     };
+    const FONT_PRESETS = {
+        mono: {
+            name: '经典等宽',
+            family: '"Consolas", "Cascadia Mono", "SFMono-Regular", monospace'
+        },
+        sans: {
+            name: '系统无衬线',
+            family: 'system-ui, -apple-system, "Segoe UI", "Microsoft YaHei UI", sans-serif'
+        },
+        claudeSerif: {
+            name: 'Claude衬线',
+            family: 'Georgia, Cambria, "Times New Roman", "Noto Serif SC", "Songti SC", serif'
+        },
+        readingSerif: {
+            name: '阅读衬线',
+            family: '"Iowan Old Style", "Palatino Linotype", Palatino, "Noto Serif SC", "Microsoft YaHei", serif'
+        },
+        zhScreen: {
+            name: '中文屏显',
+            family: '"Microsoft YaHei UI", "PingFang SC", "Noto Sans SC", system-ui, sans-serif'
+        }
+    };
 
     const safeParse = (raw, fallback) => {
         try {
@@ -142,7 +165,8 @@
             deepseekModel: String(merged.deepseekModel || DEFAULT_UI.deepseekModel).trim() || DEFAULT_UI.deepseekModel,
             deepseekApiKey: String(merged.deepseekApiKey || '').trim(),
             transStyle: sanitizeChoice(transStyle, Object.keys(TRANSLATION_STYLES), DEFAULT_UI.transStyle),
-            deepseekLayout: sanitizeChoice(merged.deepseekLayout, Object.keys(DEEPSEEK_LAYOUTS), DEFAULT_UI.deepseekLayout)
+            deepseekLayout: sanitizeChoice(merged.deepseekLayout, Object.keys(DEEPSEEK_LAYOUTS), DEFAULT_UI.deepseekLayout),
+            transFontFamily: sanitizeChoice(merged.transFontFamily, Object.keys(FONT_PRESETS), DEFAULT_UI.transFontFamily)
         };
     };
 
@@ -204,7 +228,7 @@
         },
         export: () => {
             const config = { ...Storage.getConfig(), deepseekApiKey: '' };
-            const data = { ver: "20.5", ts: new Date().getTime(), notes: Storage.getNotes(), vips: Storage.getVips(), config };
+            const data = { ver: "20.6", ts: new Date().getTime(), notes: Storage.getNotes(), vips: Storage.getVips(), config };
             const blob = new Blob([JSON.stringify(data)], {type: 'text/plain'});
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a'); a.href = url;
@@ -236,14 +260,15 @@
     function updateStyles() {
         const cfg = Storage.getConfig();
         const oldStyle = document.getElementById('ling-style'); if (oldStyle) oldStyle.remove();
+        const transFontFamily = FONT_PRESETS[cfg.transFontFamily].family;
 
         const css = `
-            .ling-trans-box { margin-top: 8px; padding: 12px 14px; background: ${cfg.transBgColor || '#172633'}; border-left: 4px solid ${cfg.transColor}; border-radius: 8px; color: ${cfg.transTextColor || '#e7e9ea'}; font-size: ${cfg.transFontSize}; line-height: 1.65; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; white-space: pre-wrap; overflow-wrap: anywhere; }
-            .ling-trans-box.native { padding: 4px 0 0 0; background: transparent; border-left: 0; border-radius: 0; color: ${cfg.transTextColor || '#cfd9de'}; font-size: inherit; line-height: 1.45; font-family: inherit; opacity: 0.94; }
+            .ling-trans-box { margin-top: 8px; padding: 12px 14px; background: ${cfg.transBgColor || '#172633'}; border-left: 4px solid ${cfg.transColor}; border-radius: 8px; color: ${cfg.transTextColor || '#e7e9ea'}; font-size: ${cfg.transFontSize}; line-height: 1.65; font-family: ${transFontFamily}; white-space: pre-wrap; overflow-wrap: anywhere; }
+            .ling-trans-box.native { padding: 4px 0 0 0; background: transparent; border-left: 0; border-radius: 0; color: ${cfg.transTextColor || '#cfd9de'}; font-size: inherit; line-height: 1.45; font-family: ${transFontFamily}; opacity: 0.94; }
             .ling-trans-box.native::before { content: "译文"; display: inline-block; margin-right: 6px; color: ${cfg.transColor}; font-size: 11px; font-weight: 700; vertical-align: 1px; }
-            .ling-trans-box.quote { padding: 12px 14px 14px 14px; background: #0d1117; border: 1px solid #26323f; border-left: 1px solid #26323f; border-radius: 12px; color: #e7e9ea; font-size: ${cfg.transFontSize}; line-height: 1.68; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+            .ling-trans-box.quote { padding: 12px 14px 14px 14px; background: #0d1117; border: 1px solid #26323f; border-left: 1px solid #26323f; border-radius: 12px; color: #e7e9ea; font-size: ${cfg.transFontSize}; line-height: 1.68; font-family: ${transFontFamily}; }
             .ling-trans-box.quote::before { content: "译文 · DeepSeek"; display: block; margin-bottom: 9px; padding-bottom: 8px; border-bottom: 1px solid #26323f; color: ${cfg.transColor}; font-size: 11px; font-weight: 800; letter-spacing: 0.02em; }
-            .ling-trans-box.focus { padding: 14px 16px; background: linear-gradient(135deg, rgba(31,52,68,0.96), rgba(17,25,35,0.96)); border-left: 0; border-radius: 10px; color: #e7e9ea; font-size: ${cfg.transFontSize}; line-height: 1.62; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; box-shadow: 0 10px 28px rgba(0,0,0,0.25); }
+            .ling-trans-box.focus { padding: 14px 16px; background: linear-gradient(135deg, rgba(31,52,68,0.96), rgba(17,25,35,0.96)); border-left: 0; border-radius: 10px; color: #e7e9ea; font-size: ${cfg.transFontSize}; line-height: 1.62; font-family: ${transFontFamily}; box-shadow: 0 10px 28px rgba(0,0,0,0.25); }
             .ling-trans-box.focus::before { content: "重点"; display: inline-block; margin-bottom: 10px; padding: 3px 12px; border-radius: 999px; background: rgba(29,155,240,0.16); color: #66c2ff; font-size: 11px; font-weight: 800; }
             .ling-discord-box { margin-top: 4px; padding: 4px 8px; opacity: 0.9; background: rgba(0,0,0,0.5); border-left: 2px solid ${cfg.transColor}; }
             .ling-discord-box.native { background: transparent; }
@@ -578,7 +603,7 @@
                 <div class="ling-mini-btn" id="ling-btn-rs">📥 恢复</div>
             </div>
 
-            <div style="margin-top:8px;font-size:10px;color:#666;text-align:center;">V20.5 Lite</div>
+            <div style="margin-top:8px;font-size:10px;color:#666;text-align:center;">V20.6 Lite</div>
         `;
         document.body.appendChild(div);
 
@@ -604,7 +629,8 @@
             deepseekModel: Storage.getConfig().deepseekModel,
             deepseekApiKey: Storage.getConfig().deepseekApiKey,
             transStyle: Storage.getConfig().transStyle,
-            deepseekLayout: Storage.getConfig().deepseekLayout
+            deepseekLayout: Storage.getConfig().deepseekLayout,
+            transFontFamily: Storage.getConfig().transFontFamily
         });
     }
 
@@ -631,6 +657,11 @@
             transStyleHTML += `<option value="${key}" ${cfg.transStyle === key ? 'selected' : ''}>${label}</option>`;
         }
 
+        let transFontFamilyHTML = '';
+        for (const [key, preset] of Object.entries(FONT_PRESETS)) {
+            transFontFamilyHTML += `<option value="${key}" ${cfg.transFontFamily === key ? 'selected' : ''}>${preset.name}</option>`;
+        }
+
         let deepseekLayoutHTML = '';
         for (const [key, label] of Object.entries(DEEPSEEK_LAYOUTS)) {
             deepseekLayoutHTML += `<option value="${key}" ${cfg.deepseekLayout === key ? 'selected' : ''}>${label}</option>`;
@@ -650,6 +681,7 @@
                 <div style="border-top:1px dashed #333;margin:15px 0;padding-top:15px;">
                     <label style="display:block;margin-bottom:8px;color:#ccc;font-size:12px;">🎯 自定义配置</label>
                     <div class="ling-row"><label>显示样式</label><select id="c-style" style="width:120px;">${transStyleHTML}</select></div>
+                    <div class="ling-row"><label>译文字体</label><select id="c-font" style="width:120px;">${transFontFamilyHTML}</select></div>
                     <div class="ling-row"><label>翻译字号</label><input type="text" id="c-ts" value="${escapeAttr(cfg.transFontSize)}" style="width:60px;"></div>
                     <div class="ling-row"><label>VIP框色</label><input type="color" id="c-vc" value="${cfg.vipColor}"></div>
                 </div>
@@ -698,6 +730,7 @@
                 deepseekLayout: document.getElementById('c-ds-layout').value,
                 deepseekApiKey: document.getElementById('c-ds-key').value,
                 transStyle: document.getElementById('c-style').value,
+                transFontFamily: document.getElementById('c-font').value,
                 transFontSize: document.getElementById('c-ts').value,
                 vipColor: document.getElementById('c-vc').value
             });
