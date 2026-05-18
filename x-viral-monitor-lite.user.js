@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Viral Monitor Lite
 // @namespace    local.codex.x-viral-monitor-lite
-// @version      0.1.0
+// @version      0.1.1
 // @description  X timeline velocity badges, bookmark counts, and copy tweet as Markdown. No image viewer.
 // @match        https://x.com/*
 // @match        https://pro.x.com/*
@@ -22,6 +22,14 @@
   const tweetDataStore = new Map();
   let lastShareContext = null;
   let renderTimer = 0;
+  const debugState = pageWindow.__xvlLiteDebug = pageWindow.__xvlLiteDebug || {
+    version: '0.1.1',
+    renderCount: 0,
+    articlesSeen: 0,
+    badgesRendered: 0,
+    bookmarkCountsRendered: 0,
+    lastError: null,
+  };
 
   const log = (...args) => DEBUG && console.log(`[${SCRIPT_ID}]`, ...args);
 
@@ -251,7 +259,7 @@
   function parseActionGroupLabel(label) {
     const out = {};
     if (!label) return out;
-    for (const part of label.split(/[，,]/).map((s) => s.trim())) {
+    for (const part of label.split(/[，,、]/).map((s) => s.trim())) {
       const value = parseHumanNumber(part);
       if (!Number.isFinite(value)) continue;
       if (/回复|repl/i.test(part)) out.replies = value;
@@ -317,15 +325,26 @@
   }
 
   function renderAll() {
-    injectStyles();
-    for (const article of document.querySelectorAll('article[data-testid="tweet"]')) {
-      const id = getTweetIdFromArticle(article);
-      if (!id) continue;
-      const fallback = getArticleFallbackData(article, id);
-      mergeTweetData(id, withoutEmpty(fallback));
-      const data = tweetDataStore.get(id);
-      renderBadge(article, data);
-      renderBookmarkCount(article, data);
+    try {
+      injectStyles();
+      debugState.renderCount += 1;
+      debugState.articlesSeen = 0;
+      debugState.badgesRendered = 0;
+      debugState.bookmarkCountsRendered = 0;
+      debugState.lastError = null;
+      for (const article of document.querySelectorAll('article[data-testid="tweet"]')) {
+        debugState.articlesSeen += 1;
+        const id = getTweetIdFromArticle(article);
+        if (!id) continue;
+        const fallback = getArticleFallbackData(article, id);
+        mergeTweetData(id, withoutEmpty(fallback));
+        const data = tweetDataStore.get(id);
+        if (renderBadge(article, data)) debugState.badgesRendered += 1;
+        if (renderBookmarkCount(article, data)) debugState.bookmarkCountsRendered += 1;
+      }
+    } catch (error) {
+      debugState.lastError = String(error?.stack || error);
+      console.error(`[${SCRIPT_ID}] render failed`, error);
     }
   }
 
@@ -335,19 +354,18 @@
 
   function renderBadge(article, data) {
     const score = computeScore(data);
-    if (!score) return;
+    if (!score) return false;
     const { velocity } = score;
     const tier = velocity >= thresholds.viral ? 'viral' : velocity >= thresholds.trending ? 'trending' : 'normal';
     const prefix = tier === 'viral' ? '🔥' : tier === 'trending' ? '🚀' : '🌱';
     const headerRow = findHeaderRow(article);
-    if (!headerRow) return;
-    if (headerRow.querySelector(':scope > .xvm-badge')) return;
+    if (!headerRow) return false;
 
     let badge = headerRow.querySelector(':scope > .xvl-badge');
     if (!badge) {
       badge = document.createElement('span');
       badge.className = 'xvl-badge';
-      headerRow.insertBefore(badge, article.querySelector('[data-testid="caret"]')?.parentElement || null);
+      headerRow.appendChild(badge);
     }
     badge.className = `xvl-badge xvl-badge--${tier}`;
     badge.dataset.prefix = prefix;
@@ -361,6 +379,7 @@
       `流速: ${formatCompact(velocity)}/h`,
       `爆帖指数: ${score.score}/100`,
     ].join('\n');
+    return true;
   }
 
   function findHeaderRow(article) {
@@ -377,14 +396,12 @@
   function renderBookmarkCount(article, data) {
     const count = Number(data.bookmarks || 0);
     const button = article.querySelector('button[data-testid="bookmark"], button[data-testid="removeBookmark"]');
-    if (!button) return;
-
-    if (button.querySelector('.xvm-bookmark-count')) return;
+    if (!button) return false;
 
     let node = button.querySelector('.xvl-bookmark-count');
     if (!count) {
       node?.remove();
-      return;
+      return false;
     }
     if (!node) {
       node = document.createElement('span');
@@ -394,6 +411,7 @@
     }
     node.textContent = formatCompact(count);
     node.title = `${count.toLocaleString()} 书签`;
+    return true;
   }
 
   document.addEventListener('click', (event) => {
