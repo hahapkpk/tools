@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         my Twitter X Translator Lite
 // @namespace    http://tampermonkey.net/
-// @version      20.4
+// @version      20.5
 // @description  Support Twitter/X and Discord real-time translation, user notes and VIP marking, with customizable translation font size and color, one-click local backup and restore.
 // @author       fl
 // @license      MIT
@@ -82,10 +82,10 @@
 
     const INITIAL_VIP_MAP = {};
     const TRANSLATION_STYLES = {
-        classic: '默认醒目',
-        native: '贴近原文',
-        subtle: '轻量提示',
-        compact: '紧凑模式'
+        classic: '经典卡片',
+        native: '原生贴合',
+        quote: '译文引用块',
+        focus: '重点阅读'
     };
     const DEEPSEEK_LAYOUTS = {
         plain: '普通译文',
@@ -125,6 +125,8 @@
 
     const normalizeConfig = (cfg = {}) => {
         const merged = { ...DEFAULT_UI, ...cfg };
+        const legacyStyleMap = { subtle: 'quote', compact: 'native' };
+        const transStyle = legacyStyleMap[merged.transStyle] || merged.transStyle;
         return {
             ...merged,
             transColor: sanitizeColor(merged.transColor, DEFAULT_UI.transColor),
@@ -139,7 +141,7 @@
             deepseekApiBase: sanitizeEndpoint(merged.deepseekApiBase, DEFAULT_UI.deepseekApiBase),
             deepseekModel: String(merged.deepseekModel || DEFAULT_UI.deepseekModel).trim() || DEFAULT_UI.deepseekModel,
             deepseekApiKey: String(merged.deepseekApiKey || '').trim(),
-            transStyle: sanitizeChoice(merged.transStyle, Object.keys(TRANSLATION_STYLES), DEFAULT_UI.transStyle),
+            transStyle: sanitizeChoice(transStyle, Object.keys(TRANSLATION_STYLES), DEFAULT_UI.transStyle),
             deepseekLayout: sanitizeChoice(merged.deepseekLayout, Object.keys(DEEPSEEK_LAYOUTS), DEFAULT_UI.deepseekLayout)
         };
     };
@@ -202,7 +204,7 @@
         },
         export: () => {
             const config = { ...Storage.getConfig(), deepseekApiKey: '' };
-            const data = { ver: "20.4", ts: new Date().getTime(), notes: Storage.getNotes(), vips: Storage.getVips(), config };
+            const data = { ver: "20.5", ts: new Date().getTime(), notes: Storage.getNotes(), vips: Storage.getVips(), config };
             const blob = new Blob([JSON.stringify(data)], {type: 'text/plain'});
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a'); a.href = url;
@@ -236,13 +238,16 @@
         const oldStyle = document.getElementById('ling-style'); if (oldStyle) oldStyle.remove();
 
         const css = `
-            .ling-trans-box { margin-top: 6px; padding: 8px 10px; background: ${cfg.transBgColor || '#0b0b0b'}; border-left: 3px solid ${cfg.transColor}; border-radius: 4px; color: ${cfg.transTextColor || cfg.transColor}; font-size: ${cfg.transFontSize}; line-height: 1.5; font-family: "Consolas", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-            .ling-trans-box.native { padding: 2px 0 0 0; background: transparent; border-left: 0; border-radius: 0; color: ${cfg.transTextColor || '#8b98a5'}; font-size: inherit; line-height: inherit; font-family: inherit; opacity: 0.92; }
-            .ling-trans-box.native::before { content: "译文"; display: inline-block; margin-right: 6px; color: ${cfg.transColor}; font-size: 11px; font-weight: 700; }
-            .ling-trans-box.subtle { padding: 6px 0 0 10px; background: transparent; border-left: 2px solid ${cfg.transColor}; border-radius: 0; color: ${cfg.transTextColor || '#8b98a5'}; font-family: inherit; opacity: 0.9; }
-            .ling-trans-box.compact { display: inline-block; margin-top: 4px; padding: 3px 6px; background: rgba(29,155,240,0.08); border-left: 0; border-radius: 4px; color: ${cfg.transTextColor || cfg.transColor}; font-size: 13px; line-height: 1.35; font-family: inherit; }
+            .ling-trans-box { margin-top: 8px; padding: 12px 14px; background: ${cfg.transBgColor || '#172633'}; border-left: 4px solid ${cfg.transColor}; border-radius: 8px; color: ${cfg.transTextColor || '#e7e9ea'}; font-size: ${cfg.transFontSize}; line-height: 1.65; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; white-space: pre-wrap; overflow-wrap: anywhere; }
+            .ling-trans-box.native { padding: 4px 0 0 0; background: transparent; border-left: 0; border-radius: 0; color: ${cfg.transTextColor || '#cfd9de'}; font-size: inherit; line-height: 1.45; font-family: inherit; opacity: 0.94; }
+            .ling-trans-box.native::before { content: "译文"; display: inline-block; margin-right: 6px; color: ${cfg.transColor}; font-size: 11px; font-weight: 700; vertical-align: 1px; }
+            .ling-trans-box.quote { padding: 12px 14px 14px 14px; background: #0d1117; border: 1px solid #26323f; border-left: 1px solid #26323f; border-radius: 12px; color: #e7e9ea; font-size: ${cfg.transFontSize}; line-height: 1.68; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+            .ling-trans-box.quote::before { content: "译文 · DeepSeek"; display: block; margin-bottom: 9px; padding-bottom: 8px; border-bottom: 1px solid #26323f; color: ${cfg.transColor}; font-size: 11px; font-weight: 800; letter-spacing: 0.02em; }
+            .ling-trans-box.focus { padding: 14px 16px; background: linear-gradient(135deg, rgba(31,52,68,0.96), rgba(17,25,35,0.96)); border-left: 0; border-radius: 10px; color: #e7e9ea; font-size: ${cfg.transFontSize}; line-height: 1.62; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; box-shadow: 0 10px 28px rgba(0,0,0,0.25); }
+            .ling-trans-box.focus::before { content: "重点"; display: inline-block; margin-bottom: 10px; padding: 3px 12px; border-radius: 999px; background: rgba(29,155,240,0.16); color: #66c2ff; font-size: 11px; font-weight: 800; }
             .ling-discord-box { margin-top: 4px; padding: 4px 8px; opacity: 0.9; background: rgba(0,0,0,0.5); border-left: 2px solid ${cfg.transColor}; }
-            .ling-discord-box.native, .ling-discord-box.subtle { background: transparent; }
+            .ling-discord-box.native { background: transparent; }
+            .ling-discord-box.quote, .ling-discord-box.focus { margin-top: 6px; padding: 10px 12px; opacity: 1; }
             .ling-vip-tweet { border: 2px solid ${cfg.vipColor} !important; background: rgba(243, 186, 47, 0.05) !important; border-radius: 8px !important; }
             .ling-identity-badge { font-weight: 900; font-size: 10px; padding: 2px 5px; border-radius: 3px; margin-left: 5px; vertical-align: middle; display: inline-block; box-shadow: 0 1px 2px rgba(0,0,0,0.5); color: #000; background: ${cfg.vipColor}; }
             .ling-user-note { background-color: ${cfg.noteColor}; color: #fff; font-size: ${cfg.noteFontSize}; padding: 2px 6px; border-radius: 4px; margin-left: 5px; vertical-align: middle; display: inline-block; cursor: pointer; max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: bold; }
@@ -573,7 +578,7 @@
                 <div class="ling-mini-btn" id="ling-btn-rs">📥 恢复</div>
             </div>
 
-            <div style="margin-top:8px;font-size:10px;color:#666;text-align:center;">V20.4 Lite</div>
+            <div style="margin-top:8px;font-size:10px;color:#666;text-align:center;">V20.5 Lite</div>
         `;
         document.body.appendChild(div);
 
