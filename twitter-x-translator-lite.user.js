@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         my Twitter X Translator Lite
 // @namespace    http://tampermonkey.net/
-// @version      20.3
+// @version      20.4
 // @description  Support Twitter/X and Discord real-time translation, user notes and VIP marking, with customizable translation font size and color, one-click local backup and restore.
 // @author       fl
 // @license      MIT
@@ -202,7 +202,7 @@
         },
         export: () => {
             const config = { ...Storage.getConfig(), deepseekApiKey: '' };
-            const data = { ver: "20.3", ts: new Date().getTime(), notes: Storage.getNotes(), vips: Storage.getVips(), config };
+            const data = { ver: "20.4", ts: new Date().getTime(), notes: Storage.getNotes(), vips: Storage.getVips(), config };
             const blob = new Blob([JSON.stringify(data)], {type: 'text/plain'});
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a'); a.href = url;
@@ -236,7 +236,7 @@
         const oldStyle = document.getElementById('ling-style'); if (oldStyle) oldStyle.remove();
 
         const css = `
-            .ling-trans-box { margin-top: 6px; padding: 8px 10px; background: ${cfg.transBgColor || '#0b0b0b'}; border-left: 3px solid ${cfg.transColor}; border-radius: 4px; color: ${cfg.transTextColor || cfg.transColor}; font-size: ${cfg.transFontSize}; line-height: 1.5; font-family: "Consolas", monospace; }
+            .ling-trans-box { margin-top: 6px; padding: 8px 10px; background: ${cfg.transBgColor || '#0b0b0b'}; border-left: 3px solid ${cfg.transColor}; border-radius: 4px; color: ${cfg.transTextColor || cfg.transColor}; font-size: ${cfg.transFontSize}; line-height: 1.5; font-family: "Consolas", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
             .ling-trans-box.native { padding: 2px 0 0 0; background: transparent; border-left: 0; border-radius: 0; color: ${cfg.transTextColor || '#8b98a5'}; font-size: inherit; line-height: inherit; font-family: inherit; opacity: 0.92; }
             .ling-trans-box.native::before { content: "译文"; display: inline-block; margin-right: 6px; color: ${cfg.transColor}; font-size: 11px; font-weight: 700; }
             .ling-trans-box.subtle { padding: 6px 0 0 10px; background: transparent; border-left: 2px solid ${cfg.transColor}; border-radius: 0; color: ${cfg.transTextColor || '#8b98a5'}; font-family: inherit; opacity: 0.9; }
@@ -348,6 +348,46 @@
         throw lastError || new Error('No translation provider available');
     }
 
+    function splitSentences(text) {
+        const normalized = text
+            .replace(/\r\n/g, '\n')
+            .replace(/[ \t]+/g, ' ')
+            .replace(/\n+/g, '\n')
+            .trim();
+        if (!normalized) return [];
+
+        return normalized
+            .split('\n')
+            .flatMap(line => line.match(/[^。！？!?；;]+[。！？!?；;]?/g) || [line])
+            .map(part => part.trim())
+            .filter(Boolean);
+    }
+
+    function formatTranslatedText(text, cfg) {
+        if (cfg.deepseekLayout === 'plain') return text.trim();
+
+        const sentences = splitSentences(text);
+        if (sentences.length <= 1) return text.trim();
+
+        if (cfg.deepseekLayout === 'sentence') {
+            return sentences.join('\n\n');
+        }
+
+        if (cfg.deepseekLayout === 'readable') {
+            const paragraphs = [];
+            for (let i = 0; i < sentences.length; i += 2) {
+                paragraphs.push(sentences.slice(i, i + 2).join(' '));
+            }
+            return paragraphs.join('\n\n');
+        }
+
+        if (cfg.deepseekLayout === 'highlights') {
+            return sentences.map((sentence, index) => index === 0 ? `重点：${sentence}` : `- ${sentence}`).join('\n');
+        }
+
+        return text.trim();
+    }
+
     function processContent(element, text, platform) {
         const sourceText = (text || '').trim();
         if (!sourceText || element.dataset.lingPending === "true") return;
@@ -384,7 +424,7 @@
         const cfg = Storage.getConfig();
         const container = document.createElement('div');
         container.className = platform === 'discord' ? `ling-trans-box ling-discord-box ${cfg.transStyle}` : `ling-trans-box ${cfg.transStyle}`;
-        container.textContent = transText;
+        container.textContent = formatTranslatedText(transText, cfg);
 
         if (platform === 'twitter') {
             const oldBox = element.parentNode.querySelector(':scope > .ling-trans-box');
@@ -533,7 +573,7 @@
                 <div class="ling-mini-btn" id="ling-btn-rs">📥 恢复</div>
             </div>
 
-            <div style="margin-top:8px;font-size:10px;color:#666;text-align:center;">V20.3 Lite</div>
+            <div style="margin-top:8px;font-size:10px;color:#666;text-align:center;">V20.4 Lite</div>
         `;
         document.body.appendChild(div);
 
