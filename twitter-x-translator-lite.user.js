@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         my Twitter X Translator Lite
 // @namespace    http://tampermonkey.net/
-// @version      20.6
+// @version      20.7
 // @description  Support Twitter/X and Discord real-time translation, user notes and VIP marking, with customizable translation font size and color, one-click local backup and restore.
 // @author       fl
 // @license      MIT
@@ -39,7 +39,8 @@
         deepseekApiKey: '',
         transStyle: 'classic',
         deepseekLayout: 'plain',
-        transFontFamily: 'mono'
+        transFontFamily: 'mono',
+        transDensity: 'comfortable'
     };
 
     const THEME_PRESETS = {
@@ -116,6 +117,32 @@
             family: '"Microsoft YaHei UI", "PingFang SC", "Noto Sans SC", system-ui, sans-serif'
         }
     };
+    const DENSITY_PRESETS = {
+        compact: {
+            name: '紧凑',
+            padding: '8px 10px',
+            quotePadding: '10px 12px 12px 12px',
+            focusPadding: '11px 13px',
+            lineHeight: '1.38',
+            paragraphGap: '0.42em'
+        },
+        comfortable: {
+            name: '舒适',
+            padding: '10px 12px',
+            quotePadding: '11px 13px 13px 13px',
+            focusPadding: '12px 14px',
+            lineHeight: '1.48',
+            paragraphGap: '0.62em'
+        },
+        relaxed: {
+            name: '宽松',
+            padding: '12px 14px',
+            quotePadding: '12px 14px 14px 14px',
+            focusPadding: '14px 16px',
+            lineHeight: '1.62',
+            paragraphGap: '0.88em'
+        }
+    };
 
     const safeParse = (raw, fallback) => {
         try {
@@ -166,7 +193,8 @@
             deepseekApiKey: String(merged.deepseekApiKey || '').trim(),
             transStyle: sanitizeChoice(transStyle, Object.keys(TRANSLATION_STYLES), DEFAULT_UI.transStyle),
             deepseekLayout: sanitizeChoice(merged.deepseekLayout, Object.keys(DEEPSEEK_LAYOUTS), DEFAULT_UI.deepseekLayout),
-            transFontFamily: sanitizeChoice(merged.transFontFamily, Object.keys(FONT_PRESETS), DEFAULT_UI.transFontFamily)
+            transFontFamily: sanitizeChoice(merged.transFontFamily, Object.keys(FONT_PRESETS), DEFAULT_UI.transFontFamily),
+            transDensity: sanitizeChoice(merged.transDensity, Object.keys(DENSITY_PRESETS), DEFAULT_UI.transDensity)
         };
     };
 
@@ -228,7 +256,7 @@
         },
         export: () => {
             const config = { ...Storage.getConfig(), deepseekApiKey: '' };
-            const data = { ver: "20.6", ts: new Date().getTime(), notes: Storage.getNotes(), vips: Storage.getVips(), config };
+            const data = { ver: "20.7", ts: new Date().getTime(), notes: Storage.getNotes(), vips: Storage.getVips(), config };
             const blob = new Blob([JSON.stringify(data)], {type: 'text/plain'});
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a'); a.href = url;
@@ -261,15 +289,18 @@
         const cfg = Storage.getConfig();
         const oldStyle = document.getElementById('ling-style'); if (oldStyle) oldStyle.remove();
         const transFontFamily = FONT_PRESETS[cfg.transFontFamily].family;
+        const density = DENSITY_PRESETS[cfg.transDensity];
 
         const css = `
-            .ling-trans-box { margin-top: 8px; padding: 12px 14px; background: ${cfg.transBgColor || '#172633'}; border-left: 4px solid ${cfg.transColor}; border-radius: 8px; color: ${cfg.transTextColor || '#e7e9ea'}; font-size: ${cfg.transFontSize}; line-height: 1.65; font-family: ${transFontFamily}; white-space: pre-wrap; overflow-wrap: anywhere; }
-            .ling-trans-box.native { padding: 4px 0 0 0; background: transparent; border-left: 0; border-radius: 0; color: ${cfg.transTextColor || '#cfd9de'}; font-size: inherit; line-height: 1.45; font-family: ${transFontFamily}; opacity: 0.94; }
+            .ling-trans-box { margin-top: 8px; padding: ${density.padding}; background: ${cfg.transBgColor || '#172633'}; border-left: 4px solid ${cfg.transColor}; border-radius: 8px; color: ${cfg.transTextColor || '#e7e9ea'}; font-size: ${cfg.transFontSize}; line-height: ${density.lineHeight}; font-family: ${transFontFamily}; white-space: pre-wrap; overflow-wrap: anywhere; }
+            .ling-trans-box p { margin: 0 0 ${density.paragraphGap} 0; }
+            .ling-trans-box p:last-child { margin-bottom: 0; }
+            .ling-trans-box.native { padding: 3px 0 0 0; background: transparent; border-left: 0; border-radius: 0; color: ${cfg.transTextColor || '#cfd9de'}; font-size: inherit; line-height: ${density.lineHeight}; font-family: ${transFontFamily}; opacity: 0.94; }
             .ling-trans-box.native::before { content: "译文"; display: inline-block; margin-right: 6px; color: ${cfg.transColor}; font-size: 11px; font-weight: 700; vertical-align: 1px; }
-            .ling-trans-box.quote { padding: 12px 14px 14px 14px; background: #0d1117; border: 1px solid #26323f; border-left: 1px solid #26323f; border-radius: 12px; color: #e7e9ea; font-size: ${cfg.transFontSize}; line-height: 1.68; font-family: ${transFontFamily}; }
-            .ling-trans-box.quote::before { content: "译文 · DeepSeek"; display: block; margin-bottom: 9px; padding-bottom: 8px; border-bottom: 1px solid #26323f; color: ${cfg.transColor}; font-size: 11px; font-weight: 800; letter-spacing: 0.02em; }
-            .ling-trans-box.focus { padding: 14px 16px; background: linear-gradient(135deg, rgba(31,52,68,0.96), rgba(17,25,35,0.96)); border-left: 0; border-radius: 10px; color: #e7e9ea; font-size: ${cfg.transFontSize}; line-height: 1.62; font-family: ${transFontFamily}; box-shadow: 0 10px 28px rgba(0,0,0,0.25); }
-            .ling-trans-box.focus::before { content: "重点"; display: inline-block; margin-bottom: 10px; padding: 3px 12px; border-radius: 999px; background: rgba(29,155,240,0.16); color: #66c2ff; font-size: 11px; font-weight: 800; }
+            .ling-trans-box.quote { padding: ${density.quotePadding}; background: #0d1117; border: 1px solid #26323f; border-left: 1px solid #26323f; border-radius: 12px; color: #e7e9ea; font-size: ${cfg.transFontSize}; line-height: ${density.lineHeight}; font-family: ${transFontFamily}; }
+            .ling-trans-box.quote::before { content: "译文 · DeepSeek"; display: block; margin-bottom: 7px; padding-bottom: 7px; border-bottom: 1px solid #26323f; color: ${cfg.transColor}; font-size: 11px; font-weight: 800; letter-spacing: 0.02em; }
+            .ling-trans-box.focus { padding: ${density.focusPadding}; background: linear-gradient(135deg, rgba(31,52,68,0.96), rgba(17,25,35,0.96)); border-left: 0; border-radius: 10px; color: #e7e9ea; font-size: ${cfg.transFontSize}; line-height: ${density.lineHeight}; font-family: ${transFontFamily}; box-shadow: 0 8px 22px rgba(0,0,0,0.22); }
+            .ling-trans-box.focus::before { content: "重点"; display: inline-block; margin-bottom: 8px; padding: 2px 10px; border-radius: 999px; background: rgba(29,155,240,0.16); color: #66c2ff; font-size: 11px; font-weight: 800; }
             .ling-discord-box { margin-top: 4px; padding: 4px 8px; opacity: 0.9; background: rgba(0,0,0,0.5); border-left: 2px solid ${cfg.transColor}; }
             .ling-discord-box.native { background: transparent; }
             .ling-discord-box.quote, .ling-discord-box.focus { margin-top: 6px; padding: 10px 12px; opacity: 1; }
@@ -418,6 +449,23 @@
         return text.trim();
     }
 
+    function renderTranslatedText(container, text, cfg) {
+        const formatted = formatTranslatedText(text, cfg);
+        const blocks = formatted.split(/\n{2,}/).map(block => block.trim()).filter(Boolean);
+        container.textContent = '';
+
+        if (blocks.length <= 1) {
+            container.textContent = formatted;
+            return;
+        }
+
+        blocks.forEach(block => {
+            const paragraph = document.createElement('p');
+            paragraph.textContent = block;
+            container.appendChild(paragraph);
+        });
+    }
+
     function processContent(element, text, platform) {
         const sourceText = (text || '').trim();
         if (!sourceText || element.dataset.lingPending === "true") return;
@@ -454,7 +502,7 @@
         const cfg = Storage.getConfig();
         const container = document.createElement('div');
         container.className = platform === 'discord' ? `ling-trans-box ling-discord-box ${cfg.transStyle}` : `ling-trans-box ${cfg.transStyle}`;
-        container.textContent = formatTranslatedText(transText, cfg);
+        renderTranslatedText(container, transText, cfg);
 
         if (platform === 'twitter') {
             const oldBox = element.parentNode.querySelector(':scope > .ling-trans-box');
@@ -603,7 +651,7 @@
                 <div class="ling-mini-btn" id="ling-btn-rs">📥 恢复</div>
             </div>
 
-            <div style="margin-top:8px;font-size:10px;color:#666;text-align:center;">V20.6 Lite</div>
+            <div style="margin-top:8px;font-size:10px;color:#666;text-align:center;">V20.7 Lite</div>
         `;
         document.body.appendChild(div);
 
@@ -630,7 +678,8 @@
             deepseekApiKey: Storage.getConfig().deepseekApiKey,
             transStyle: Storage.getConfig().transStyle,
             deepseekLayout: Storage.getConfig().deepseekLayout,
-            transFontFamily: Storage.getConfig().transFontFamily
+            transFontFamily: Storage.getConfig().transFontFamily,
+            transDensity: Storage.getConfig().transDensity
         });
     }
 
@@ -662,6 +711,11 @@
             transFontFamilyHTML += `<option value="${key}" ${cfg.transFontFamily === key ? 'selected' : ''}>${preset.name}</option>`;
         }
 
+        let transDensityHTML = '';
+        for (const [key, preset] of Object.entries(DENSITY_PRESETS)) {
+            transDensityHTML += `<option value="${key}" ${cfg.transDensity === key ? 'selected' : ''}>${preset.name}</option>`;
+        }
+
         let deepseekLayoutHTML = '';
         for (const [key, label] of Object.entries(DEEPSEEK_LAYOUTS)) {
             deepseekLayoutHTML += `<option value="${key}" ${cfg.deepseekLayout === key ? 'selected' : ''}>${label}</option>`;
@@ -682,6 +736,7 @@
                     <label style="display:block;margin-bottom:8px;color:#ccc;font-size:12px;">🎯 自定义配置</label>
                     <div class="ling-row"><label>显示样式</label><select id="c-style" style="width:120px;">${transStyleHTML}</select></div>
                     <div class="ling-row"><label>译文字体</label><select id="c-font" style="width:120px;">${transFontFamilyHTML}</select></div>
+                    <div class="ling-row"><label>排版密度</label><select id="c-density" style="width:120px;">${transDensityHTML}</select></div>
                     <div class="ling-row"><label>翻译字号</label><input type="text" id="c-ts" value="${escapeAttr(cfg.transFontSize)}" style="width:60px;"></div>
                     <div class="ling-row"><label>VIP框色</label><input type="color" id="c-vc" value="${cfg.vipColor}"></div>
                 </div>
@@ -731,6 +786,7 @@
                 deepseekApiKey: document.getElementById('c-ds-key').value,
                 transStyle: document.getElementById('c-style').value,
                 transFontFamily: document.getElementById('c-font').value,
+                transDensity: document.getElementById('c-density').value,
                 transFontSize: document.getElementById('c-ts').value,
                 vipColor: document.getElementById('c-vc').value
             });
