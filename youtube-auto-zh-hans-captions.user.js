@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.4.2
+// @version      0.4.3
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube using YouTube caption translation data.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -40,7 +40,7 @@
     offsetMs: -200,
     hideNative: true,
     voiceEnabled: false,
-    voiceName: '',
+    voiceName: 'Google 普通话（中国大陆）',
     voiceRate: 1.08,
     originalVolume: 0.25
   };
@@ -184,6 +184,24 @@
         grid-template-columns: repeat(3, 1fr);
         gap: 6px;
         margin-top: 8px;
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-voice-picker {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-voice-picker select {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-voice-picker button {
+        flex: 0 0 auto;
+        width: auto;
+        min-width: 72px;
+        padding-left: 8px;
+        padding-right: 8px;
+        white-space: nowrap;
       }
       .${SCRIPT_ID}-hide-native .ytp-caption-window-container,
       .${SCRIPT_ID}-hide-native .ytp-caption-segment {
@@ -349,6 +367,8 @@
     const text = `${voice.name || ''} ${voice.lang || ''}`;
     let score = 0;
     if (/zh[-_]?CN/i.test(voice.lang || '')) score += 80;
+    if (/Google 普通话（中国大陆）/i.test(text)) score += 120;
+    if (/Google/i.test(text) && /普通话|Mandarin|Chinese|中文/i.test(text)) score += 90;
     if (/Natural|Neural|Online|Xiaoxiao|Yunxi|Yunyang|Xiaoyi|Xiaochen|Xiaohan|Xiaomeng/i.test(text)) score += 60;
     if (voice.localService === false) score += 20;
     if (/Microsoft/i.test(text)) score += 10;
@@ -429,6 +449,11 @@
     if (window.speechSynthesis) {
       window.speechSynthesis.addEventListener?.('voiceschanged', () => populateVoiceOptions(voiceName));
     }
+    const testVoiceButton = makeButton('测试语音', '朗读一句示例，确认当前语音人物', () => testSelectedVoice());
+    testVoiceButton.dataset.role = 'testVoiceButton';
+    const voicePicker = document.createElement('span');
+    voicePicker.className = `${SCRIPT_ID}-voice-picker`;
+    voicePicker.append(voiceName, testVoiceButton);
 
     const voiceRate = document.createElement('select');
     voiceRate.dataset.role = 'voiceRate';
@@ -480,7 +505,7 @@
       makeRow('字幕延迟', offset),
       makeRow('隐藏原生字幕', hideNative),
       makeRow('中文配音', voiceEnabled),
-      makeRow('语音人物', voiceName),
+      makeRow('语音人物', voicePicker),
       makeRow('配音语速', voiceRate),
       makeRow('原声音量', originalVolumeWrap),
       buttons
@@ -1055,10 +1080,22 @@
   function speakCue(cue) {
     const text = cue.text.replace(/\[[^\]]+\]/g, '').replace(/\s+/g, ' ').trim();
     if (!text || text.length < 2) return;
+    speakText(text, getSpeechRate(text));
+  }
+
+  function testSelectedVoice() {
+    speakText('这是一段中文语音测试，用来确认当前选择的配音人物。', Number(state.settings.voiceRate));
+  }
+
+  function speakText(text, rate) {
+    if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance !== 'function') {
+      showStatus('当前浏览器不支持中文配音');
+      return;
+    }
     cancelSpeech();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'zh-CN';
-    utterance.rate = getSpeechRate(text);
+    utterance.rate = clamp(Number(rate), 0.7, 1.6);
     utterance.pitch = 1;
     utterance.volume = 1;
     const voice = selectChineseVoice();
