@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.3.1
+// @version      0.4.0
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube using YouTube caption translation data.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -37,7 +37,10 @@
     fontSize: 28,
     position: 8,
     offsetMs: -200,
-    hideNative: true
+    hideNative: true,
+    voiceEnabled: false,
+    voiceRate: 1.08,
+    originalVolume: 0.25
   };
 
   const state = {
@@ -51,6 +54,9 @@
     pendingStatus: '',
     rafId: 0,
     routeTimer: 0,
+    spokenCueIndex: -1,
+    originalVolumeBeforeVoice: null,
+    videoHooked: null,
     settings: loadSettings()
   };
 
@@ -307,6 +313,31 @@
     hideNative.checked = state.settings.hideNative;
     hideNative.addEventListener('change', () => updateSetting('hideNative', hideNative.checked));
 
+    const voiceEnabled = document.createElement('input');
+    voiceEnabled.type = 'checkbox';
+    voiceEnabled.checked = state.settings.voiceEnabled;
+    voiceEnabled.addEventListener('change', () => updateSetting('voiceEnabled', voiceEnabled.checked));
+
+    const voiceRate = document.createElement('select');
+    for (const value of [0.85, 1, 1.08, 1.18, 1.3]) {
+      const option = document.createElement('option');
+      option.value = String(value);
+      option.textContent = `${value}x`;
+      voiceRate.appendChild(option);
+    }
+    voiceRate.value = String(state.settings.voiceRate);
+    voiceRate.addEventListener('change', () => updateSetting('voiceRate', Number(voiceRate.value)));
+
+    const originalVolume = document.createElement('select');
+    for (const [value, text] of [[0, '静音'], [0.25, '25%'], [0.5, '50%'], [1, '原音量']]) {
+      const option = document.createElement('option');
+      option.value = String(value);
+      option.textContent = text;
+      originalVolume.appendChild(option);
+    }
+    originalVolume.value = String(state.settings.originalVolume);
+    originalVolume.addEventListener('change', () => updateSetting('originalVolume', Number(originalVolume.value)));
+
     const buttons = document.createElement('div');
     buttons.className = `${SCRIPT_ID}-buttons`;
     buttons.append(
@@ -325,6 +356,9 @@
       makeRow('位置', position),
       makeRow('字幕延迟', offset),
       makeRow('隐藏原生字幕', hideNative),
+      makeRow('中文配音', voiceEnabled),
+      makeRow('配音语速', voiceRate),
+      makeRow('原声音量', originalVolume),
       buttons
     );
     player.appendChild(panel);
@@ -334,7 +368,9 @@
   function updateSetting(key, value) {
     state.settings[key] = value;
     saveSettings();
+    syncControlValues();
     applyVisualSettings();
+    applyVoiceSettings();
     renderCurrentCue();
   }
 
@@ -345,6 +381,44 @@
       overlay.style.setProperty(`--${SCRIPT_ID}-bottom`, String(state.settings.position));
     }
     document.documentElement.classList.toggle(`${SCRIPT_ID}-hide-native`, Boolean(state.settings.hideNative));
+  }
+
+  function syncControlValues() {
+    const panel = document.getElementById(CONTROL_ID);
+    if (!panel) return;
+    const inputs = panel.querySelectorAll('input, select');
+    for (const input of inputs) {
+      const rowText = input.parentElement?.innerText || '';
+      if (input.type === 'checkbox') {
+        if (rowText.includes('启用') && !rowText.includes('中文配音')) input.checked = state.settings.enabled;
+        if (rowText.includes('隐藏原生字幕')) input.checked = state.settings.hideNative;
+        if (rowText.includes('中文配音')) input.checked = state.settings.voiceEnabled;
+        continue;
+      }
+      if (input.parentElement?.innerText?.includes('配音语速')) input.value = String(state.settings.voiceRate);
+      if (input.parentElement?.innerText?.includes('原声音量')) input.value = String(state.settings.originalVolume);
+    }
+  }
+
+  function applyVoiceSettings() {
+    const video = getVideoEl();
+    if (!video) return;
+    if (state.settings.voiceEnabled) {
+      if (state.originalVolumeBeforeVoice === null) state.originalVolumeBeforeVoice = video.volume;
+      video.volume = clamp(Number(state.settings.originalVolume), 0, 1);
+      hookVideoEvents(video);
+    } else {
+      cancelSpeech();
+      state.spokenCueIndex = -1;
+      if (state.originalVolumeBeforeVoice !== null) {
+        video.volume = clamp(state.originalVolumeBeforeVoice, 0, 1);
+        state.originalVolumeBeforeVoice = null;
+      }
+    }
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
   }
 
   function showStatus(text, timeout = 3500) {
@@ -788,9 +862,12 @@
       setCaption(null);
       return;
     }
+    hookVideoEvents(video);
     const index = findCueIndex(video.currentTime);
     state.cueIndex = index;
-    setCaption(index >= 0 ? state.cues[index] : null);
+    const cue = index >= 0 ? state.cues[index] : null;
+    setCaption(cue);
+    syncVoice(cue, index, video);
   }
 
   function syncCaption() {
@@ -803,6 +880,82 @@
     syncCaption();
   }
 
+  function hookVideoEvents(video) {
+    if (!video || state.videoHooked === video) return;
+    if (state.videoHooked) {
+      state.videoHooked.removeEventListener('pause', handleVideoPause);
+      state.videoHooked.removeEventListener('seeking', handleVideoSeeking);
+      state.videoHooked.removeEventListener('play', handleVideoPlay);
+    }
+    state.videoHooked = video;
+    video.addEventListener('pause', handleVideoPause);
+    video.addEventListener('seeking', handleVideoSeeking);
+    video.addEventListener('play', handleVideoPlay);
+    applyVoiceSettings();
+  }
+
+  function handleVideoPause() {
+    if (state.settings.voiceEnabled && window.speechSynthesis?.speaking) {
+      window.speechSynthesis.pause();
+    }
+  }
+
+  function handleVideoPlay() {
+    if (state.settings.voiceEnabled && window.speechSynthesis?.paused) {
+      window.speechSynthesis.resume();
+    }
+  }
+
+  function handleVideoSeeking() {
+    cancelSpeech();
+    state.spokenCueIndex = -1;
+  }
+
+  function syncVoice(cue, index, video) {
+    if (!state.settings.voiceEnabled || !cue || index < 0 || video.paused) return;
+    if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance !== 'function') {
+      showStatus('当前浏览器不支持中文配音');
+      updateSetting('voiceEnabled', false);
+      return;
+    }
+    if (index === state.spokenCueIndex) return;
+    state.spokenCueIndex = index;
+    speakCue(cue);
+  }
+
+  function speakCue(cue) {
+    const text = cue.text.replace(/\[[^\]]+\]/g, '').replace(/\s+/g, ' ').trim();
+    if (!text || text.length < 2) return;
+    cancelSpeech();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'zh-CN';
+    utterance.rate = getSpeechRate(text);
+    utterance.pitch = 1;
+    utterance.volume = 1;
+    const voice = selectChineseVoice();
+    if (voice) utterance.voice = voice;
+    window.speechSynthesis.speak(utterance);
+  }
+
+  function getSpeechRate(text) {
+    const base = clamp(Number(state.settings.voiceRate), 0.7, 1.6);
+    if (text.length > 60) return clamp(base + 0.12, 0.7, 1.6);
+    if (text.length < 12) return clamp(base - 0.08, 0.7, 1.6);
+    return base;
+  }
+
+  function selectChineseVoice() {
+    const voices = window.speechSynthesis?.getVoices?.() || [];
+    return voices.find(voice => /zh[-_]?CN/i.test(voice.lang)) ||
+      voices.find(voice => /^zh/i.test(voice.lang)) ||
+      voices.find(voice => /Chinese|中文|普通话|Mandarin/i.test(voice.name)) ||
+      null;
+  }
+
+  function cancelSpeech() {
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+  }
+
   function reloadCurrentVideo(force = false) {
     const videoId = getVideoId();
     if (!videoId) return;
@@ -811,6 +964,8 @@
     state.rawTargetCues = [];
     state.rawSourceCues = [];
     state.cueIndex = -1;
+    state.spokenCueIndex = -1;
+    cancelSpeech();
     state.loadToken += 1;
     setCaption(null);
     const token = state.loadToken;
@@ -908,6 +1063,7 @@
     GM_registerMenuCommand('打开/关闭字幕控制面板', () => toggleControlPanel());
     GM_registerMenuCommand('重新加载中文字幕', () => reloadCurrentVideo(true));
     GM_registerMenuCommand('启用/停用自定义字幕', () => updateSetting('enabled', !state.settings.enabled));
+    GM_registerMenuCommand('启用/停用中文配音', () => updateSetting('voiceEnabled', !state.settings.voiceEnabled));
   }
 
   function checkRoute() {
