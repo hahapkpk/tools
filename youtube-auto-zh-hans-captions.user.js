@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.1.0
+// @version      0.2.2
 // @description  Automatically shows Simplified Chinese subtitles for English YouTube videos using YouTube caption translation tracks.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
+// @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/youtube-auto-zh-hans-captions.user.js
+// @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/youtube-auto-zh-hans-captions.user.js
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==
@@ -30,6 +32,7 @@
     loadToken: 0,
     enabled: true,
     lastUrl: '',
+    pendingStatus: '',
     rafId: 0,
     routeTimer: 0
   };
@@ -131,7 +134,9 @@
     if (!overlay) {
       overlay = document.createElement('div');
       overlay.id = OVERLAY_ID;
-      overlay.innerHTML = `<div class="${SCRIPT_ID}-line"></div>`;
+      const line = document.createElement('div');
+      line.className = `${SCRIPT_ID}-line`;
+      overlay.appendChild(line);
     }
     if (overlay.parentElement !== player) {
       player.appendChild(overlay);
@@ -145,11 +150,16 @@
     if (status.parentElement !== player) {
       player.appendChild(status);
     }
+    if (state.pendingStatus && !status.classList.contains(`${SCRIPT_ID}-visible`)) {
+      status.textContent = state.pendingStatus;
+      status.classList.add(`${SCRIPT_ID}-visible`);
+    }
 
     return overlay;
   }
 
   function showStatus(text, timeout = 2600) {
+    state.pendingStatus = text;
     const player = getPlayerRoot();
     if (!player) return;
 
@@ -162,6 +172,7 @@
     window.clearTimeout(status.dataset.timerId);
     status.dataset.timerId = String(window.setTimeout(() => {
       status.classList.remove(`${SCRIPT_ID}-visible`);
+      if (state.pendingStatus === text) state.pendingStatus = '';
     }, timeout));
   }
 
@@ -272,10 +283,16 @@
     });
 
     if (!response.ok) {
+      if (response.status === 429) {
+        throw new Error('YouTube 字幕接口暂时限流，请稍后刷新页面重试。');
+      }
       throw new Error(`Caption request failed: ${response.status}`);
     }
 
     const text = await response.text();
+    if (!text.trim()) {
+      throw new Error('YouTube 当前返回空字幕内容，播放器本身也可能显示“无法显示字幕”。');
+    }
     try {
       return JSON.parse(text);
     } catch (error) {
@@ -416,7 +433,7 @@
     loadCaptions(videoId, token).catch(error => {
       if (token !== state.loadToken) return;
       console.warn(`[${SCRIPT_ID}]`, error);
-      showStatus('简体中文字幕生成失败，请刷新或稍后重试');
+      showStatus(error?.message || '简体中文字幕生成失败，请刷新或稍后重试', 6000);
     });
   }
 
