@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.4.1
+// @version      0.4.2
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube using YouTube caption translation data.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -21,6 +21,7 @@
   const OVERLAY_ID = `${SCRIPT_ID}-overlay`;
   const STATUS_ID = `${SCRIPT_ID}-status`;
   const CONTROL_ID = `${SCRIPT_ID}-controls`;
+  const TOGGLE_ID = `${SCRIPT_ID}-toggle`;
   const CACHE_PREFIX = `${SCRIPT_ID}:cache:`;
   const SETTINGS_KEY = `${SCRIPT_ID}:settings`;
   const DEBUG = false;
@@ -141,7 +142,10 @@
         right: 12px;
         top: 12px;
         display: none;
-        width: 286px;
+        width: 340px;
+        max-width: min(360px, calc(100% - 24px));
+        max-height: calc(100% - 24px);
+        overflow: auto;
         padding: 10px;
         font-size: 12px;
         line-height: 1.4;
@@ -149,27 +153,32 @@
       }
       #${CONTROL_ID}.${SCRIPT_ID}-visible { display: block; }
       #${CONTROL_ID} .${SCRIPT_ID}-row {
-        display: flex;
+        display: grid;
+        grid-template-columns: 92px minmax(0, 1fr);
         align-items: center;
-        justify-content: space-between;
         gap: 8px;
         margin: 7px 0;
       }
-      #${CONTROL_ID} label { color: rgba(255,255,255,0.82); }
+      #${CONTROL_ID} label {
+        color: rgba(255,255,255,0.82);
+        min-width: 0;
+      }
       #${CONTROL_ID} button, #${CONTROL_ID} select, #${CONTROL_ID} input {
         border: 1px solid rgba(255,255,255,0.22);
         border-radius: 4px;
         background: rgba(255,255,255,0.1);
         color: #fff;
         font: inherit;
+        min-width: 0;
       }
+      #${CONTROL_ID} select { width: 100%; }
+      #${CONTROL_ID} input[type="range"] { width: 100%; }
       #${CONTROL_ID} button {
         min-height: 26px;
         padding: 3px 8px;
         cursor: pointer;
       }
-      #${CONTROL_ID} select { height: 26px; min-width: 96px; }
-      #${CONTROL_ID} input[type="range"] { width: 145px; }
+      #${CONTROL_ID} select { height: 26px; }
       #${CONTROL_ID} .${SCRIPT_ID}-buttons {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
@@ -179,6 +188,32 @@
       .${SCRIPT_ID}-hide-native .ytp-caption-window-container,
       .${SCRIPT_ID}-hide-native .ytp-caption-segment {
         display: none !important;
+      }
+      #${TOGGLE_ID} {
+        position: absolute;
+        right: 84px;
+        bottom: 48px;
+        z-index: 2147483002;
+        width: 38px;
+        height: 38px;
+        border: 1px solid rgba(255,255,255,0.42);
+        border-radius: 50%;
+        background: rgba(0,0,0,0.58);
+        color: #fff;
+        font: 700 18px/1 "Microsoft YaHei", Arial, sans-serif;
+        cursor: pointer;
+        pointer-events: auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+      }
+      #${TOGGLE_ID}.${SCRIPT_ID}-active {
+        background: rgba(25, 118, 210, 0.86);
+        border-color: rgba(255,255,255,0.72);
+      }
+      .ytp-autohide #${TOGGLE_ID}:not(:hover) {
+        opacity: 0;
       }
     `;
     document.head.appendChild(style);
@@ -232,12 +267,33 @@
     if (status.parentElement !== player) player.appendChild(status);
 
     ensureControls(player);
+    ensureToggleButton(player);
     applyVisualSettings();
     if (state.pendingStatus && !status.classList.contains(`${SCRIPT_ID}-visible`)) {
       status.textContent = state.pendingStatus;
       status.classList.add(`${SCRIPT_ID}-visible`);
     }
     return overlay;
+  }
+
+  function ensureToggleButton(player) {
+    let button = document.getElementById(TOGGLE_ID);
+    if (!button) {
+      button = document.createElement('button');
+      button.id = TOGGLE_ID;
+      button.type = 'button';
+      button.textContent = '字';
+      button.title = '字幕脚本设置';
+      button.setAttribute('aria-label', '字幕脚本设置');
+      button.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleControlPanel();
+      });
+    }
+    if (button.parentElement !== player) player.appendChild(button);
+    syncToggleButtonState();
+    return button;
   }
 
   function makeButton(text, title, onClick) {
@@ -1127,9 +1183,17 @@
     const panel = document.getElementById(CONTROL_ID);
     if (!panel) return;
     panel.classList.toggle(`${SCRIPT_ID}-visible`);
+    syncToggleButtonState();
     if (!existingPanel && panel.classList.contains(`${SCRIPT_ID}-visible`)) {
       showStatus('字幕面板已打开');
     }
+  }
+
+  function syncToggleButtonState() {
+    const button = document.getElementById(TOGGLE_ID);
+    const panel = document.getElementById(CONTROL_ID);
+    if (!button || !panel) return;
+    button.classList.toggle(`${SCRIPT_ID}-active`, panel.classList.contains(`${SCRIPT_ID}-visible`));
   }
 
   function registerTampermonkeyMenu() {
