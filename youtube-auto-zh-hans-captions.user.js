@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.4.4
+// @version      0.4.5
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube using YouTube caption translation data.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -187,22 +187,71 @@
         margin-top: 8px;
       }
       #${CONTROL_ID} .${SCRIPT_ID}-voice-picker {
-        display: flex;
-        align-items: center;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 72px;
+        align-items: stretch;
         gap: 6px;
         min-width: 0;
+        position: relative;
       }
-      #${CONTROL_ID} .${SCRIPT_ID}-voice-picker select {
-        flex: 1 1 auto;
+      #${CONTROL_ID} .${SCRIPT_ID}-voice-button {
+        width: 100%;
+        height: 26px;
         min-width: 0;
-      }
-      #${CONTROL_ID} .${SCRIPT_ID}-voice-picker button {
-        flex: 0 0 auto;
-        width: auto;
-        min-width: 72px;
-        padding-left: 8px;
-        padding-right: 8px;
+        text-align: left;
+        overflow: hidden;
+        text-overflow: ellipsis;
         white-space: nowrap;
+        padding-right: 20px;
+        position: relative;
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-voice-button::after {
+        content: "";
+        position: absolute;
+        right: 8px;
+        top: 9px;
+        width: 7px;
+        height: 7px;
+        border-right: 2px solid rgba(255,255,255,0.86);
+        border-bottom: 2px solid rgba(255,255,255,0.86);
+        transform: rotate(45deg);
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-voice-picker [data-role="testVoiceButton"] {
+        width: auto;
+        white-space: nowrap;
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-voice-menu {
+        position: absolute;
+        left: 0;
+        right: 78px;
+        top: 30px;
+        z-index: 2147483004;
+        display: none;
+        max-height: 220px;
+        overflow: auto;
+        border: 1px solid rgba(255,255,255,0.24);
+        border-radius: 4px;
+        background: rgba(22,22,22,0.98);
+        box-shadow: 0 8px 18px rgba(0,0,0,0.42);
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-voice-menu.${SCRIPT_ID}-visible { display: block; }
+      #${CONTROL_ID} .${SCRIPT_ID}-voice-option {
+        display: block;
+        width: 100%;
+        min-height: 28px;
+        padding: 5px 8px;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        color: #fff;
+        text-align: left;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-voice-option:hover,
+      #${CONTROL_ID} .${SCRIPT_ID}-voice-option.${SCRIPT_ID}-active {
+        background: rgba(62,166,255,0.32);
       }
       .${SCRIPT_ID}-hide-native .ytp-caption-window-container,
       .${SCRIPT_ID}-hide-native .ytp-caption-segment {
@@ -360,33 +409,86 @@
     return row;
   }
 
-  function populateVoiceOptions(select) {
-    if (!select) return;
-    const previous = select.value || state.settings.voiceName || '';
+  function createVoicePicker() {
+    const picker = document.createElement('span');
+    picker.className = `${SCRIPT_ID}-voice-picker`;
+
+    const hidden = document.createElement('input');
+    hidden.type = 'hidden';
+    hidden.dataset.role = 'voiceName';
+    hidden.value = state.settings.voiceName || '';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `${SCRIPT_ID}-voice-button`;
+    button.dataset.role = 'voiceNameButton';
+    button.title = '选择语音人物';
+
+    const menu = document.createElement('div');
+    menu.className = `${SCRIPT_ID}-voice-menu`;
+    menu.dataset.role = 'voiceNameMenu';
+
+    button.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      menu.classList.toggle(`${SCRIPT_ID}-visible`);
+    });
+    picker.addEventListener('click', event => event.stopPropagation());
+    document.addEventListener('click', () => menu.classList.remove(`${SCRIPT_ID}-visible`));
+
+    picker.append(hidden, button, menu);
+    populateVoiceOptions(picker);
+    return picker;
+  }
+
+  function populateVoiceOptions(picker) {
+    if (!picker) return;
+    const hidden = picker.querySelector?.('[data-role="voiceName"]') || picker;
+    const button = picker.querySelector?.('[data-role="voiceNameButton"]');
+    const menu = picker.querySelector?.('[data-role="voiceNameMenu"]');
+    const previous = hidden.value || state.settings.voiceName || '';
     const voices = getSortedChineseVoices();
-    select.textContent = '';
-
-    const auto = document.createElement('option');
-    auto.value = '';
-    auto.textContent = '自动选择自然中文语音';
-    select.appendChild(auto);
-
-    const autoMale = document.createElement('option');
-    autoMale.value = AUTO_MALE_VOICE;
-    autoMale.textContent = '自动选择中文男声';
-    select.appendChild(autoMale);
+    const choices = [
+      { value: '', label: '自动选择自然中文语音' },
+      { value: AUTO_MALE_VOICE, label: '自动选择中文男声' }
+    ];
 
     for (const voice of voices) {
-      const option = document.createElement('option');
-      option.value = voice.name;
       const tags = [];
       if (isLikelyMaleVoice(voice)) tags.push('男声');
       else if (isLikelyFemaleVoice(voice)) tags.push('女声');
       if (voice.localService === false) tags.push('在线/自然');
-      option.textContent = `${voice.name}${tags.length ? ` · ${tags.join('/')}` : ''} (${voice.lang || 'unknown'})`;
-      select.appendChild(option);
+      choices.push({
+        value: voice.name,
+        label: `${voice.name}${tags.length ? ` · ${tags.join('/')}` : ''} (${voice.lang || 'unknown'})`
+      });
     }
-    select.value = previous === AUTO_MALE_VOICE || voices.some(voice => voice.name === previous) ? previous : '';
+
+    hidden.value = previous === AUTO_MALE_VOICE || voices.some(voice => voice.name === previous) ? previous : '';
+    if (menu) {
+      menu.textContent = '';
+      for (const choice of choices) {
+        const option = document.createElement('button');
+        option.type = 'button';
+        option.className = `${SCRIPT_ID}-voice-option`;
+        option.dataset.value = choice.value;
+        option.textContent = choice.label;
+        option.title = choice.label;
+        option.classList.toggle(`${SCRIPT_ID}-active`, choice.value === hidden.value);
+        option.addEventListener('click', event => {
+          event.preventDefault();
+          hidden.value = choice.value;
+          menu.classList.remove(`${SCRIPT_ID}-visible`);
+          updateSetting('voiceName', choice.value);
+        });
+        menu.appendChild(option);
+      }
+    }
+    if (button) {
+      const active = choices.find(choice => choice.value === hidden.value) || choices[0];
+      button.textContent = active.label;
+      button.title = active.label;
+    }
   }
 
   function getSortedChineseVoices() {
@@ -490,18 +592,13 @@
     voiceEnabled.checked = state.settings.voiceEnabled;
     voiceEnabled.addEventListener('change', () => updateSetting('voiceEnabled', voiceEnabled.checked));
 
-    const voiceName = document.createElement('select');
-    voiceName.dataset.role = 'voiceName';
-    voiceName.addEventListener('change', () => updateSetting('voiceName', voiceName.value));
-    populateVoiceOptions(voiceName);
+    const voicePicker = createVoicePicker();
     if (window.speechSynthesis) {
-      window.speechSynthesis.addEventListener?.('voiceschanged', () => populateVoiceOptions(voiceName));
+      window.speechSynthesis.addEventListener?.('voiceschanged', () => populateVoiceOptions(voicePicker));
     }
     const testVoiceButton = makeButton('测试语音', '朗读一句示例，确认当前语音人物', () => testSelectedVoice());
     testVoiceButton.dataset.role = 'testVoiceButton';
-    const voicePicker = document.createElement('span');
-    voicePicker.className = `${SCRIPT_ID}-voice-picker`;
-    voicePicker.append(voiceName, testVoiceButton);
+    voicePicker.appendChild(testVoiceButton);
 
     const voiceRate = document.createElement('select');
     voiceRate.dataset.role = 'voiceRate';
@@ -592,7 +689,11 @@
         if (rowText.includes('中文配音')) input.checked = state.settings.voiceEnabled;
         continue;
       }
-      if (input.dataset.role === 'voiceName') input.value = state.settings.voiceName || '';
+      if (input.dataset.role === 'voiceName') {
+        input.value = state.settings.voiceName || '';
+        const picker = input.closest(`.${SCRIPT_ID}-voice-picker`);
+        if (picker) populateVoiceOptions(picker);
+      }
       if (input.dataset.role === 'voiceRate') input.value = String(state.settings.voiceRate);
       if (input.dataset.role === 'originalVolume') {
         input.value = String(Math.round(Number(state.settings.originalVolume) * 100));
