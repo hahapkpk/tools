@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.4.3
+// @version      0.4.4
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube using YouTube caption translation data.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -31,6 +31,7 @@
   const TARGET_LANG = 'zh-Hans';
   const SOURCE_LANG_RE = /^en(?:-|$)/i;
   const CHINESE_LANG_RE = /^(?:zh|zh-Hans|zh-CN)(?:-|$)/i;
+  const AUTO_MALE_VOICE = '__auto_male_zh__';
 
   const defaultSettings = {
     enabled: true,
@@ -208,30 +209,29 @@
         display: none !important;
       }
       #${TOGGLE_ID} {
-        position: absolute;
-        right: 84px;
-        bottom: 48px;
-        z-index: 2147483002;
-        width: 38px;
-        height: 38px;
-        border: 1px solid rgba(255,255,255,0.42);
-        border-radius: 50%;
-        background: rgba(0,0,0,0.58);
+        width: 48px;
+        height: 100%;
+        border: 0;
+        background: transparent;
         color: #fff;
-        font: 700 18px/1 "Microsoft YaHei", Arial, sans-serif;
         cursor: pointer;
         pointer-events: auto;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+        opacity: 0.92;
       }
+      #${TOGGLE_ID}:hover,
       #${TOGGLE_ID}.${SCRIPT_ID}-active {
-        background: rgba(25, 118, 210, 0.86);
-        border-color: rgba(255,255,255,0.72);
+        opacity: 1;
       }
-      .ytp-autohide #${TOGGLE_ID}:not(:hover) {
-        opacity: 0;
+      #${TOGGLE_ID} svg {
+        width: 26px;
+        height: 26px;
+        display: block;
+        margin: 0 auto;
+        fill: currentColor;
+      }
+      #${TOGGLE_ID}.${SCRIPT_ID}-active svg {
+        filter: drop-shadow(0 0 5px rgba(62,166,255,0.85));
+        color: #3ea6ff;
       }
     `;
     document.head.appendChild(style);
@@ -300,18 +300,46 @@
       button = document.createElement('button');
       button.id = TOGGLE_ID;
       button.type = 'button';
-      button.textContent = '字';
+      button.classList.add('ytp-button');
       button.title = '字幕脚本设置';
       button.setAttribute('aria-label', '字幕脚本设置');
+      button.appendChild(createToggleIcon());
       button.addEventListener('click', event => {
         event.preventDefault();
         event.stopPropagation();
         toggleControlPanel();
       });
     }
-    if (button.parentElement !== player) player.appendChild(button);
+    button.classList.add('ytp-button');
+    if (!button.querySelector('svg')) button.replaceChildren(createToggleIcon());
+    const toolbar = player.querySelector('.ytp-right-controls');
+    if (toolbar) {
+      const settingsButton = toolbar.querySelector('.ytp-settings-button');
+      const targetGroup = settingsButton?.parentElement || toolbar.querySelector('.ytp-right-controls-right') || toolbar;
+      const insertBeforeNode = settingsButton?.parentElement === targetGroup ? settingsButton : targetGroup.firstChild;
+      if (button.parentElement !== targetGroup) {
+        targetGroup.insertBefore(button, insertBeforeNode);
+      } else if (settingsButton?.parentElement === targetGroup && button.nextElementSibling !== settingsButton) {
+        targetGroup.insertBefore(button, settingsButton);
+      }
+    } else if (button.parentElement !== player) {
+      player.appendChild(button);
+    }
     syncToggleButtonState();
     return button;
+  }
+
+  function createToggleIcon() {
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    const rect = document.createElementNS(ns, 'path');
+    rect.setAttribute('d', 'M4 5.5h16c1.1 0 2 .9 2 2v9c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2v-9c0-1.1.9-2 2-2Zm0 2v9h16v-9H4Z');
+    const lineOne = document.createElementNS(ns, 'path');
+    lineOne.setAttribute('d', 'M6.5 11h5v1.8h-5V11Zm6.5 0h4.5v1.8H13V11ZM6.5 14h7v1.8h-7V14Zm8.5 0h2.5v1.8H15V14Z');
+    svg.append(rect, lineOne);
+    return svg;
   }
 
   function makeButton(text, title, onClick) {
@@ -343,13 +371,22 @@
     auto.textContent = '自动选择自然中文语音';
     select.appendChild(auto);
 
+    const autoMale = document.createElement('option');
+    autoMale.value = AUTO_MALE_VOICE;
+    autoMale.textContent = '自动选择中文男声';
+    select.appendChild(autoMale);
+
     for (const voice of voices) {
       const option = document.createElement('option');
       option.value = voice.name;
-      option.textContent = `${voice.name}${voice.localService === false ? ' · 在线/自然' : ''} (${voice.lang || 'unknown'})`;
+      const tags = [];
+      if (isLikelyMaleVoice(voice)) tags.push('男声');
+      else if (isLikelyFemaleVoice(voice)) tags.push('女声');
+      if (voice.localService === false) tags.push('在线/自然');
+      option.textContent = `${voice.name}${tags.length ? ` · ${tags.join('/')}` : ''} (${voice.lang || 'unknown'})`;
       select.appendChild(option);
     }
-    select.value = voices.some(voice => voice.name === previous) ? previous : '';
+    select.value = previous === AUTO_MALE_VOICE || voices.some(voice => voice.name === previous) ? previous : '';
   }
 
   function getSortedChineseVoices() {
@@ -360,7 +397,17 @@
   }
 
   function isChineseVoice(voice) {
-    return /^zh/i.test(voice.lang || '') || /Chinese|中文|普通话|Mandarin|Xiaoxiao|Yunxi|Yunyang|Xiaoyi|Xiaochen|Xiaohan|Xiaomeng/i.test(voice.name || '');
+    return /^zh/i.test(voice.lang || '') || /Chinese|中文|普通话|Mandarin|Xiaoxiao|Yunxi|Yunyang|Xiaoyi|Xiaochen|Xiaohan|Xiaomeng|Yunjian|Yunfeng|Yunhao|Yunze|Kangkang|Danny|Daniel/i.test(voice.name || '');
+  }
+
+  function isLikelyMaleVoice(voice) {
+    const text = `${voice.name || ''} ${voice.lang || ''}`;
+    return /Yunyang|Yunxi|Yunjian|Yunfeng|Yunhao|Yunze|Kangkang|Danny|Daniel|Male|男/i.test(text);
+  }
+
+  function isLikelyFemaleVoice(voice) {
+    const text = `${voice.name || ''} ${voice.lang || ''}`;
+    return /Xiaoxiao|Xiaoyi|Xiaochen|Xiaohan|Xiaomeng|Huihui|Yaoyao|Kangkang|Female|女/i.test(text) && !isLikelyMaleVoice(voice);
   }
 
   function voiceScore(voice) {
@@ -369,6 +416,7 @@
     if (/zh[-_]?CN/i.test(voice.lang || '')) score += 80;
     if (/Google 普通话（中国大陆）/i.test(text)) score += 120;
     if (/Google/i.test(text) && /普通话|Mandarin|Chinese|中文/i.test(text)) score += 90;
+    if (isLikelyMaleVoice(voice)) score += 70;
     if (/Natural|Neural|Online|Xiaoxiao|Yunxi|Yunyang|Xiaoyi|Xiaochen|Xiaohan|Xiaomeng/i.test(text)) score += 60;
     if (voice.localService === false) score += 20;
     if (/Microsoft/i.test(text)) score += 10;
@@ -1084,6 +1132,10 @@
   }
 
   function testSelectedVoice() {
+    if (state.settings.voiceName === AUTO_MALE_VOICE && !findMaleChineseVoice()) {
+      showStatus('未找到中文男声，请在系统或浏览器中安装中文男声语音。');
+      return;
+    }
     speakText('这是一段中文语音测试，用来确认当前选择的配音人物。', Number(state.settings.voiceRate));
   }
 
@@ -1112,11 +1164,21 @@
 
   function selectChineseVoice() {
     const voices = window.speechSynthesis?.getVoices?.() || [];
+    if (state.settings.voiceName === AUTO_MALE_VOICE) {
+      const maleVoice = findMaleChineseVoice();
+      if (maleVoice) return maleVoice;
+      showStatus('未找到中文男声，请在系统或浏览器中安装中文男声语音。');
+      return getSortedChineseVoices()[0] || null;
+    }
     if (state.settings.voiceName) {
       const selected = voices.find(voice => voice.name === state.settings.voiceName);
       if (selected) return selected;
     }
     return getSortedChineseVoices()[0] || null;
+  }
+
+  function findMaleChineseVoice() {
+    return getSortedChineseVoices().find(voice => isLikelyMaleVoice(voice)) || null;
   }
 
   function cancelSpeech() {
