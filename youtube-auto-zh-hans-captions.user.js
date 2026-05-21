@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.4.0
+// @version      0.4.1
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube using YouTube caption translation data.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -39,6 +39,7 @@
     offsetMs: -200,
     hideNative: true,
     voiceEnabled: false,
+    voiceName: '',
     voiceRate: 1.08,
     originalVolume: 0.25
   };
@@ -257,8 +258,55 @@
     return row;
   }
 
+  function populateVoiceOptions(select) {
+    if (!select) return;
+    const previous = select.value || state.settings.voiceName || '';
+    const voices = getSortedChineseVoices();
+    select.textContent = '';
+
+    const auto = document.createElement('option');
+    auto.value = '';
+    auto.textContent = '自动选择自然中文语音';
+    select.appendChild(auto);
+
+    for (const voice of voices) {
+      const option = document.createElement('option');
+      option.value = voice.name;
+      option.textContent = `${voice.name}${voice.localService === false ? ' · 在线/自然' : ''} (${voice.lang || 'unknown'})`;
+      select.appendChild(option);
+    }
+    select.value = voices.some(voice => voice.name === previous) ? previous : '';
+  }
+
+  function getSortedChineseVoices() {
+    const voices = window.speechSynthesis?.getVoices?.() || [];
+    return voices
+      .filter(voice => isChineseVoice(voice))
+      .sort((a, b) => voiceScore(b) - voiceScore(a) || a.name.localeCompare(b.name));
+  }
+
+  function isChineseVoice(voice) {
+    return /^zh/i.test(voice.lang || '') || /Chinese|中文|普通话|Mandarin|Xiaoxiao|Yunxi|Yunyang|Xiaoyi|Xiaochen|Xiaohan|Xiaomeng/i.test(voice.name || '');
+  }
+
+  function voiceScore(voice) {
+    const text = `${voice.name || ''} ${voice.lang || ''}`;
+    let score = 0;
+    if (/zh[-_]?CN/i.test(voice.lang || '')) score += 80;
+    if (/Natural|Neural|Online|Xiaoxiao|Yunxi|Yunyang|Xiaoyi|Xiaochen|Xiaohan|Xiaomeng/i.test(text)) score += 60;
+    if (voice.localService === false) score += 20;
+    if (/Microsoft/i.test(text)) score += 10;
+    return score;
+  }
+
   function ensureControls(player) {
     let panel = document.getElementById(CONTROL_ID);
+    if (panel) {
+      if (!panel.querySelector('[data-role="voiceName"]') || !panel.querySelector('[data-role="originalVolume"]')) {
+        panel.remove();
+        panel = null;
+      }
+    }
     if (panel) {
       if (panel.parentElement !== player) player.appendChild(panel);
       return panel;
@@ -318,7 +366,16 @@
     voiceEnabled.checked = state.settings.voiceEnabled;
     voiceEnabled.addEventListener('change', () => updateSetting('voiceEnabled', voiceEnabled.checked));
 
+    const voiceName = document.createElement('select');
+    voiceName.dataset.role = 'voiceName';
+    voiceName.addEventListener('change', () => updateSetting('voiceName', voiceName.value));
+    populateVoiceOptions(voiceName);
+    if (window.speechSynthesis) {
+      window.speechSynthesis.addEventListener?.('voiceschanged', () => populateVoiceOptions(voiceName));
+    }
+
     const voiceRate = document.createElement('select');
+    voiceRate.dataset.role = 'voiceRate';
     for (const value of [0.85, 1, 1.08, 1.18, 1.3]) {
       const option = document.createElement('option');
       option.value = String(value);
@@ -328,15 +385,25 @@
     voiceRate.value = String(state.settings.voiceRate);
     voiceRate.addEventListener('change', () => updateSetting('voiceRate', Number(voiceRate.value)));
 
-    const originalVolume = document.createElement('select');
-    for (const [value, text] of [[0, '静音'], [0.25, '25%'], [0.5, '50%'], [1, '原音量']]) {
-      const option = document.createElement('option');
-      option.value = String(value);
-      option.textContent = text;
-      originalVolume.appendChild(option);
-    }
-    originalVolume.value = String(state.settings.originalVolume);
-    originalVolume.addEventListener('change', () => updateSetting('originalVolume', Number(originalVolume.value)));
+    const originalVolumeWrap = document.createElement('span');
+    originalVolumeWrap.style.display = 'flex';
+    originalVolumeWrap.style.alignItems = 'center';
+    originalVolumeWrap.style.gap = '6px';
+    const originalVolumeSlider = document.createElement('input');
+    originalVolumeSlider.dataset.role = 'originalVolume';
+    originalVolumeSlider.type = 'range';
+    originalVolumeSlider.min = '0';
+    originalVolumeSlider.max = '100';
+    originalVolumeSlider.step = '1';
+    originalVolumeSlider.value = String(Math.round(Number(state.settings.originalVolume) * 100));
+    const originalVolumeValue = document.createElement('span');
+    originalVolumeValue.dataset.role = 'originalVolumeValue';
+    originalVolumeValue.textContent = `${originalVolumeSlider.value}%`;
+    originalVolumeSlider.addEventListener('input', () => {
+      originalVolumeValue.textContent = `${originalVolumeSlider.value}%`;
+      updateSetting('originalVolume', Number(originalVolumeSlider.value) / 100);
+    });
+    originalVolumeWrap.append(originalVolumeSlider, originalVolumeValue);
 
     const buttons = document.createElement('div');
     buttons.className = `${SCRIPT_ID}-buttons`;
@@ -357,8 +424,9 @@
       makeRow('字幕延迟', offset),
       makeRow('隐藏原生字幕', hideNative),
       makeRow('中文配音', voiceEnabled),
+      makeRow('语音人物', voiceName),
       makeRow('配音语速', voiceRate),
-      makeRow('原声音量', originalVolume),
+      makeRow('原声音量', originalVolumeWrap),
       buttons
     );
     player.appendChild(panel);
@@ -395,8 +463,13 @@
         if (rowText.includes('中文配音')) input.checked = state.settings.voiceEnabled;
         continue;
       }
-      if (input.parentElement?.innerText?.includes('配音语速')) input.value = String(state.settings.voiceRate);
-      if (input.parentElement?.innerText?.includes('原声音量')) input.value = String(state.settings.originalVolume);
+      if (input.dataset.role === 'voiceName') input.value = state.settings.voiceName || '';
+      if (input.dataset.role === 'voiceRate') input.value = String(state.settings.voiceRate);
+      if (input.dataset.role === 'originalVolume') {
+        input.value = String(Math.round(Number(state.settings.originalVolume) * 100));
+        const valueLabel = panel.querySelector('[data-role="originalVolumeValue"]');
+        if (valueLabel) valueLabel.textContent = `${input.value}%`;
+      }
     }
   }
 
@@ -946,10 +1019,11 @@
 
   function selectChineseVoice() {
     const voices = window.speechSynthesis?.getVoices?.() || [];
-    return voices.find(voice => /zh[-_]?CN/i.test(voice.lang)) ||
-      voices.find(voice => /^zh/i.test(voice.lang)) ||
-      voices.find(voice => /Chinese|中文|普通话|Mandarin/i.test(voice.name)) ||
-      null;
+    if (state.settings.voiceName) {
+      const selected = voices.find(voice => voice.name === state.settings.voiceName);
+      if (selected) return selected;
+    }
+    return getSortedChineseVoices()[0] || null;
   }
 
   function cancelSpeech() {
