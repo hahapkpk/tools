@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.3.0
+// @version      0.3.1
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube using YouTube caption translation data.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -9,7 +9,7 @@
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/youtube-auto-zh-hans-captions.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/youtube-auto-zh-hans-captions.user.js
 // @run-at       document-idle
-// @grant        none
+// @grant        GM_registerMenuCommand
 // ==/UserScript==
 
 (function () {
@@ -887,12 +887,27 @@
   function hookKeyboard() {
     document.addEventListener('keydown', event => {
       if (event.altKey && event.shiftKey && event.code === 'KeyZ') {
-        const panel = document.getElementById(CONTROL_ID);
-        ensureOverlay();
-        document.getElementById(CONTROL_ID)?.classList.toggle(`${SCRIPT_ID}-visible`);
-        if (!panel) showStatus('字幕面板已打开');
+        toggleControlPanel();
       }
     }, true);
+  }
+
+  function toggleControlPanel() {
+    const existingPanel = document.getElementById(CONTROL_ID);
+    ensureOverlay();
+    const panel = document.getElementById(CONTROL_ID);
+    if (!panel) return;
+    panel.classList.toggle(`${SCRIPT_ID}-visible`);
+    if (!existingPanel && panel.classList.contains(`${SCRIPT_ID}-visible`)) {
+      showStatus('字幕面板已打开');
+    }
+  }
+
+  function registerTampermonkeyMenu() {
+    if (typeof GM_registerMenuCommand !== 'function') return;
+    GM_registerMenuCommand('打开/关闭字幕控制面板', () => toggleControlPanel());
+    GM_registerMenuCommand('重新加载中文字幕', () => reloadCurrentVideo(true));
+    GM_registerMenuCommand('启用/停用自定义字幕', () => updateSetting('enabled', !state.settings.enabled));
   }
 
   function checkRoute() {
@@ -917,6 +932,7 @@
     document.documentElement.dataset[SCRIPT_DATA_KEY] = '1';
     injectStyle();
     hookKeyboard();
+    registerTampermonkeyMenu();
     hookYouTubeNavigation();
     checkRoute();
   }
