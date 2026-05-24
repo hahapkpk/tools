@@ -56,6 +56,8 @@ class StubElement {
     this.listeners[name] = handler;
   }
 
+  click() {}
+
   remove() {}
 
   set innerHTML(value) {
@@ -73,9 +75,10 @@ function loadPage(overrides = {}) {
   const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
   const source = scripts.at(-1)[1];
   const elements = Object.fromEntries(
-    ['urlInput', 'results', 'ddgLink', 'namePanel', 'siteNameInput', 'copyNameBtn', 'titleStatus']
+    ['urlInput', 'results', 'ddgLink', 'namePanel', 'siteNameInput', 'copyNameBtn', 'titleStatus', 'nameCandidates', 'exportMode']
       .map(id => [id, new StubElement()])
   );
+  elements.exportMode.value = 'original';
   const document = {
     activeElement: null,
     body: new StubElement('body'),
@@ -159,4 +162,60 @@ test('复制名称按钮复制当前网站名称而非下载文件名', async ()
   elements.siteNameInput.value = '小红书';
   await context.copySiteName();
   assert.deepEqual(clipboardWrites, ['小红书']);
+});
+
+test('图标推荐排序遵循格式、真实尺寸与直链优先级', () => {
+  const { context } = loadPage();
+  const metas = [
+    { format: 'svg', area: Infinity, isDirect: true },
+    { format: 'ico', area: 64 * 64, isDirect: false },
+    { format: 'png', area: 64 * 64, isDirect: false },
+    { format: 'png', area: 256 * 256, isDirect: true },
+    { format: 'jpg', area: 512 * 512, isDirect: true }
+  ].sort(context.compareIconMeta);
+  assert.deepEqual(metas.map(meta => meta.format), ['png', 'png', 'ico', 'svg', 'jpg']);
+  assert.equal(metas[0].area, 256 * 256);
+  assert.equal(metas[0].isDirect, true);
+});
+
+test('名称候选最多三个且点击候选会更新当前名称', () => {
+  const { context, elements } = loadPage();
+  assert.deepEqual(
+    Array.from(context.buildNameCandidates('RED | 小红书 - 你的生活指南', 'xiaohongshu.com')),
+    ['小红书', 'RED', 'Xiaohongshu']
+  );
+  context.selectSiteName('RED');
+  assert.equal(elements.siteNameInput.value, 'RED');
+});
+
+test('重复图标只标记不移除且卡片可复制当前导出文件名', async () => {
+  const { context, elements, clipboardWrites } = loadPage();
+  const metas = [
+    { fingerprint: 'same-image', duplicate: false },
+    { fingerprint: 'same-image', duplicate: false }
+  ];
+  const marked = context.markDuplicateMetas(metas);
+  assert.equal(marked.length, 2);
+  assert.equal(marked[0].duplicate, false);
+  assert.equal(marked[1].duplicate, true);
+  elements.urlInput.value = 'https://xiaohongshu.com';
+  elements.siteNameInput.value = '小红书';
+  elements.exportMode.value = 'png';
+  await context.copyCardFilename({ label: 'Favicon.ico', url: 'https://x/favicon.ico' });
+  assert.deepEqual(clipboardWrites, ['小红书-Favicon.png']);
+});
+
+test('卡片尺寸显示实际信息且 PNG 转换失败时回退原格式', async () => {
+  const { context, elements } = loadPage({
+    fetch: async () => ({ ok: true, blob: async () => ({ type: 'image/x-icon' }) })
+  });
+  assert.equal(context.describeActualSize('svg', 0, 0), '矢量 SVG');
+  assert.equal(context.describeActualSize('png', 256, 128), '实际 256×128');
+  elements.urlInput.value = 'https://github.com';
+  elements.siteNameInput.value = 'GitHub';
+  elements.exportMode.value = 'png';
+  context.convertImageToPng = async () => { throw new Error('blocked'); };
+  URL.createObjectURL = () => 'blob:download';
+  await context.downloadIcon({ label: 'Favicon.ico', url: 'https://github.com/favicon.ico' });
+  assert.match(elements.titleStatus.textContent, /按原格式保存/);
 });

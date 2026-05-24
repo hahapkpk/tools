@@ -124,6 +124,43 @@
       color: #777;
       font-size: 12px;
     }
+    .name-candidates {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .candidate-btn {
+      padding: 5px 12px;
+      border: 1px solid #334155;
+      border-radius: 999px;
+      background: #111827;
+      color: #93c5fd;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .candidate-btn.active {
+      border-color: #3b82f6;
+      background: #1e3a8a;
+      color: #fff;
+    }
+    .export-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 12px;
+      color: #bbb;
+      font-size: 13px;
+    }
+    .export-row select {
+      padding: 7px 10px;
+      border-radius: 8px;
+      border: 1px solid #333;
+      background: #222;
+      color: #ddd;
+      outline: none;
+    }
     #results {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -142,6 +179,24 @@
       gap: 12px;
       position: relative;
     }
+    .card.recommended {
+      border-color: #2563eb;
+      box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.2);
+    }
+    .card-flags {
+      min-height: 20px;
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .flag {
+      font-size: 10px;
+      border-radius: 999px;
+      padding: 2px 7px;
+    }
+    .flag.recommend { background: #1d4ed8; color: #fff; }
+    .flag.duplicate { background: #422006; color: #fdba74; }
     .card .label {
       font-size: 12px;
       color: #ccc;
@@ -179,9 +234,9 @@
       object-fit: contain;
     }
     .icon-wrap .broken { font-size: 28px; opacity: 0.3; }
-    .card .actions { display: flex; gap: 8px; }
+    .card .actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
     .card button {
-      padding: 6px 14px;
+      padding: 6px 10px;
       border-radius: 8px;
       border: 1px solid #333;
       background: #222;
@@ -240,6 +295,14 @@
       <input type="text" id="siteNameInput" maxlength="40" placeholder="网站名称" />
       <button id="copyNameBtn" class="copy-name-btn" onclick="copySiteName()">复制名称</button>
     </div>
+    <div id="nameCandidates" class="name-candidates"></div>
+    <div class="export-row">
+      <span>下载格式</span>
+      <select id="exportMode">
+        <option value="original">保留原格式</option>
+        <option value="png">自动转 PNG</option>
+      </select>
+    </div>
     <p id="titleStatus" class="name-status"></p>
   </section>
   <div id="ddgLink"></div>
@@ -256,7 +319,11 @@
     const namePanel = document.getElementById('namePanel');
     const siteNameInput = document.getElementById('siteNameInput');
     const copyNameBtn = document.getElementById('copyNameBtn');
+    const nameCandidates = document.getElementById('nameCandidates');
+    const exportMode = document.getElementById('exportMode');
     const titleStatus = document.getElementById('titleStatus');
+    let iconMetas = [];
+    let grabToken = 0;
     const brandNames = {
       github: 'GitHub',
       openai: 'OpenAI',
@@ -369,6 +436,42 @@
       return cleanFilenameText(name) || fallback;
     }
 
+    function buildNameCandidates(title, domain) {
+      const raw = String(title || '').trim();
+      const fallback = deriveDomainName(domain);
+      const pieces = raw
+        .split(/\s*(?:\||｜|·|—|–|\s-\s|\/|:|：)\s*/)
+        .map(cleanFilenameText)
+        .filter(Boolean);
+      const descriptiveChinese = /(官网|首页|指南|排行|下载|平台|发现|精选|内容|数据|服务)/;
+      const chinese = pieces.find(piece =>
+        /[\u3400-\u9fff]/.test(piece) &&
+        piece.length <= 5 &&
+        !descriptiveChinese.test(piece)
+      );
+      const english = pieces.find(piece => /^[a-z][a-z0-9 .&+-]{1,30}$/i.test(piece));
+      return [...new Set([chinese, english, fallback].filter(Boolean))].slice(0, 3);
+    }
+
+    function selectSiteName(name) {
+      siteNameInput.value = cleanFilenameText(name);
+      renderNameCandidates(Array.from(nameCandidates.querySelectorAll?.('button') || []).map(button => button.textContent), siteNameInput.value);
+    }
+
+    function renderNameCandidates(candidates, selected) {
+      nameCandidates.innerHTML = '';
+      candidates.slice(0, 3).forEach(name => {
+        const button = document.createElement('button');
+        button.className = `candidate-btn${name === selected ? ' active' : ''}`;
+        button.textContent = name;
+        button.onclick = () => {
+          siteNameInput.value = name;
+          renderNameCandidates(candidates, name);
+        };
+        nameCandidates.appendChild(button);
+      });
+    }
+
     function getActiveSiteName() {
       const domain = getDomain(urlInput.value.trim());
       const name = normalizeSiteName(siteNameInput.value, domain);
@@ -380,9 +483,14 @@
       const safeSiteName = cleanFilenameText(siteName) || 'Website';
       const safeExt = String(ext || 'png').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'png';
       const safeLabel = cleanFilenameText(label)
-        .replace(new RegExp(`\\.${safeExt}$`, 'i'), '')
+        .replace(/\.(svg|png|ico|jpe?g|webp)$/i, '')
         .replace(/\s+/g, '-') || 'Icon';
       return `${safeSiteName}-${safeLabel}.${safeExt}`;
+    }
+
+    function getCardFilename(src, mode = exportMode.value) {
+      const ext = mode === 'png' ? 'png' : inferExtension(src.url, src.label);
+      return buildDownloadFilename(getActiveSiteName(), src.label, ext);
     }
 
     async function copySiteName() {
@@ -396,6 +504,16 @@
       }
     }
 
+    async function copyCardFilename(src) {
+      const filename = getCardFilename(src);
+      try {
+        await navigator.clipboard.writeText(filename);
+        titleStatus.textContent = `已复制文件名：${filename}`;
+      } catch {
+        titleStatus.textContent = '无法复制文件名，请手动复制。';
+      }
+    }
+
     function inferExtension(url, label) {
       const path = String(url).split('?')[0];
       const matched = path.match(/\.(svg|png|ico|jpe?g|webp)$/i);
@@ -403,6 +521,66 @@
       if (/svg/i.test(label)) return 'svg';
       if (/ico|duckduckgo/i.test(label)) return 'ico';
       return 'png';
+    }
+
+    function compareIconMeta(a, b) {
+      const priority = { png: 0, ico: 1, svg: 2, jpg: 3, jpeg: 3, webp: 3 };
+      const formatDiff = (priority[a.format] ?? 4) - (priority[b.format] ?? 4);
+      if (formatDiff) return formatDiff;
+      const areaDiff = (b.area || 0) - (a.area || 0);
+      if (areaDiff) return areaDiff;
+      return Number(Boolean(b.isDirect)) - Number(Boolean(a.isDirect));
+    }
+
+    function markDuplicateMetas(metas) {
+      const seen = new Map();
+      return metas.map(meta => {
+        meta.duplicate = false;
+        if (meta.fingerprint) {
+          if (seen.has(meta.fingerprint)) meta.duplicate = true;
+          else seen.set(meta.fingerprint, meta);
+        }
+        return meta;
+      });
+    }
+
+    function describeActualSize(format, width, height) {
+      return format === 'svg' ? '矢量 SVG' : `实际 ${width}×${height}`;
+    }
+
+    function getImageFingerprint(img) {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 16;
+        canvas.height = 16;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, 16, 16);
+        return canvas.toDataURL('image/png');
+      } catch {
+        return '';
+      }
+    }
+
+    function rerenderIconOrder() {
+      const container = document.getElementById('results');
+      const ordered = markDuplicateMetas(iconMetas.slice().sort(compareIconMeta));
+      ordered.forEach((meta, index) => {
+        meta.card.classList.toggle('recommended', index === 0);
+        meta.flags.innerHTML = '';
+        if (index === 0) {
+          const recommended = document.createElement('span');
+          recommended.className = 'flag recommend';
+          recommended.textContent = '推荐';
+          meta.flags.appendChild(recommended);
+        }
+        if (meta.duplicate) {
+          const duplicate = document.createElement('span');
+          duplicate.className = 'flag duplicate';
+          duplicate.textContent = '重复';
+          meta.flags.appendChild(duplicate);
+        }
+        container.appendChild(meta.card);
+      });
     }
 
     async function fetchPageTitle(origin) {
@@ -416,9 +594,12 @@
       try {
         const title = await fetchPageTitle(origin);
         if (!title) throw new Error('empty title');
-        siteNameInput.value = normalizeSiteName(title, domain);
+        const candidates = buildNameCandidates(title, domain);
+        siteNameInput.value = candidates[0] || normalizeSiteName(title, domain);
+        renderNameCandidates(candidates, siteNameInput.value);
         titleStatus.textContent = `已匹配网页标题：${siteNameInput.value}`;
       } catch {
+        renderNameCandidates([deriveDomainName(domain)], siteNameInput.value);
         titleStatus.textContent = '未读取到网页标题，当前使用域名名称，可手动修改。';
       }
     }
@@ -436,7 +617,11 @@
 
       namePanel.classList.remove('hidden');
       siteNameInput.value = deriveDomainName(domain);
+      renderNameCandidates([siteNameInput.value], siteNameInput.value);
       titleStatus.textContent = '正在匹配网页标题...';
+      iconMetas = [];
+      grabToken += 1;
+      const currentToken = grabToken;
 
       const container = document.getElementById('results');
       container.innerHTML = '<p class="status">正在获取...</p>';
@@ -456,10 +641,12 @@
       ];
 
       container.innerHTML = '';
-      staticSources.forEach(src => container.appendChild(createCard(src)));
+      staticSources.forEach(src => container.appendChild(createCard(src, currentToken)));
 
       fetchManifestIcons(origin).then(icons => {
-        icons.forEach(src => container.appendChild(createCard(src)));
+        if (currentToken === grabToken) {
+          icons.forEach(src => container.appendChild(createCard(src, currentToken)));
+        }
       });
 
       const ddgDiv = document.getElementById('ddgLink');
@@ -494,7 +681,7 @@
       return [];
     }
 
-    function createCard(src) {
+    function createCard(src, token = grabToken) {
       const card = document.createElement('div');
       card.className = 'card';
       const label = document.createElement('div');
@@ -506,6 +693,8 @@
       const badge = document.createElement('span');
       badge.className = 'size-badge';
       badge.textContent = src.size;
+      const flags = document.createElement('div');
+      flags.className = 'card-flags';
       const wrap = document.createElement('div');
       wrap.className = 'icon-wrap';
       const img = document.createElement('img');
@@ -519,24 +708,47 @@
         copyBtn.textContent = '✓ 已复制';
         setTimeout(() => copyBtn.textContent = '复制链接', 1500);
       };
+      const copyFilenameBtn = document.createElement('button');
+      copyFilenameBtn.textContent = '复制文件名';
+      copyFilenameBtn.onclick = () => copyCardFilename(src);
       const dlBtn = document.createElement('button');
       dlBtn.className = 'primary';
       dlBtn.textContent = '下载';
-      dlBtn.onclick = () => downloadIcon(src.url, src.label);
+      dlBtn.onclick = () => downloadIcon(src);
       actions.appendChild(copyBtn);
+      actions.appendChild(copyFilenameBtn);
       actions.appendChild(dlBtn);
 
       const appendCard = () => {
         card.appendChild(label);
+        card.appendChild(flags);
         if (src.group) card.appendChild(groupBadge);
         card.appendChild(badge);
         card.appendChild(wrap);
         card.appendChild(actions);
       };
 
-      img.onload = () => {
+      img.onload = async () => {
         wrap.appendChild(img);
+        const format = inferExtension(src.url, src.label);
+        const width = img.naturalWidth || 0;
+        const height = img.naturalHeight || 0;
+        badge.textContent = describeActualSize(format, width, height);
         appendCard();
+        if (token === grabToken) {
+          iconMetas.push({
+            src,
+            card,
+            flags,
+            format,
+            width,
+            height,
+            area: width * height,
+            isDirect: src.group === '网站直链',
+            fingerprint: getImageFingerprint(img)
+          });
+          rerenderIconOrder();
+        }
       };
       img.onerror = () => {
         if (src.alwaysShow) {
@@ -549,15 +761,40 @@
       return card;
     }
 
-    async function downloadIcon(url, label) {
-      const ext = inferExtension(url, label);
-      const filename = buildDownloadFilename(getActiveSiteName(), label, ext);
+    async function convertImageToPng(url) {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+        img.src = url;
+      });
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext('2d').drawImage(img, 0, 0);
+      return new Promise((resolve, reject) => {
+        canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('png conversion failed')), 'image/png');
+      });
+    }
+
+    async function downloadIcon(src) {
+      if (exportMode.value === 'png') {
+        try {
+          const pngBlob = await convertImageToPng(src.url);
+          triggerDownload(URL.createObjectURL(pngBlob), getCardFilename(src, 'png'));
+          return;
+        } catch {
+          titleStatus.textContent = '无法转换，已按原格式保存。';
+        }
+      }
+      const filename = getCardFilename(src, 'original');
       try {
-        const res = await fetch(url);
+        const res = await fetch(src.url);
         const blob = await res.blob();
         triggerDownload(URL.createObjectURL(blob), filename);
       } catch {
-        showSaveModal(url, filename);
+        showSaveModal(src.url, filename);
       }
     }
 

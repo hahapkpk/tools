@@ -2,9 +2,9 @@
 
 > **供执行代理使用：** 必须使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans` 按任务执行本计划，并使用复选框跟踪进度。
 
-**目标：** 维护 V2 单页工具，在保持原页面和图标读取流程不变的前提下，增加复制网站名称能力，并优先使用网页标题中的简短中文名称。
+**目标：** 维护 V2 单页工具，在保持原页面和抓取来源不变的前提下，加入图标推荐排序、真实尺寸与重复标记、完整文件名复制、名称候选切换以及原格式/PNG 导出选择。
 
-**架构：** 继续只修改 `favicon-grabber-v2.html`：复用已有保存名称字段和 `getActiveSiteName()`，增加旁侧复制按钮及 `copySiteName()`；扩展 `normalizeSiteName()` 的候选选择以优先短中文名称。测试脚本从 V2 HTML 装载页面脚本验证新增逻辑；原页面通过版本差异检查确保未被改动。
+**架构：** 继续只修改 `favicon-grabber-v2.html`：名称区域新增候选列表和导出模式；卡片加载后生成可排序的元数据，并用浏览器可读取内容时的指纹标记重复；下载入口按导出模式选择原文件或画布 PNG。测试脚本从 V2 HTML 装载页面脚本验证纯逻辑与剪贴板动作；原页面通过版本差异检查确保未被改动。
 
 **技术栈：** HTML、CSS、原生浏览器 JavaScript、Node.js 内置 `node:test` 与 `vm`。
 
@@ -187,3 +187,78 @@ git push origin main
 ```
 
 发布后验证 GitHub Pages 中 V2 页面存在 `复制名称` 按钮。
+
+### 任务 5：图标排序、候选切换与导出格式增强
+
+**文件：**
+- 修改：`favicon-grabber-v2.html`
+- 修改：`tests/favicon-grabber-v2.test.js`
+- 修改：`docs/superpowers/specs/2026-05-24-favicon-grabber-clipboard-title-naming-design.md`
+
+- [ ] **步骤 1：写入失败测试**
+
+测试新增以下行为：
+
+```js
+assert.deepEqual(
+  ['svg', 'ico', 'png', 'jpg'].sort((a, b) => context.compareIconMeta({ format: a }, { format: b })),
+  ['png', 'ico', 'svg', 'jpg']
+);
+assert.deepEqual(context.buildNameCandidates('RED | 小红书 - 你的生活指南', 'xiaohongshu.com'), ['小红书', 'RED', 'Xiaohongshu']);
+assert.equal(context.getCardFilename({ label: 'Favicon.ico', url: 'https://x/favicon.ico' }, 'png'), '小红书-Favicon.png');
+```
+
+并验证 `markDuplicateMetas()` 保留两项且给后者标记重复，以及选择候选会更新保存名称。
+
+- [ ] **步骤 2：运行测试观察功能缺失失败**
+
+执行：
+
+```powershell
+node --test tests/favicon-grabber-v2.test.js
+```
+
+预期：失败原因为 `compareIconMeta`、`buildNameCandidates`、`getCardFilename` 或候选/重复处理函数尚不存在。
+
+- [ ] **步骤 3：实现名称候选和导出模式界面**
+
+在保存名称区加入始终存在的候选容器和格式选择：
+
+```html
+<div id="nameCandidates" class="name-candidates"></div>
+<select id="exportMode">
+  <option value="original">保留原格式</option>
+  <option value="png">自动转 PNG</option>
+</select>
+```
+
+实现 `buildNameCandidates(title, domain)`、`renderNameCandidates()`、`selectSiteName(name)`，自动选择首项并使点击标签覆盖输入框。
+
+- [ ] **步骤 4：实现元数据排序、尺寸与重复标记**
+
+为每个成功加载的卡片保存：
+
+```js
+{ src, card, format, width, height, area, isDirect, fingerprint, duplicateOf }
+```
+
+实现 `compareIconMeta(a, b)`，格式优先级固定为 `png:0, ico:1, svg:2, jpg/webp/other:3`；同格式按面积降序、网站直链优先。卡片显示实际尺寸与推荐/重复标签，并通过重新追加 DOM 卡片按排序展示。
+
+- [ ] **步骤 5：实现复制完整文件名与 PNG 导出**
+
+卡片按钮加入 `复制文件名`，使用 `getCardFilename(src, exportMode.value)` 复制名称。`downloadIcon(src)` 在原格式模式沿用当前下载；PNG 模式尝试将已加载图像绘制到画布并导出 PNG，转换异常时显示回退状态并下载原格式。
+
+- [ ] **步骤 6：最终验证并发布**
+
+执行：
+
+```powershell
+node --test tests/favicon-grabber-v2.test.js
+git diff --check
+git diff --exit-code -- favicon-grabber.html
+git add -- favicon-grabber-v2.html tests/favicon-grabber-v2.test.js docs/superpowers/specs/2026-05-24-favicon-grabber-clipboard-title-naming-design.md docs/superpowers/plans/2026-05-24-favicon-grabber-v2-clipboard-title-naming.md
+git commit -m "feat: enhance favicon grabber v2 icon workflow"
+git push origin main
+```
+
+等待 GitHub Pages 构建完成，并验证线上 V2 出现名称候选、格式切换与卡片复制文件名入口。
