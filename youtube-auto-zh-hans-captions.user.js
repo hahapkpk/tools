@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.0
+// @version      0.5.1
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube using YouTube caption translation data.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -247,10 +247,6 @@
         border-right: 2px solid rgba(255,255,255,0.86);
         border-bottom: 2px solid rgba(255,255,255,0.86);
         transform: rotate(45deg);
-      }
-      #${CONTROL_ID} .${SCRIPT_ID}-voice-picker [data-role="testVoiceButton"] {
-        width: auto;
-        white-space: nowrap;
       }
       #${CONTROL_ID} .${SCRIPT_ID}-voice-menu {
         position: absolute;
@@ -670,7 +666,6 @@
     }
     const testVoiceButton = makeButton('测试语音', '朗读一句示例，确认当前语音人物', () => testSelectedVoice());
     testVoiceButton.dataset.role = 'testVoiceButton';
-    voicePicker.appendChild(testVoiceButton);
 
     const apiKeyWrap = document.createElement('span');
     apiKeyWrap.className = `${SCRIPT_ID}-api-key`;
@@ -753,6 +748,7 @@
       browserVoiceRow,
       makeVolcRow('火山 Key', apiKeyWrap),
       makeVolcRow('火山音色', volcVoice),
+      makeRow('测试语音', testVoiceButton),
       makeRow('配音语速', voiceRate),
       makeRow('原声音量', originalVolumeWrap),
       buttons
