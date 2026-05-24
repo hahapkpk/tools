@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.1
+// @version      0.5.2
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube using YouTube caption translation data.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -29,6 +29,8 @@
   const CACHE_PREFIX = `${SCRIPT_ID}:cache:`;
   const SETTINGS_KEY = `${SCRIPT_ID}:settings`;
   const VOLC_API_KEY_STORAGE_KEY = `${SCRIPT_ID}:volc-api-key`;
+  const VOLC_APP_ID_STORAGE_KEY = `${SCRIPT_ID}:volc-app-id`;
+  const VOLC_ACCESS_TOKEN_STORAGE_KEY = `${SCRIPT_ID}:volc-access-token`;
   const VOLC_TTS_URL = 'https://openspeech.bytedance.com/api/v3/tts/unidirectional';
   const VOLC_RESOURCE_ID = 'seed-tts-2.0';
   const DEBUG = false;
@@ -55,6 +57,7 @@
     hideNative: true,
     voiceEnabled: false,
     voiceEngine: 'browser',
+    volcAuthMode: 'apiKey',
     voiceName: 'Google 普通话（中国大陆）',
     volcVoice: 'zh_male_m191_uranus_bigtts',
     voiceRate: 1.08,
@@ -108,6 +111,23 @@
   function saveVolcApiKey(value) {
     if (typeof GM_setValue !== 'function') return;
     GM_setValue(VOLC_API_KEY_STORAGE_KEY, String(value || '').trim());
+  }
+
+  function getVolcLegacyCredentials() {
+    try {
+      return {
+        appId: typeof GM_getValue === 'function' ? String(GM_getValue(VOLC_APP_ID_STORAGE_KEY, '') || '') : '',
+        accessToken: typeof GM_getValue === 'function' ? String(GM_getValue(VOLC_ACCESS_TOKEN_STORAGE_KEY, '') || '') : ''
+      };
+    } catch {
+      return { appId: '', accessToken: '' };
+    }
+  }
+
+  function saveVolcLegacyCredentials(appId, accessToken) {
+    if (typeof GM_setValue !== 'function') return;
+    GM_setValue(VOLC_APP_ID_STORAGE_KEY, String(appId || '').trim());
+    GM_setValue(VOLC_ACCESS_TOKEN_STORAGE_KEY, String(accessToken || '').trim());
   }
 
   function injectStyle() {
@@ -293,6 +313,11 @@
       }
       #${CONTROL_ID} .${SCRIPT_ID}-api-key button { padding: 3px 4px; }
       #${CONTROL_ID} .${SCRIPT_ID}-volc-hidden { display: none; }
+      #${CONTROL_ID} .${SCRIPT_ID}-credential-note {
+        color: rgba(255,255,255,0.62);
+        font-size: 11px;
+        line-height: 1.35;
+      }
       .${SCRIPT_ID}-hide-native .ytp-caption-window-container,
       .${SCRIPT_ID}-hide-native .ytp-caption-segment {
         display: none !important;
@@ -455,12 +480,19 @@
     return row;
   }
 
+  function makeAuthRow(labelText, control, mode) {
+    const row = makeVolcRow(labelText, control);
+    row.dataset.authMode = mode;
+    return row;
+  }
+
   function syncVoiceEngineRows() {
     const panel = document.getElementById(CONTROL_ID);
     if (!panel) return;
     const isVolc = state.settings.voiceEngine === 'volc';
     for (const row of panel.querySelectorAll('[data-role="volcRow"]')) {
-      row.classList.toggle(`${SCRIPT_ID}-volc-hidden`, !isVolc);
+      const authVisible = !row.dataset.authMode || row.dataset.authMode === state.settings.volcAuthMode;
+      row.classList.toggle(`${SCRIPT_ID}-volc-hidden`, !isVolc || !authVisible);
     }
     const browserRow = panel.querySelector('[data-role="browserVoiceRow"]');
     if (browserRow) browserRow.classList.toggle(`${SCRIPT_ID}-volc-hidden`, isVolc);
@@ -585,7 +617,7 @@
   function ensureControls(player) {
     let panel = document.getElementById(CONTROL_ID);
     if (panel) {
-      if (!panel.querySelector('[data-role="voiceEngine"]') || !panel.querySelector('[data-role="volcVoice"]') || !panel.querySelector('[data-role="originalVolume"]')) {
+      if (!panel.querySelector('[data-role="voiceEngine"]') || !panel.querySelector('[data-role="volcAuthMode"]') || !panel.querySelector('[data-role="volcVoice"]') || !panel.querySelector('[data-role="originalVolume"]')) {
         panel.remove();
         panel = null;
       }
@@ -660,6 +692,17 @@
     voiceEngine.value = state.settings.voiceEngine;
     voiceEngine.addEventListener('change', () => updateSetting('voiceEngine', voiceEngine.value));
 
+    const volcAuthMode = document.createElement('select');
+    volcAuthMode.dataset.role = 'volcAuthMode';
+    for (const [value, text] of [['apiKey', '新版 API Key'], ['legacy', '旧版 APP ID + Access Token']]) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = text;
+      volcAuthMode.appendChild(option);
+    }
+    volcAuthMode.value = state.settings.volcAuthMode;
+    volcAuthMode.addEventListener('change', () => updateSetting('volcAuthMode', volcAuthMode.value));
+
     const voicePicker = createVoicePicker();
     if (window.speechSynthesis) {
       window.speechSynthesis.addEventListener?.('voiceschanged', () => populateVoiceOptions(voicePicker));
@@ -680,6 +723,32 @@
       showStatus(apiKey.value.trim() ? '火山 API Key 已保存到本机' : '火山 API Key 已清除');
     });
     apiKeyWrap.append(apiKey, saveApiKey);
+
+    const legacy = getVolcLegacyCredentials();
+    const appId = document.createElement('input');
+    appId.type = 'text';
+    appId.dataset.role = 'volcAppId';
+    appId.placeholder = 'APP ID';
+    appId.autocomplete = 'off';
+    appId.value = legacy.appId;
+
+    const accessTokenWrap = document.createElement('span');
+    accessTokenWrap.className = `${SCRIPT_ID}-api-key`;
+    const accessToken = document.createElement('input');
+    accessToken.type = 'password';
+    accessToken.dataset.role = 'volcAccessToken';
+    accessToken.placeholder = 'Access Token';
+    accessToken.autocomplete = 'off';
+    accessToken.value = legacy.accessToken;
+    const saveLegacy = makeButton('保存', '仅保存到本机 Tampermonkey 存储', () => {
+      saveVolcLegacyCredentials(appId.value, accessToken.value);
+      showStatus(appId.value.trim() && accessToken.value.trim() ? 'APP ID 与 Access Token 已保存到本机' : '旧版凭证已清除');
+    });
+    accessTokenWrap.append(accessToken, saveLegacy);
+
+    const legacyNote = document.createElement('span');
+    legacyNote.className = `${SCRIPT_ID}-credential-note`;
+    legacyNote.textContent = 'Secret Key 不用于此接口';
 
     const volcVoice = document.createElement('select');
     volcVoice.dataset.role = 'volcVoice';
@@ -746,7 +815,11 @@
       makeRow('中文配音', voiceEnabled),
       makeRow('配音引擎', voiceEngine),
       browserVoiceRow,
-      makeVolcRow('火山 Key', apiKeyWrap),
+      makeVolcRow('鉴权方式', volcAuthMode),
+      makeAuthRow('新版 Key', apiKeyWrap, 'apiKey'),
+      makeAuthRow('APP ID', appId, 'legacy'),
+      makeAuthRow('Access Token', accessTokenWrap, 'legacy'),
+      makeAuthRow('说明', legacyNote, 'legacy'),
       makeVolcRow('火山音色', volcVoice),
       makeRow('测试语音', testVoiceButton),
       makeRow('配音语速', voiceRate),
@@ -759,7 +832,7 @@
   }
 
   function updateSetting(key, value) {
-    if (key === 'voiceEngine' || key === 'voiceName' || key === 'volcVoice' || key === 'voiceRate') {
+    if (key === 'voiceEngine' || key === 'volcAuthMode' || key === 'voiceName' || key === 'volcVoice' || key === 'voiceRate') {
       cancelSpeech();
       state.spokenCueIndex = -1;
     }
@@ -800,6 +873,7 @@
       }
       if (input.dataset.role === 'voiceRate') input.value = String(state.settings.voiceRate);
       if (input.dataset.role === 'voiceEngine') input.value = state.settings.voiceEngine;
+      if (input.dataset.role === 'volcAuthMode') input.value = state.settings.volcAuthMode;
       if (input.dataset.role === 'volcVoice') input.value = state.settings.volcVoice;
       if (input.dataset.role === 'originalVolume') {
         input.value = String(Math.round(Number(state.settings.originalVolume) * 100));
@@ -1410,8 +1484,21 @@
   }
 
   function requestVolcAudio(text) {
-    const apiKey = getVolcApiKey();
-    if (!apiKey) return Promise.reject(new Error('请先填写并保存火山 API Key'));
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Api-Resource-Id': VOLC_RESOURCE_ID,
+      'X-Api-Request-Id': makeRequestId()
+    };
+    if (state.settings.volcAuthMode === 'legacy') {
+      const legacy = getVolcLegacyCredentials();
+      if (!legacy.appId || !legacy.accessToken) return Promise.reject(new Error('请填写并保存 APP ID 与 Access Token'));
+      headers['X-Api-App-Id'] = legacy.appId;
+      headers['X-Api-Access-Key'] = legacy.accessToken;
+    } else {
+      const apiKey = getVolcApiKey();
+      if (!apiKey) return Promise.reject(new Error('请先填写并保存新版 API Key'));
+      headers['X-Api-Key'] = apiKey;
+    }
     if (typeof GM_xmlhttpRequest !== 'function') return Promise.reject(new Error('当前脚本未获得跨域请求权限'));
     const speechRate = Math.round((clamp(Number(state.settings.voiceRate), 0.7, 1.6) - 1) * 100);
     const payload = {
@@ -1426,12 +1513,7 @@
       GM_xmlhttpRequest({
         method: 'POST',
         url: VOLC_TTS_URL,
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Api-Key': apiKey,
-          'X-Api-Resource-Id': VOLC_RESOURCE_ID,
-          'X-Api-Request-Id': makeRequestId()
-        },
+        headers,
         data: JSON.stringify(payload),
         responseType: 'text',
         timeout: 30000,
@@ -1519,7 +1601,10 @@
   }
 
   function prefetchVolcCues(startIndex, count) {
-    if (state.settings.voiceEngine !== 'volc' || !getVolcApiKey()) return;
+    const hasCredentials = state.settings.volcAuthMode === 'legacy'
+      ? Object.values(getVolcLegacyCredentials()).every(Boolean)
+      : Boolean(getVolcApiKey());
+    if (state.settings.voiceEngine !== 'volc' || !hasCredentials) return;
     for (const cue of state.cues.slice(startIndex, startIndex + count)) {
       const text = cue.text.replace(/\[[^\]]+\]/g, '').replace(/\s+/g, ' ').trim();
       if (text.length >= 2) getVolcAudioUrl(text).catch(() => {});
