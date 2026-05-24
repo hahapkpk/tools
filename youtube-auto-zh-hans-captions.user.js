@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.8
+// @version      0.5.9
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube with local translation and optional Chinese dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -36,6 +36,7 @@
   const DEBUG = false;
   const CHECK_INTERVAL_MS = 120;
   const ROUTE_INTERVAL_MS = 800;
+  const VOICE_MAX_LAG_SECONDS = 1.5;
   const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
   const TARGET_LANG = 'zh-Hans';
   const SOURCE_LANG_RE = /^en(?:-|$)/i;
@@ -185,6 +186,7 @@
     volcMaleQuickVoice: '',
     volcFemaleQuickVoice: '',
     voiceRate: 1.08,
+    voiceSyncMode: 'natural',
     originalVolume: 0.25
   };
 
@@ -204,6 +206,8 @@
     videoHooked: null,
     remoteAudio: null,
     remoteVoiceToken: 0,
+    remoteVoiceStarting: false,
+    remoteVoiceQueue: [],
     localTranslators: new Map(),
     settings: loadSettings()
   };
@@ -986,7 +990,7 @@
   function ensureControls(player) {
     let panel = document.getElementById(CONTROL_ID);
     if (panel) {
-      if (!panel.querySelector('[data-role="translationEngine"]') || !panel.querySelector('[data-role="voiceEngine"]') || !panel.querySelector('[data-role="volcAuthMode"]') || !panel.querySelector('[data-role="volcVoice"]') || !panel.querySelector('[data-role="volcFavoritesBar"]') || !panel.querySelector('[data-role="originalVolume"]')) {
+      if (!panel.querySelector('[data-role="translationEngine"]') || !panel.querySelector('[data-role="voiceEngine"]') || !panel.querySelector('[data-role="volcAuthMode"]') || !panel.querySelector('[data-role="volcVoice"]') || !panel.querySelector('[data-role="volcFavoritesBar"]') || !panel.querySelector('[data-role="voiceSyncMode"]') || !panel.querySelector('[data-role="originalVolume"]')) {
         panel.remove();
         panel = null;
       }
@@ -1167,6 +1171,17 @@
     voiceRate.value = String(state.settings.voiceRate);
     voiceRate.addEventListener('change', () => updateSetting('voiceRate', Number(voiceRate.value)));
 
+    const voiceSyncMode = document.createElement('select');
+    voiceSyncMode.dataset.role = 'voiceSyncMode';
+    for (const [value, text] of [['natural', '自然流畅'], ['sync', '紧跟画面']]) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = text;
+      voiceSyncMode.appendChild(option);
+    }
+    voiceSyncMode.value = state.settings.voiceSyncMode;
+    voiceSyncMode.addEventListener('change', () => updateSetting('voiceSyncMode', voiceSyncMode.value));
+
     const originalVolumeWrap = document.createElement('span');
     originalVolumeWrap.style.display = 'flex';
     originalVolumeWrap.style.alignItems = 'center';
@@ -1224,6 +1239,7 @@
       makeVolcRow('快捷切换', quickButtons),
       makeRow('测试语音', testVoiceButton),
       makeRow('配音语速', voiceRate),
+      makeVolcRow('配音同步', voiceSyncMode),
       makeRow('原声音量', originalVolumeWrap),
       buttons
     );
@@ -1235,7 +1251,7 @@
   }
 
   function updateSetting(key, value) {
-    if (key === 'voiceEngine' || key === 'volcAuthMode' || key === 'voiceName' || key === 'volcVoice' || key === 'voiceRate') {
+    if (key === 'voiceEngine' || key === 'volcAuthMode' || key === 'voiceName' || key === 'volcVoice' || key === 'voiceRate' || key === 'voiceSyncMode') {
       cancelSpeech();
       state.spokenCueIndex = -1;
     }
@@ -1277,6 +1293,7 @@
         if (picker) populateVoiceOptions(picker);
       }
       if (input.dataset.role === 'voiceRate') input.value = String(state.settings.voiceRate);
+      if (input.dataset.role === 'voiceSyncMode') input.value = state.settings.voiceSyncMode;
       if (input.dataset.role === 'translationEngine') input.value = state.settings.translationEngine;
       if (input.dataset.role === 'voiceEngine') input.value = state.settings.voiceEngine;
       if (input.dataset.role === 'volcAuthMode') input.value = state.settings.volcAuthMode;
@@ -2005,6 +2022,8 @@
   function handleVideoPlay() {
     if (state.settings.voiceEnabled && state.remoteAudio?.paused && state.settings.voiceEngine === 'volc') {
       state.remoteAudio.play().catch(() => {});
+    } else if (state.settings.voiceEnabled && state.settings.voiceEngine === 'volc') {
+      playNextVolcCue();
     } else if (state.settings.voiceEnabled && window.speechSynthesis?.paused) {
       window.speechSynthesis.resume();
     }
@@ -2020,7 +2039,7 @@
     if (index === state.spokenCueIndex) return;
     state.spokenCueIndex = index;
     if (state.settings.voiceEngine === 'volc') {
-      speakVolcCue(cue, index);
+      enqueueVolcCue(cue, index);
       return;
     }
     if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance !== 'function') {
@@ -2217,6 +2236,60 @@
     prefetchVolcCues(index + 1, 2);
   }
 
+  function enqueueVolcCue(cue, index) {
+    const text = cue.text.replace(/\[[^\]]+\]/g, '').replace(/\s+/g, ' ').trim();
+    if (!text || text.length < 2) return;
+    state.remoteVoiceQueue.push({ text, index, end: cue.end });
+    prefetchVolcCues(index + 1, 4);
+    playNextVolcCue();
+  }
+
+  function shouldSkipQueuedVolcCue(item, video) {
+    if (state.settings.voiceSyncMode !== 'sync') return false;
+    return Boolean(video && video.currentTime - Number(item.end || 0) > VOICE_MAX_LAG_SECONDS);
+  }
+
+  async function playNextVolcCue() {
+    const video = getVideoEl();
+    if (!state.settings.voiceEnabled || state.settings.voiceEngine !== 'volc' || !video || video.paused) return;
+    if (state.remoteAudio || state.remoteVoiceStarting) return;
+    let item = null;
+    while (state.remoteVoiceQueue.length && !item) {
+      const queued = state.remoteVoiceQueue.shift();
+      if (!shouldSkipQueuedVolcCue(queued, video)) item = queued;
+    }
+    if (!item) return;
+
+    const token = state.remoteVoiceToken;
+    state.remoteVoiceStarting = true;
+    try {
+      const url = await getVolcAudioUrl(item.text);
+      if (token !== state.remoteVoiceToken) return;
+      if (shouldSkipQueuedVolcCue(item, video)) {
+        state.remoteVoiceStarting = false;
+        playNextVolcCue();
+        return;
+      }
+      const audio = new Audio(url);
+      state.remoteAudio = audio;
+      audio.addEventListener('ended', () => {
+        if (token !== state.remoteVoiceToken) return;
+        state.remoteAudio = null;
+        playNextVolcCue();
+      }, { once: true });
+      if (!video.paused) await audio.play();
+    } catch (error) {
+      if (token === state.remoteVoiceToken) {
+        state.remoteAudio = null;
+        state.remoteVoiceStarting = false;
+        showStatus(error.message || '火山语音播放失败', 5000);
+        playNextVolcCue();
+      }
+    } finally {
+      if (token === state.remoteVoiceToken) state.remoteVoiceStarting = false;
+    }
+  }
+
   function prefetchVolcCues(startIndex, count) {
     const hasCredentials = state.settings.volcAuthMode === 'legacy'
       ? Object.values(getVolcLegacyCredentials()).every(Boolean)
@@ -2231,6 +2304,8 @@
   function cancelSpeech() {
     if (window.speechSynthesis) window.speechSynthesis.cancel();
     state.remoteVoiceToken += 1;
+    state.remoteVoiceStarting = false;
+    state.remoteVoiceQueue.length = 0;
     if (state.remoteAudio) {
       state.remoteAudio.pause();
       state.remoteAudio.currentTime = 0;
