@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.2
+// @version      0.5.3
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube using YouTube caption translation data.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -41,11 +41,131 @@
   const SOURCE_LANG_RE = /^en(?:-|$)/i;
   const CHINESE_LANG_RE = /^(?:zh|zh-Hans|zh-CN)(?:-|$)/i;
   const AUTO_MALE_VOICE = '__auto_male_zh__';
-  const VOLC_VOICES = [
-    { value: 'zh_male_m191_uranus_bigtts', label: '云舟 2.0 - 自然男声' },
-    { value: 'zh_male_taocheng_uranus_bigtts', label: '小天 2.0 - 自然男声' },
-    { value: 'zh_female_vv_uranus_bigtts', label: 'Vivi 2.0 - 自然女声' },
-    { value: 'zh_female_xiaohe_uranus_bigtts', label: '小何 2.0 - 自然女声' }
+  const VOLC_VOICE_GROUPS = [
+    {
+      label: '自然通用男声',
+      voices: [
+        ['zh_male_m191_uranus_bigtts', '云舟 2.0'],
+        ['zh_male_taocheng_uranus_bigtts', '小天 2.0'],
+        ['zh_male_liufei_uranus_bigtts', '刘飞 2.0'],
+        ['zh_male_shaonianzixin_uranus_bigtts', '少年梓辛/Brayan 2.0'],
+        ['zh_male_wennuanahu_uranus_bigtts', '温暖阿虎/Alvin 2.0'],
+        ['zh_male_linjiananhai_uranus_bigtts', '邻家男孩 2.0'],
+        ['zh_male_ruyaqingnian_uranus_bigtts', '儒雅青年 2.0'],
+        ['zh_male_aojiaobazong_uranus_bigtts', '傲娇霸总 2.0'],
+        ['zh_male_fanjuanqingnian_uranus_bigtts', '反卷青年 2.0'],
+        ['zh_male_huolixiaoge_uranus_bigtts', '活力小哥 2.0'],
+        ['zh_male_kailangdidi_uranus_bigtts', '开朗弟弟 2.0'],
+        ['zh_male_kuailexiaodong_uranus_bigtts', '快乐小东 2.0'],
+        ['zh_male_kailangxuezhang_uranus_bigtts', '开朗学长 2.0'],
+        ['zh_male_youyoujunzi_uranus_bigtts', '悠悠君子 2.0'],
+        ['zh_male_qingshuangnanda_uranus_bigtts', '清爽男大 2.0'],
+        ['zh_male_yuanboxiaoshu_uranus_bigtts', '渊博小叔 2.0'],
+        ['zh_male_yangguangqingnian_uranus_bigtts', '阳光青年 2.0'],
+        ['zh_male_wenrouxiaoge_uranus_bigtts', '温柔小哥 2.0'],
+        ['zh_male_dongfanghaoran_uranus_bigtts', '东方浩然 2.0'],
+        ['zh_male_gaolengchenwen_uranus_bigtts', '高冷沉稳 2.0']
+      ]
+    },
+    {
+      label: '解说与有声阅读男声',
+      voices: [
+        ['zh_male_jieshuoxiaoming_uranus_bigtts', '解说小明 2.0'],
+        ['zh_male_yizhipiannan_uranus_bigtts', '译制片男 2.0'],
+        ['zh_male_baqiqingshu_uranus_bigtts', '霸气青叔 2.0'],
+        ['zh_male_xuanyijieshuo_uranus_bigtts', '悬疑解说 2.0'],
+        ['zh_male_cixingjieshuonan_uranus_bigtts', '磁性解说男声/Morgan 2.0'],
+        ['zh_male_liangsangmengzai_uranus_bigtts', '亮嗓萌仔 2.0'],
+        ['zh_male_shenyeboke_uranus_bigtts', '深夜播客 2.0'],
+        ['zh_male_guanggaojieshuo_uranus_bigtts', '广告解说 2.0']
+      ]
+    },
+    {
+      label: '角色男声',
+      voices: [
+        ['zh_male_sunwukong_uranus_bigtts', '猴哥 2.0'],
+        ['zh_male_dayi_uranus_bigtts', '大壹 2.0'],
+        ['zh_male_ruyayichen_uranus_bigtts', '儒雅逸辰 2.0'],
+        ['zh_male_qingcang_uranus_bigtts', '擎苍 2.0'],
+        ['zh_male_xionger_uranus_bigtts', '熊二 2.0'],
+        ['zh_male_silang_uranus_bigtts', '四郎 2.0'],
+        ['zh_male_naiqimengwa_uranus_bigtts', '奶气萌娃 2.0'],
+        ['zh_male_lanyinmianbao_uranus_bigtts', '懒音绵宝 2.0'],
+        ['zh_male_lubanqihao_uranus_bigtts', '鲁班七号 2.0'],
+        ['zh_male_tangseng_uranus_bigtts', '唐僧 2.0'],
+        ['zh_male_zhuangzhou_uranus_bigtts', '庄周 2.0'],
+        ['zh_male_zhubajie_uranus_bigtts', '猪八戒 2.0'],
+        ['zh_male_tiancaitongsheng_uranus_bigtts', '天才童声 2.0'],
+        ['saturn_zh_male_shuanglangshaonian_tob', '爽朗少年'],
+        ['saturn_zh_male_tiancaitongzhuo_tob', '天才同桌'],
+        ['saturn_zh_male_qingxinmumu_cs_tob', '清新沐沐 2.0']
+      ]
+    },
+    {
+      label: '自然通用女声',
+      voices: [
+        ['zh_female_vv_uranus_bigtts', 'Vivi 2.0'],
+        ['zh_female_xiaohe_uranus_bigtts', '小何 2.0'],
+        ['zh_female_sophie_uranus_bigtts', '魅力苏菲 2.0'],
+        ['zh_female_qingxinnvsheng_uranus_bigtts', '清新女声 2.0'],
+        ['zh_female_tianmeixiaoyuan_uranus_bigtts', '甜美小源 2.0'],
+        ['zh_female_tianmeitaozi_uranus_bigtts', '甜美桃子 2.0'],
+        ['zh_female_shuangkuaisisi_uranus_bigtts', '爽快思思 2.0'],
+        ['zh_female_linjianvhai_uranus_bigtts', '邻家女孩 2.0'],
+        ['zh_female_wenroumama_uranus_bigtts', '温柔妈妈 2.0'],
+        ['zh_female_tvbnv_uranus_bigtts', 'TVB女声 2.0'],
+        ['zh_female_qiaopinv_uranus_bigtts', '俏皮女声 2.0'],
+        ['zh_female_popo_uranus_bigtts', '婆婆 2.0'],
+        ['zh_female_gaolengyujie_uranus_bigtts', '高冷御姐 2.0'],
+        ['zh_female_wenroushunv_uranus_bigtts', '温柔淑女 2.0'],
+        ['zh_female_mengyatou_uranus_bigtts', '萌丫头/Cutey 2.0'],
+        ['zh_female_tiexinnvsheng_uranus_bigtts', '贴心女声/Candy 2.0'],
+        ['zh_female_jitangmei_uranus_bigtts', '鸡汤妹妹/Hope 2.0'],
+        ['zh_female_kailangjiejie_uranus_bigtts', '开朗姐姐 2.0'],
+        ['zh_female_qinqienv_uranus_bigtts', '亲切女声 2.0'],
+        ['zh_female_wenjingmaomao_uranus_bigtts', '文静毛毛 2.0'],
+        ['zh_female_zhixingnv_uranus_bigtts', '知性女声 2.0'],
+        ['zh_female_qingchezizi_uranus_bigtts', '清澈梓梓 2.0'],
+        ['zh_female_tianmeiyueyue_uranus_bigtts', '甜美悦悦 2.0'],
+        ['zh_female_xinlingjitang_uranus_bigtts', '心灵鸡汤 2.0'],
+        ['zh_female_roumeinvyou_uranus_bigtts', '柔美女友 2.0'],
+        ['zh_female_wenrouxiaoya_uranus_bigtts', '温柔小雅 2.0']
+      ]
+    },
+    {
+      label: '角色与场景女声',
+      voices: [
+        ['zh_female_cancan_uranus_bigtts', '知性灿灿 2.0'],
+        ['zh_female_sajiaoxuemei_uranus_bigtts', '撒娇学妹 2.0'],
+        ['zh_female_peiqi_uranus_bigtts', '佩奇猪 2.0'],
+        ['zh_female_yingyujiaoxue_uranus_bigtts', 'Tina老师 2.0'],
+        ['zh_female_kefunvsheng_uranus_bigtts', '暖阳女声 2.0'],
+        ['zh_female_xiaoxue_uranus_bigtts', '儿童绘本 2.0'],
+        ['zh_female_mizai_uranus_bigtts', '黑猫侦探社咪仔 2.0'],
+        ['zh_female_jitangnv_uranus_bigtts', '鸡汤女 2.0'],
+        ['zh_female_meilinvyou_uranus_bigtts', '魅力女友 2.0'],
+        ['zh_female_liuchangnv_uranus_bigtts', '流畅女声 2.0'],
+        ['zh_female_zhishuaiyingzi_uranus_bigtts', '直率英子 2.0'],
+        ['zh_female_yingtaowanzi_uranus_bigtts', '樱桃丸子 2.0'],
+        ['zh_female_gufengshaoyu_uranus_bigtts', '古风少御 2.0'],
+        ['zh_female_jiaochuannv_uranus_bigtts', '娇喘女声 2.0'],
+        ['zh_female_linxiao_uranus_bigtts', '林潇 2.0'],
+        ['zh_female_lingling_uranus_bigtts', '玲玲姐姐 2.0'],
+        ['zh_female_chunribu_uranus_bigtts', '春日部姐姐 2.0'],
+        ['zh_female_ganmaodianyin_uranus_bigtts', '感冒电音姐姐 2.0'],
+        ['zh_female_chanmeinv_uranus_bigtts', '谄媚女声 2.0'],
+        ['zh_female_nvleishen_uranus_bigtts', '女雷神 2.0'],
+        ['zh_female_wuzetian_uranus_bigtts', '武则天 2.0'],
+        ['zh_female_gujie_uranus_bigtts', '顾姐 2.0'],
+        ['zh_female_shaoergushi_uranus_bigtts', '少儿故事 2.0'],
+        ['saturn_zh_female_tiaopigongzhu_tob', '调皮公主'],
+        ['saturn_zh_female_keainvsheng_tob', '可爱女生'],
+        ['saturn_zh_female_cancan_tob', '知性灿灿'],
+        ['saturn_zh_female_qingyingduoduo_cs_tob', '轻盈朵朵 2.0'],
+        ['saturn_zh_female_wenwanshanshan_cs_tob', '温婉珊珊 2.0'],
+        ['saturn_zh_female_reqingaina_cs_tob', '热情艾娜 2.0']
+      ]
+    }
   ];
 
   const defaultSettings = {
@@ -239,8 +359,7 @@
         margin-top: 8px;
       }
       #${CONTROL_ID} .${SCRIPT_ID}-voice-picker {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) 72px;
+        display: block;
         align-items: stretch;
         gap: 6px;
         min-width: 0;
@@ -300,6 +419,11 @@
       #${CONTROL_ID} .${SCRIPT_ID}-voice-option:hover,
       #${CONTROL_ID} .${SCRIPT_ID}-voice-option.${SCRIPT_ID}-active {
         background: rgba(62,166,255,0.32);
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-voice-group-label {
+        padding: 6px 8px 3px;
+        color: rgba(255,255,255,0.55);
+        font-size: 11px;
       }
       #${CONTROL_ID} .${SCRIPT_ID}-api-key {
         display: grid;
@@ -580,6 +704,70 @@
     }
   }
 
+  function createVolcVoicePicker() {
+    const picker = document.createElement('span');
+    picker.className = `${SCRIPT_ID}-voice-picker`;
+
+    const hidden = document.createElement('input');
+    hidden.type = 'hidden';
+    hidden.dataset.role = 'volcVoice';
+    hidden.value = state.settings.volcVoice;
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `${SCRIPT_ID}-voice-button`;
+    button.dataset.role = 'volcVoiceButton';
+
+    const menu = document.createElement('div');
+    menu.className = `${SCRIPT_ID}-voice-menu`;
+    menu.dataset.role = 'volcVoiceMenu';
+
+    button.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      menu.classList.toggle(`${SCRIPT_ID}-visible`);
+    });
+    picker.addEventListener('click', event => event.stopPropagation());
+    document.addEventListener('click', () => menu.classList.remove(`${SCRIPT_ID}-visible`));
+    picker.append(hidden, button, menu);
+    populateVolcVoiceOptions(picker);
+    return picker;
+  }
+
+  function populateVolcVoiceOptions(picker) {
+    const hidden = picker.querySelector('[data-role="volcVoice"]');
+    const button = picker.querySelector('[data-role="volcVoiceButton"]');
+    const menu = picker.querySelector('[data-role="volcVoiceMenu"]');
+    const selectedValue = state.settings.volcVoice;
+    menu.textContent = '';
+    let selectedLabel = '';
+    for (const group of VOLC_VOICE_GROUPS) {
+      const heading = document.createElement('div');
+      heading.className = `${SCRIPT_ID}-voice-group-label`;
+      heading.textContent = group.label;
+      menu.appendChild(heading);
+      for (const [value, label] of group.voices) {
+        const option = document.createElement('button');
+        option.type = 'button';
+        option.className = `${SCRIPT_ID}-voice-option`;
+        option.dataset.value = value;
+        option.textContent = label;
+        option.title = label;
+        option.classList.toggle(`${SCRIPT_ID}-active`, value === selectedValue);
+        if (value === selectedValue) selectedLabel = label;
+        option.addEventListener('click', event => {
+          event.preventDefault();
+          menu.classList.remove(`${SCRIPT_ID}-visible`);
+          updateSetting('volcVoice', value);
+        });
+        menu.appendChild(option);
+      }
+    }
+    hidden.value = selectedValue;
+    button.textContent = selectedLabel || VOLC_VOICE_GROUPS[0].voices[0][1];
+    button.title = button.textContent;
+  }
+
   function getSortedChineseVoices() {
     const voices = window.speechSynthesis?.getVoices?.() || [];
     return voices
@@ -750,16 +938,7 @@
     legacyNote.className = `${SCRIPT_ID}-credential-note`;
     legacyNote.textContent = 'Secret Key 不用于此接口';
 
-    const volcVoice = document.createElement('select');
-    volcVoice.dataset.role = 'volcVoice';
-    for (const voice of VOLC_VOICES) {
-      const option = document.createElement('option');
-      option.value = voice.value;
-      option.textContent = voice.label;
-      volcVoice.appendChild(option);
-    }
-    volcVoice.value = state.settings.volcVoice;
-    volcVoice.addEventListener('change', () => updateSetting('volcVoice', volcVoice.value));
+    const volcVoice = createVolcVoicePicker();
 
     const voiceRate = document.createElement('select');
     voiceRate.dataset.role = 'voiceRate';
@@ -874,7 +1053,11 @@
       if (input.dataset.role === 'voiceRate') input.value = String(state.settings.voiceRate);
       if (input.dataset.role === 'voiceEngine') input.value = state.settings.voiceEngine;
       if (input.dataset.role === 'volcAuthMode') input.value = state.settings.volcAuthMode;
-      if (input.dataset.role === 'volcVoice') input.value = state.settings.volcVoice;
+      if (input.dataset.role === 'volcVoice') {
+        input.value = state.settings.volcVoice;
+        const picker = input.closest(`.${SCRIPT_ID}-voice-picker`);
+        if (picker) populateVolcVoiceOptions(picker);
+      }
       if (input.dataset.role === 'originalVolume') {
         input.value = String(Math.round(Number(state.settings.originalVolume) * 100));
         const valueLabel = panel.querySelector('[data-role="originalVolumeValue"]');
