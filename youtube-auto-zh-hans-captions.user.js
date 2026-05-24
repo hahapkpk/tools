@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.4
-// @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube using YouTube caption translation data.
+// @version      0.5.5
+// @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube with local translation and optional Chinese dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
 // @match        https://www.youtube.com/embed/*
@@ -175,6 +175,7 @@
     position: 8,
     offsetMs: -200,
     hideNative: true,
+    translationEngine: 'local',
     voiceEnabled: false,
     voiceEngine: 'browser',
     volcAuthMode: 'apiKey',
@@ -203,6 +204,7 @@
     videoHooked: null,
     remoteAudio: null,
     remoteVoiceToken: 0,
+    localTranslators: new Map(),
     settings: loadSettings()
   };
 
@@ -457,6 +459,13 @@
       }
       #${CONTROL_ID} .${SCRIPT_ID}-api-key button { padding: 3px 4px; }
       #${CONTROL_ID} .${SCRIPT_ID}-volc-hidden { display: none; }
+      #${CONTROL_ID} .${SCRIPT_ID}-local-translation {
+        display: flex;
+        gap: 6px;
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-local-translation button {
+        width: 100%;
+      }
       #${CONTROL_ID} .${SCRIPT_ID}-credential-note {
         color: rgba(255,255,255,0.62);
         font-size: 11px;
@@ -650,6 +659,13 @@
     const row = makeVolcRow(labelText, control);
     row.dataset.authMode = mode;
     return row;
+  }
+
+  function syncTranslationEngineRows() {
+    const panel = document.getElementById(CONTROL_ID);
+    if (!panel) return;
+    const localRow = panel.querySelector('[data-role="localTranslationRow"]');
+    if (localRow) localRow.classList.toggle(`${SCRIPT_ID}-volc-hidden`, state.settings.translationEngine !== 'local');
   }
 
   function syncVoiceEngineRows() {
@@ -970,7 +986,7 @@
   function ensureControls(player) {
     let panel = document.getElementById(CONTROL_ID);
     if (panel) {
-      if (!panel.querySelector('[data-role="voiceEngine"]') || !panel.querySelector('[data-role="volcAuthMode"]') || !panel.querySelector('[data-role="volcVoice"]') || !panel.querySelector('[data-role="volcFavoritesBar"]') || !panel.querySelector('[data-role="originalVolume"]')) {
+      if (!panel.querySelector('[data-role="translationEngine"]') || !panel.querySelector('[data-role="voiceEngine"]') || !panel.querySelector('[data-role="volcAuthMode"]') || !panel.querySelector('[data-role="volcVoice"]') || !panel.querySelector('[data-role="volcFavoritesBar"]') || !panel.querySelector('[data-role="originalVolume"]')) {
         panel.remove();
         panel = null;
       }
@@ -997,6 +1013,27 @@
     }
     mode.value = state.settings.mode;
     mode.addEventListener('change', () => updateSetting('mode', mode.value));
+
+    const translationEngine = document.createElement('select');
+    translationEngine.dataset.role = 'translationEngine';
+    for (const [value, text] of [['local', 'Chrome 本地翻译（推荐）'], ['youtube', 'YouTube 自动翻译（备用，可能限流）']]) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = text;
+      translationEngine.appendChild(option);
+    }
+    translationEngine.value = state.settings.translationEngine;
+    translationEngine.addEventListener('change', () => updateSetting('translationEngine', translationEngine.value));
+
+    const localTranslationWrap = document.createElement('span');
+    localTranslationWrap.className = `${SCRIPT_ID}-local-translation`;
+    const prepareTranslationButton = makeButton('准备本地翻译', '首次使用需下载或初始化 Chrome 本地翻译模型', () => {
+      prepareLocalTranslationForCurrentVideo().catch(error => showStatus(error.message || '本地翻译准备失败', 7000));
+    });
+    prepareTranslationButton.dataset.role = 'prepareLocalTranslation';
+    localTranslationWrap.appendChild(prepareTranslationButton);
+    const localTranslationRow = makeRow('本地翻译', localTranslationWrap);
+    localTranslationRow.dataset.role = 'localTranslationRow';
 
     const fontSize = document.createElement('input');
     fontSize.type = 'range';
@@ -1166,6 +1203,8 @@
     panel.append(
       makeRow('启用', enabled),
       makeRow('模式', mode),
+      makeRow('字幕翻译', translationEngine),
+      localTranslationRow,
       makeRow('字号', fontSize),
       makeRow('位置', position),
       makeRow('字幕延迟', offset),
@@ -1190,6 +1229,7 @@
     );
     player.appendChild(panel);
     syncVolcFavoriteControls();
+    syncTranslationEngineRows();
     syncVoiceEngineRows();
     return panel;
   }
@@ -1204,8 +1244,10 @@
     syncControlValues();
     applyVisualSettings();
     applyVoiceSettings();
+    syncTranslationEngineRows();
     syncVoiceEngineRows();
     renderCurrentCue();
+    if (key === 'translationEngine') reloadCurrentVideo(true);
   }
 
   function applyVisualSettings() {
@@ -1235,6 +1277,7 @@
         if (picker) populateVoiceOptions(picker);
       }
       if (input.dataset.role === 'voiceRate') input.value = String(state.settings.voiceRate);
+      if (input.dataset.role === 'translationEngine') input.value = state.settings.translationEngine;
       if (input.dataset.role === 'voiceEngine') input.value = state.settings.voiceEngine;
       if (input.dataset.role === 'volcAuthMode') input.value = state.settings.volcAuthMode;
       if (input.dataset.role === 'volcVoice') {
@@ -1366,15 +1409,23 @@
     const tracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
     const directChinese = tracks.find(track => CHINESE_LANG_RE.test(track.languageCode || '') && track.baseUrl);
     if (directChinese) {
-      return { kind: 'direct-zh', targetTrack: directChinese, sourceTrack: null, needsTranslation: false };
+      return { kind: 'youtube-native-zh', targetTrack: directChinese, sourceTrack: null, translationMode: 'none', sourceLanguage: 'zh' };
     }
 
-    const english = tracks.find(track => SOURCE_LANG_RE.test(track.languageCode || '') && track.baseUrl && track.isTranslatable !== false) ||
+    const sourceTrack = tracks.find(track => SOURCE_LANG_RE.test(track.languageCode || '') && track.baseUrl && track.isTranslatable !== false) ||
       tracks.find(track => SOURCE_LANG_RE.test(track.languageCode || '') && track.baseUrl) ||
       tracks.find(track => track.baseUrl && track.isTranslatable !== false);
 
-    if (!english) return null;
-    return { kind: 'translated-en', targetTrack: english, sourceTrack: english, needsTranslation: true };
+    if (!sourceTrack) return null;
+    const sourceLanguage = normalizeTranslatorLanguage(sourceTrack.languageCode || 'en');
+    if (state.settings.translationEngine === 'youtube') {
+      return { kind: 'youtube-auto-translate-zh', targetTrack: sourceTrack, sourceTrack, translationMode: 'youtube', sourceLanguage };
+    }
+    return { kind: 'chrome-local-zh', targetTrack: sourceTrack, sourceTrack, translationMode: 'local', sourceLanguage };
+  }
+
+  function normalizeTranslatorLanguage(languageCode) {
+    return String(languageCode || 'en').split('-')[0].toLowerCase();
   }
 
   function getClientContextParams() {
@@ -1409,7 +1460,10 @@
 
   async function fetchCaptionJson(url) {
     const response = await fetch(url, { credentials: 'include', cache: 'force-cache' });
-    if (!response.ok) throw classifyCaptionError(response.status);
+    if (!response.ok) {
+      const isTranslated = new URL(url, location.origin).searchParams.has('tlang');
+      throw classifyCaptionError(response.status, isTranslated);
+    }
     const text = await response.text();
     if (!text.trim()) throw new Error('YouTube 当前返回空字幕内容。');
     try {
@@ -1428,6 +1482,7 @@
       try {
         return await fetchCaptionJson(url);
       } catch (error) {
+        if (error.rateLimited) throw error;
         lastError = error;
         return null;
       }
@@ -1502,10 +1557,14 @@
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  function classifyCaptionError(status) {
+  function classifyCaptionError(status, isTranslated = false) {
     if (status === 401 || status === 403) return new Error('字幕接口被权限或地区限制拦截。');
     if (status === 404) return new Error('当前视频没有可用字幕轨道。');
-    if (status === 429) return new Error('YouTube 字幕接口暂时限流，请稍后刷新页面重试。');
+    if (status === 429) {
+      const error = new Error(isTranslated ? 'YouTube 自动翻译字幕已被限流，请切换到 Chrome 本地翻译。' : 'YouTube 原始字幕请求暂时被限流，请稍后重试。');
+      error.rateLimited = true;
+      return error;
+    }
     return new Error(`字幕接口请求失败：${status}`);
   }
 
@@ -1614,8 +1673,63 @@
     return source?.text || '';
   }
 
+  async function getLocalTranslator(sourceLanguage, createIfMissing = false) {
+    const source = normalizeTranslatorLanguage(sourceLanguage);
+    const key = `${source}:zh`;
+    if (state.localTranslators.has(key)) return state.localTranslators.get(key);
+    if (!('Translator' in self)) throw new Error('当前 Chrome 不支持本地翻译，请升级桌面版 Chrome。');
+    if (!createIfMissing) throw new Error('请先点击“准备本地翻译”，下载或启用本地翻译模型。');
+
+    const options = { sourceLanguage: source, targetLanguage: 'zh' };
+    const availability = await Translator.availability(options);
+    if (availability === 'unavailable') throw new Error(`Chrome 暂不支持 ${source} 到中文的本地翻译。`);
+    showStatus(availability === 'available' ? '正在启动本地翻译...' : '正在下载本地翻译模型...', 120000);
+    const translator = await Translator.create({
+      ...options,
+      monitor(monitor) {
+        monitor.addEventListener('downloadprogress', event => {
+          showStatus(`正在下载本地翻译模型：${Math.round(Number(event.loaded || 0) * 100)}%`, 120000);
+        });
+      }
+    });
+    state.localTranslators.set(key, translator);
+    return translator;
+  }
+
+  async function prepareLocalTranslationForCurrentVideo() {
+    const response = getPlayerResponse(getVideoId());
+    const source = selectBestCaptionSource(response);
+    if (!source) throw new Error('当前视频没有可用的字幕轨道。');
+    if (source.translationMode === 'none') {
+      showStatus('当前视频已有中文字幕，无需本地翻译。');
+      return;
+    }
+    if (source.translationMode !== 'local') throw new Error('请先将字幕翻译切换为 Chrome 本地翻译。');
+    await getLocalTranslator(source.sourceLanguage, true);
+    showStatus('本地翻译已准备，正在生成中文字幕...');
+    reloadCurrentVideo(true);
+  }
+
+  async function translateCuesLocally(rawSourceCues, sourceLanguage) {
+    if (!rawSourceCues.length) return [];
+    const translator = await getLocalTranslator(sourceLanguage);
+    const sourceCues = mergeSentenceCues(rawSourceCues);
+    const translated = [];
+    for (let index = 0; index < sourceCues.length; index += 1) {
+      if (index % 8 === 0) showStatus(`正在本地翻译字幕：${index + 1}/${sourceCues.length}`, 120000);
+      const cue = sourceCues[index];
+      const text = cleanCaptionText(await translator.translate(cue.text));
+      if (text) translated.push(limitLines({ ...cue, text, sourceText: cue.text }));
+    }
+    return translated;
+  }
+
   function getCacheKey(videoId, source) {
-    return `${CACHE_PREFIX}${videoId}:${source.kind}:${TARGET_LANG}:v3`;
+    return `${CACHE_PREFIX}${videoId}:${source.kind}:${TARGET_LANG}:v4`;
+  }
+
+  function getLegacyTranslatedCacheKey(videoId) {
+    return `${CACHE_PREFIX}${videoId}:translated-en:${TARGET_LANG}:v3`;
   }
 
   function readCachedCues(key) {
@@ -1652,10 +1766,31 @@
         applyCues(videoId, cached, token, '已从缓存加载字幕');
         return;
       }
+      if (source.translationMode === 'local') {
+        const legacyCached = readCachedCues(getLegacyTranslatedCacheKey(videoId));
+        if (legacyCached) {
+          applyCues(videoId, legacyCached, token, '已读取旧版中文字幕缓存');
+          return;
+        }
+      }
     }
 
-    showStatus(source.needsTranslation ? '正在读取 YouTube 自动翻译字幕...' : '正在读取 YouTube 中文字幕...');
-    const targetJson = await fetchCaptionJsonWithFallback(videoId, source.targetTrack, { translate: source.needsTranslation });
+    if (source.translationMode === 'local') {
+      await getLocalTranslator(source.sourceLanguage);
+      showStatus('正在读取原始字幕，准备本地翻译...');
+      const sourceJson = await fetchCaptionJsonWithFallback(videoId, source.sourceTrack, { translate: false });
+      const sourceRaw = normalizeRawCues(sourceJson);
+      const translated = await translateCuesLocally(sourceRaw, source.sourceLanguage);
+      if (!translated.length) throw new Error('字幕接口返回了空字幕。');
+      const data = { cues: translated, rawTargetCues: translated, rawSourceCues: sourceRaw, sourceKind: source.kind };
+      writeCachedCues(cacheKey, data);
+      applyCues(videoId, data, token, `本地中文字幕已加载：${translated.length} 句`);
+      return;
+    }
+
+    const isYouTubeTranslation = source.translationMode === 'youtube';
+    showStatus(isYouTubeTranslation ? '正在读取 YouTube 自动翻译字幕（可能被限流）...' : '正在读取 YouTube 中文字幕...');
+    const targetJson = await fetchCaptionJsonWithFallback(videoId, source.targetTrack, { translate: isYouTubeTranslation });
     const targetRaw = normalizeRawCues(targetJson);
     let sourceRaw = [];
     if (source.sourceTrack?.baseUrl) {
