@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.7
+// @version      0.5.8
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube with local translation and optional Chinese dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -1335,7 +1335,7 @@
     const box = overlay.querySelector(`.${SCRIPT_ID}-box`);
     if (!box) return;
     box.textContent = '';
-    if (!cue || !state.settings.enabled) {
+    if (!cue || !state.settings.enabled || isErrorCaptionText(cue.text)) {
       overlay.classList.remove(`${SCRIPT_ID}-visible`);
       return;
     }
@@ -1351,6 +1351,13 @@
   }
 
   function getPlayerResponse(videoId) {
+    const player = document.getElementById('movie_player');
+    try {
+      const liveResponse = player?.getPlayerResponse?.();
+      if (!videoId || liveResponse?.videoDetails?.videoId === videoId) return liveResponse;
+    } catch (error) {
+      log('movie player response failed', error);
+    }
     if (window.ytInitialPlayerResponse?.videoDetails?.videoId === videoId) return window.ytInitialPlayerResponse;
     const playerResponse = window.ytplayer?.config?.args?.player_response;
     if (playerResponse) {
@@ -1597,7 +1604,7 @@
         end: Number.isFinite(nextStart) && nextStart > start ? nextStart : start + 2.5,
         text
       };
-    }).filter(cue => Number.isFinite(cue.start) && cue.text);
+    }).filter(cue => Number.isFinite(cue.start) && cue.text && !isErrorCaptionText(cue.text));
   }
 
   function findTranscriptTrigger() {
@@ -1643,7 +1650,7 @@
         trigger = findTranscriptTrigger();
       }
       if (!trigger) throw new Error('字幕接口受限，且当前视频没有可读取的转写文稿。');
-      showStatus('字幕接口受限，正在改用视频转写文稿...', 120000);
+      showStatus('原始字幕读取被 YouTube 暂时限制，正在改用内容转文字...', 120000);
       trigger.click();
       for (let attempt = 0; attempt < 30 && !readTranscriptCuesFromPanel().length; attempt += 1) await sleep(250);
     }
@@ -1665,7 +1672,7 @@
         const text = cleanCaptionText(event.segs.map(seg => seg.utf8 || '').join(''));
         return { start, end: start + Math.max(duration, 0.7), text };
       })
-      .filter(cue => cue.text)
+      .filter(cue => cue.text && !isErrorCaptionText(cue.text))
       .sort((a, b) => a.start - b.start);
   }
 
@@ -1676,6 +1683,10 @@
       .replace(/[ \t]{2,}/g, ' ')
       .replace(/\s+([，。！？；：,.!?;:])/g, '$1')
       .trim();
+  }
+
+  function isErrorCaptionText(text) {
+    return /(?:429\s*错误|YouTube\s*(?:限制|limit).*(?:字幕|caption)|当前设备.*(?:机翻|字幕).*(?:请求|限制)|不要使用\s*\[?\s*自动翻译)/i.test(String(text || ''));
   }
 
   function mergeSentenceCues(rawCues) {
@@ -1773,8 +1784,8 @@
   }
 
   async function prepareLocalTranslationForCurrentVideo() {
-    const response = getPlayerResponse(getVideoId());
-    const source = selectBestCaptionSource(response);
+    const videoId = getVideoId();
+    const source = await waitForCaptionSource(videoId);
     if (!source) throw new Error('当前视频没有可用的字幕轨道。');
     if (source.translationMode === 'none') {
       showStatus('当前视频已有中文字幕，无需本地翻译。');
@@ -1800,8 +1811,26 @@
     return translated;
   }
 
+  async function waitForCaptionSource(videoId, attempts = 20) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const source = selectBestCaptionSource(getPlayerResponse(videoId));
+      if (source?.targetTrack?.baseUrl) return source;
+      if (attempt === 0) showStatus('字幕轨道仍在加载，正在等待...', 7000);
+      await sleep(250);
+    }
+    return null;
+  }
+
+  function getSourceCacheFingerprint(source) {
+    const track = source.sourceTrack || source.targetTrack || {};
+    const language = source.sourceLanguage || track.languageCode || 'unknown';
+    const kind = track.kind || 'manual';
+    const trackId = track.vssId || track.vss_id || '';
+    return `${source.kind}:${language}:${kind}:${trackId}`;
+  }
+
   function getCacheKey(videoId, source) {
-    return `${CACHE_PREFIX}${videoId}:${source.kind}:${TARGET_LANG}:v5`;
+    return `${CACHE_PREFIX}${videoId}:${getSourceCacheFingerprint(source)}:${TARGET_LANG}:v6`;
   }
 
   function getLegacyTranslatedCacheKey(videoId) {
@@ -1813,6 +1842,10 @@
     try {
       const cached = JSON.parse(localStorage.getItem(key) || 'null');
       if (!cached || Date.now() - cached.savedAt > CACHE_TTL_MS) return null;
+      if ((cached.data?.cues || []).some(cue => isErrorCaptionText(cue.text))) {
+        localStorage.removeItem(key);
+        return null;
+      }
       memoryCache.set(key, cached.data);
       return cached.data;
     } catch {
@@ -1831,8 +1864,7 @@
 
   async function loadCaptions(videoId, token, force = false) {
     if (!videoId) return;
-    const response = getPlayerResponse(videoId);
-    const source = selectBestCaptionSource(response);
+    const source = await waitForCaptionSource(videoId);
     if (!source?.targetTrack?.baseUrl) throw new Error('没有找到可翻译的字幕轨道。');
 
     const cacheKey = getCacheKey(videoId, source);
