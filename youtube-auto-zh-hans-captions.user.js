@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.3
+// @version      0.5.4
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube using YouTube caption translation data.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -180,6 +180,9 @@
     volcAuthMode: 'apiKey',
     voiceName: 'Google 普通话（中国大陆）',
     volcVoice: 'zh_male_m191_uranus_bigtts',
+    volcFavorites: [],
+    volcMaleQuickVoice: '',
+    volcFemaleQuickVoice: '',
     voiceRate: 1.08,
     originalVolume: 0.25
   };
@@ -390,7 +393,7 @@
       #${CONTROL_ID} .${SCRIPT_ID}-voice-menu {
         position: absolute;
         left: 0;
-        right: 78px;
+        right: 0;
         top: 30px;
         z-index: 2147483004;
         display: none;
@@ -420,6 +423,23 @@
       #${CONTROL_ID} .${SCRIPT_ID}-voice-option.${SCRIPT_ID}-active {
         background: rgba(62,166,255,0.32);
       }
+      #${CONTROL_ID} .${SCRIPT_ID}-voice-option-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 30px;
+        align-items: center;
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-voice-favorite-toggle {
+        min-height: 28px;
+        padding: 2px;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        color: rgba(255,255,255,0.58);
+        font-size: 16px;
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-voice-favorite-toggle.${SCRIPT_ID}-active {
+        color: #fbbf24;
+      }
       #${CONTROL_ID} .${SCRIPT_ID}-voice-group-label {
         padding: 6px 8px 3px;
         color: rgba(255,255,255,0.55);
@@ -441,6 +461,28 @@
         color: rgba(255,255,255,0.62);
         font-size: 11px;
         line-height: 1.35;
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-favorite-voices,
+      #${CONTROL_ID} .${SCRIPT_ID}-quick-buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        min-width: 0;
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-favorite-voices button {
+        width: auto;
+        max-width: 100%;
+        padding: 3px 7px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-favorite-voices button.${SCRIPT_ID}-active {
+        border-color: #3ea6ff;
+        color: #3ea6ff;
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-quick-buttons button {
+        flex: 1 1 0;
       }
       .${SCRIPT_ID}-hide-native .ytp-caption-window-container,
       .${SCRIPT_ID}-hide-native .ytp-caption-segment {
@@ -734,6 +776,46 @@
     return picker;
   }
 
+  function findVolcVoice(value) {
+    for (const group of VOLC_VOICE_GROUPS) {
+      const voice = group.voices.find(([voiceValue]) => voiceValue === value);
+      if (voice) {
+        return {
+          value: voice[0],
+          label: voice[1],
+          gender: /^(zh_male_|saturn_zh_male_)/.test(voice[0]) ? 'male' : 'female',
+        };
+      }
+    }
+    return null;
+  }
+
+  function getVolcFavorites(gender = '') {
+    const favorites = Array.isArray(state.settings.volcFavorites) ? state.settings.volcFavorites : [];
+    return favorites
+      .map(findVolcVoice)
+      .filter(voice => voice && (!gender || voice.gender === gender));
+  }
+
+  function isVolcFavorite(value) {
+    return getVolcFavorites().some(voice => voice.value === value);
+  }
+
+  function toggleVolcFavorite(value) {
+    const favorites = Array.isArray(state.settings.volcFavorites) ? [...state.settings.volcFavorites] : [];
+    const index = favorites.indexOf(value);
+    if (index >= 0) {
+      favorites.splice(index, 1);
+      if (state.settings.volcMaleQuickVoice === value) state.settings.volcMaleQuickVoice = '';
+      if (state.settings.volcFemaleQuickVoice === value) state.settings.volcFemaleQuickVoice = '';
+    } else {
+      favorites.push(value);
+    }
+    state.settings.volcFavorites = favorites;
+    saveSettings();
+    syncControlValues();
+  }
+
   function populateVolcVoiceOptions(picker) {
     const hidden = picker.querySelector('[data-role="volcVoice"]');
     const button = picker.querySelector('[data-role="volcVoiceButton"]');
@@ -747,6 +829,8 @@
       heading.textContent = group.label;
       menu.appendChild(heading);
       for (const [value, label] of group.voices) {
+        const row = document.createElement('div');
+        row.className = `${SCRIPT_ID}-voice-option-row`;
         const option = document.createElement('button');
         option.type = 'button';
         option.className = `${SCRIPT_ID}-voice-option`;
@@ -760,12 +844,93 @@
           menu.classList.remove(`${SCRIPT_ID}-visible`);
           updateSetting('volcVoice', value);
         });
-        menu.appendChild(option);
+        const favorite = document.createElement('button');
+        favorite.type = 'button';
+        favorite.className = `${SCRIPT_ID}-voice-favorite-toggle`;
+        favorite.classList.toggle(`${SCRIPT_ID}-active`, isVolcFavorite(value));
+        favorite.textContent = isVolcFavorite(value) ? '★' : '☆';
+        favorite.title = isVolcFavorite(value) ? '取消收藏' : '收藏音色';
+        favorite.addEventListener('click', event => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleVolcFavorite(value);
+        });
+        row.append(option, favorite);
+        menu.appendChild(row);
       }
     }
     hidden.value = selectedValue;
     button.textContent = selectedLabel || VOLC_VOICE_GROUPS[0].voices[0][1];
     button.title = button.textContent;
+  }
+
+  function renderVolcFavorites(container) {
+    const favorites = getVolcFavorites();
+    container.textContent = '';
+    if (!favorites.length) {
+      const empty = document.createElement('span');
+      empty.className = `${SCRIPT_ID}-credential-note`;
+      empty.textContent = '点击音色列表中的 ☆ 收藏';
+      container.appendChild(empty);
+      return;
+    }
+    for (const voice of favorites) {
+      const button = makeButton(voice.label, `切换为 ${voice.label}`, () => updateSetting('volcVoice', voice.value));
+      button.classList.toggle(`${SCRIPT_ID}-active`, voice.value === state.settings.volcVoice);
+      container.appendChild(button);
+    }
+  }
+
+  function populateVolcQuickVoiceSelect(select, role) {
+    const gender = role === 'volcMaleQuickVoice' ? 'male' : 'female';
+    const currentValue = state.settings[role] || '';
+    const favorites = getVolcFavorites(gender);
+    select.textContent = '';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = gender === 'male' ? '选择收藏男声' : '选择收藏女声';
+    select.appendChild(placeholder);
+    for (const voice of favorites) {
+      const option = document.createElement('option');
+      option.value = voice.value;
+      option.textContent = voice.label;
+      select.appendChild(option);
+    }
+    select.value = favorites.some(voice => voice.value === currentValue) ? currentValue : '';
+  }
+
+  function createVolcQuickVoiceSelect(role) {
+    const select = document.createElement('select');
+    select.dataset.role = role;
+    select.addEventListener('change', () => updateSetting(role, select.value));
+    populateVolcQuickVoiceSelect(select, role);
+    return select;
+  }
+
+  function applyVolcQuickVoice(role, label) {
+    const value = state.settings[role];
+    const voice = value && findVolcVoice(value);
+    if (!voice) {
+      showStatus(`请先选择${label}快捷音色`);
+      return;
+    }
+    updateSetting('volcVoice', value);
+    showStatus(`已切换为${label}：${voice.label}`);
+  }
+
+  function syncVolcFavoriteControls() {
+    const panel = document.getElementById(CONTROL_ID);
+    if (!panel) return;
+    const favorites = panel.querySelector('[data-role="volcFavoritesBar"]');
+    if (favorites) renderVolcFavorites(favorites);
+    for (const role of ['volcMaleQuickVoice', 'volcFemaleQuickVoice']) {
+      const select = panel.querySelector(`[data-role="${role}"]`);
+      if (select) populateVolcQuickVoiceSelect(select, role);
+    }
+    const maleButton = panel.querySelector('[data-role="applyVolcMaleQuickVoice"]');
+    const femaleButton = panel.querySelector('[data-role="applyVolcFemaleQuickVoice"]');
+    if (maleButton) maleButton.disabled = !state.settings.volcMaleQuickVoice;
+    if (femaleButton) femaleButton.disabled = !state.settings.volcFemaleQuickVoice;
   }
 
   function getSortedChineseVoices() {
@@ -805,7 +970,7 @@
   function ensureControls(player) {
     let panel = document.getElementById(CONTROL_ID);
     if (panel) {
-      if (!panel.querySelector('[data-role="voiceEngine"]') || !panel.querySelector('[data-role="volcAuthMode"]') || !panel.querySelector('[data-role="volcVoice"]') || !panel.querySelector('[data-role="originalVolume"]')) {
+      if (!panel.querySelector('[data-role="voiceEngine"]') || !panel.querySelector('[data-role="volcAuthMode"]') || !panel.querySelector('[data-role="volcVoice"]') || !panel.querySelector('[data-role="volcFavoritesBar"]') || !panel.querySelector('[data-role="originalVolume"]')) {
         panel.remove();
         panel = null;
       }
@@ -939,6 +1104,20 @@
     legacyNote.textContent = 'Secret Key 不用于此接口';
 
     const volcVoice = createVolcVoicePicker();
+    const volcFavorites = document.createElement('span');
+    volcFavorites.className = `${SCRIPT_ID}-favorite-voices`;
+    volcFavorites.dataset.role = 'volcFavoritesBar';
+    renderVolcFavorites(volcFavorites);
+
+    const volcMaleQuickVoice = createVolcQuickVoiceSelect('volcMaleQuickVoice');
+    const volcFemaleQuickVoice = createVolcQuickVoiceSelect('volcFemaleQuickVoice');
+    const quickButtons = document.createElement('span');
+    quickButtons.className = `${SCRIPT_ID}-quick-buttons`;
+    const switchMaleVoice = makeButton('切男声', '切换到已设置的男声音色', () => applyVolcQuickVoice('volcMaleQuickVoice', '男声'));
+    switchMaleVoice.dataset.role = 'applyVolcMaleQuickVoice';
+    const switchFemaleVoice = makeButton('切女声', '切换到已设置的女声音色', () => applyVolcQuickVoice('volcFemaleQuickVoice', '女声'));
+    switchFemaleVoice.dataset.role = 'applyVolcFemaleQuickVoice';
+    quickButtons.append(switchMaleVoice, switchFemaleVoice);
 
     const voiceRate = document.createElement('select');
     voiceRate.dataset.role = 'voiceRate';
@@ -1000,12 +1179,17 @@
       makeAuthRow('Access Token', accessTokenWrap, 'legacy'),
       makeAuthRow('说明', legacyNote, 'legacy'),
       makeVolcRow('火山音色', volcVoice),
+      makeVolcRow('常用音色', volcFavorites),
+      makeVolcRow('男声快捷', volcMaleQuickVoice),
+      makeVolcRow('女声快捷', volcFemaleQuickVoice),
+      makeVolcRow('快捷切换', quickButtons),
       makeRow('测试语音', testVoiceButton),
       makeRow('配音语速', voiceRate),
       makeRow('原声音量', originalVolumeWrap),
       buttons
     );
     player.appendChild(panel);
+    syncVolcFavoriteControls();
     syncVoiceEngineRows();
     return panel;
   }
@@ -1064,6 +1248,7 @@
         if (valueLabel) valueLabel.textContent = `${input.value}%`;
       }
     }
+    syncVolcFavoriteControls();
   }
 
   function applyVoiceSettings() {
