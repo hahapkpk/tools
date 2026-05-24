@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.6
+// @version      0.5.7
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube with local translation and optional Chinese dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -1606,22 +1606,52 @@
       .find(button => /内容转文字|显示文字记录|show transcript/i.test(button.textContent || ''));
   }
 
-  async function fetchTranscriptCuesFromPanel() {
-    const loaded = readTranscriptCuesFromPanel();
-    if (loaded.length) return loaded;
-    let trigger = findTranscriptTrigger();
-    if (!trigger) {
-      document.querySelector('#description-inline-expander #expand')?.click();
-      await sleep(250);
-      trigger = findTranscriptTrigger();
+  function findTranscriptLanguageOption(sourceTrack, sourceLanguage) {
+    const normalizedName = getTrackName(sourceTrack).replace(/\s+/g, ' ').trim();
+    const languageLabels = {
+      en: ['英语', 'English'],
+      de: ['德语', 'German', 'Deutsch'],
+      fr: ['法语', 'French', 'Francais'],
+      es: ['西班牙语', 'Spanish', 'Espanol'],
+      ja: ['日语', 'Japanese'],
+      ko: ['韩语', 'Korean'],
+      pt: ['葡萄牙语', 'Portuguese'],
+      it: ['意大利语', 'Italian'],
+      ru: ['俄语', 'Russian']
+    };
+    const labels = [normalizedName, ...(languageLabels[sourceLanguage] || [])].filter(Boolean);
+    return Array.from(document.querySelectorAll('ytd-transcript-footer-renderer tp-yt-paper-item[role="option"], ytd-transcript-footer-renderer tp-yt-paper-item'))
+      .find(option => {
+        const text = option.textContent.replace(/\s+/g, ' ').trim();
+        return labels.some(label => text === label || text.startsWith(`${label} (`) || text.includes(label));
+      });
+  }
+
+  async function selectTranscriptSourceLanguage(sourceTrack, sourceLanguage) {
+    const option = findTranscriptLanguageOption(sourceTrack, sourceLanguage);
+    if (!option) throw new Error('转写文稿中没有找到原始字幕语言，请换一个字幕来源。');
+    option.click();
+    await sleep(500);
+  }
+
+  async function fetchTranscriptCuesFromPanel(sourceTrack, sourceLanguage) {
+    if (!readTranscriptCuesFromPanel().length) {
+      let trigger = findTranscriptTrigger();
+      if (!trigger) {
+        document.querySelector('#description-inline-expander #expand')?.click();
+        await sleep(250);
+        trigger = findTranscriptTrigger();
+      }
+      if (!trigger) throw new Error('字幕接口受限，且当前视频没有可读取的转写文稿。');
+      showStatus('字幕接口受限，正在改用视频转写文稿...', 120000);
+      trigger.click();
+      for (let attempt = 0; attempt < 30 && !readTranscriptCuesFromPanel().length; attempt += 1) await sleep(250);
     }
-    if (!trigger) throw new Error('字幕接口受限，且当前视频没有可读取的转写文稿。');
-    showStatus('字幕接口受限，正在改用视频转写文稿...', 120000);
-    trigger.click();
+    await selectTranscriptSourceLanguage(sourceTrack, sourceLanguage);
     for (let attempt = 0; attempt < 30; attempt += 1) {
-      await sleep(250);
       const cues = readTranscriptCuesFromPanel();
       if (cues.length) return cues;
+      await sleep(250);
     }
     throw new Error('视频转写文稿读取失败，请稍后重试。');
   }
@@ -1771,7 +1801,7 @@
   }
 
   function getCacheKey(videoId, source) {
-    return `${CACHE_PREFIX}${videoId}:${source.kind}:${TARGET_LANG}:v4`;
+    return `${CACHE_PREFIX}${videoId}:${source.kind}:${TARGET_LANG}:v5`;
   }
 
   function getLegacyTranslatedCacheKey(videoId) {
@@ -1830,7 +1860,7 @@
         sourceRaw = normalizeRawCues(sourceJson);
       } catch (error) {
         if (!error.rateLimited) throw error;
-        sourceRaw = await fetchTranscriptCuesFromPanel();
+        sourceRaw = await fetchTranscriptCuesFromPanel(source.sourceTrack, source.sourceLanguage);
       }
       const translated = await translateCuesLocally(sourceRaw, source.sourceLanguage);
       if (!translated.length) throw new Error('字幕接口返回了空字幕。');
