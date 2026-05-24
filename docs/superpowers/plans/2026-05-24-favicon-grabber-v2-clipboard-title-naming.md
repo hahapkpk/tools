@@ -2,9 +2,9 @@
 
 > **供执行代理使用：** 必须使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans` 按任务执行本计划，并使用复选框跟踪进度。
 
-**目标：** 新建 V2 单页工具，在保持原页面和图标读取流程不变的前提下，增加剪贴板取网址、网页标题短名称和按网站名称保存图片。
+**目标：** 维护 V2 单页工具，在保持原页面和图标读取流程不变的前提下，增加复制网站名称能力，并优先使用网页标题中的简短中文名称。
 
-**架构：** 复制现有页面为 `favicon-grabber-v2.html` 后，只在 V2 加入独立可测试的名称整理、标题解析、剪贴板入口和文件名构造函数。测试脚本从 V2 HTML 装载页面脚本并使用最小浏览器替身验证新增逻辑；原页面通过版本差异检查确保未被改动。
+**架构：** 继续只修改 `favicon-grabber-v2.html`：复用已有保存名称字段和 `getActiveSiteName()`，增加旁侧复制按钮及 `copySiteName()`；扩展 `normalizeSiteName()` 的候选选择以优先短中文名称。测试脚本从 V2 HTML 装载页面脚本验证新增逻辑；原页面通过版本差异检查确保未被改动。
 
 **技术栈：** HTML、CSS、原生浏览器 JavaScript、Node.js 内置 `node:test` 与 `vm`。
 
@@ -126,3 +126,64 @@ git push origin main
 ```
 
 发布后提供 GitHub Pages 可访问地址，供用户测试 V2 页面。
+
+### 任务 4：复制名称与中文优先迭代
+
+**文件：**
+- 修改：`favicon-grabber-v2.html`
+- 修改：`tests/favicon-grabber-v2.test.js`
+- 修改：`docs/superpowers/specs/2026-05-24-favicon-grabber-clipboard-title-naming-design.md`
+
+- [ ] **步骤 1：先写失败测试**
+
+加入断言：
+
+```js
+assert.equal(context.normalizeSiteName('RED | 小红书 - 你的生活指南', 'xiaohongshu.com'), '小红书');
+await context.copySiteName();
+assert.equal(copiedText, '小红书');
+```
+
+预期执行 `node --test tests/favicon-grabber-v2.test.js` 时失败，因为现有 V2 未提供 `copySiteName()`，且中英候选规则尚未明确覆盖该案例。
+
+- [ ] **步骤 2：实现复制名称按钮和中文优先规则**
+
+在 `保存名称` 行内加入按钮：
+
+```html
+<div class="name-row">
+  <input type="text" id="siteNameInput" maxlength="40" placeholder="网站名称" />
+  <button id="copyNameBtn" class="copy-name-btn" onclick="copySiteName()">复制名称</button>
+</div>
+```
+
+实现：
+
+```js
+async function copySiteName() {
+  const name = getActiveSiteName();
+  try {
+    await navigator.clipboard.writeText(name);
+    copyNameBtn.textContent = '已复制';
+  } catch {
+    titleStatus.textContent = '无法复制名称，请手动复制。';
+  }
+}
+```
+
+并在 `normalizeSiteName()` 对分隔后的候选项优先选取包含中文且不像描述语的简短候选，未找到时继续沿用现有英文或域名回退逻辑。
+
+- [ ] **步骤 3：验证并发布**
+
+执行：
+
+```powershell
+node --test tests/favicon-grabber-v2.test.js
+git diff --check
+git diff --exit-code -- favicon-grabber.html
+git add -- favicon-grabber-v2.html tests/favicon-grabber-v2.test.js docs/superpowers/specs/2026-05-24-favicon-grabber-clipboard-title-naming-design.md docs/superpowers/plans/2026-05-24-favicon-grabber-v2-clipboard-title-naming.md
+git commit -m "feat: add copy name action to favicon grabber v2"
+git push origin main
+```
+
+发布后验证 GitHub Pages 中 V2 页面存在 `复制名称` 按钮。

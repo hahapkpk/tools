@@ -73,7 +73,7 @@ function loadPage(overrides = {}) {
   const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
   const source = scripts.at(-1)[1];
   const elements = Object.fromEntries(
-    ['urlInput', 'results', 'ddgLink', 'namePanel', 'siteNameInput', 'titleStatus']
+    ['urlInput', 'results', 'ddgLink', 'namePanel', 'siteNameInput', 'copyNameBtn', 'titleStatus']
       .map(id => [id, new StubElement()])
   );
   const document = {
@@ -89,12 +89,13 @@ function loadPage(overrides = {}) {
     }
     return { ok: false, json: async () => ({}) };
   });
+  const clipboardWrites = [];
   const context = {
     document,
     navigator: {
       clipboard: {
         readText: async () => 'https://github.com/openai',
-        writeText: async () => {}
+        writeText: async text => clipboardWrites.push(text)
       }
     },
     fetch,
@@ -106,7 +107,7 @@ function loadPage(overrides = {}) {
   };
   vm.createContext(context);
   vm.runInContext(source, context, { filename: htmlPath });
-  return { context, elements };
+  return { context, elements, clipboardWrites };
 }
 
 test('根据标题和域名生成简洁、安全的网站名称', () => {
@@ -121,6 +122,8 @@ test('根据标题和域名生成简洁、安全的网站名称', () => {
     'GitHub'
   );
   assert.equal(context.normalizeSiteName('微信读书 / 精选阅读：发现好内容?', 'weread.qq.com'), '微信读书');
+  assert.equal(context.normalizeSiteName('RED | 小红书 - 你的生活指南', 'xiaohongshu.com'), '小红书');
+  assert.equal(context.normalizeSiteName('Appark | 全球应用排行 | App Store 数据', 'apparark.ai'), 'Appark');
   assert.ok(context.normalizeSiteName('ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890LONGNAME', 'example.com').length <= 40);
 });
 
@@ -148,4 +151,12 @@ test('网页标题读取失败时仍使用域名名称保存', async () => {
   assert.equal(elements.siteNameInput.value, 'GitHub');
   assert.match(elements.titleStatus.textContent, /使用域名名称/);
   assert.ok(elements.results.children.length > 0);
+});
+
+test('复制名称按钮复制当前网站名称而非下载文件名', async () => {
+  const { context, elements, clipboardWrites } = loadPage();
+  elements.urlInput.value = 'https://xiaohongshu.com';
+  elements.siteNameInput.value = '小红书';
+  await context.copySiteName();
+  assert.deepEqual(clipboardWrites, ['小红书']);
 });

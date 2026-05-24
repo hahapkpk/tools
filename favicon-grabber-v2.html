@@ -95,7 +95,29 @@
       font-size: 13px;
       font-weight: 500;
     }
-    .name-panel input { width: 100%; }
+    .name-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .name-row input { min-width: 0; }
+    .copy-name-btn {
+      flex: none;
+      padding: 12px 18px;
+      border-radius: 10px;
+      border: 1px solid #333;
+      background: #222;
+      color: #ccc;
+      font-size: 14px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s;
+    }
+    .copy-name-btn:hover {
+      border-color: #3b82f6;
+      color: #fff;
+      background: #1e293b;
+    }
     .name-status {
       min-height: 18px;
       margin-top: 8px;
@@ -214,7 +236,10 @@
 
   <section id="namePanel" class="name-panel hidden">
     <label for="siteNameInput">保存名称</label>
-    <input type="text" id="siteNameInput" maxlength="40" placeholder="网站名称" />
+    <div class="name-row">
+      <input type="text" id="siteNameInput" maxlength="40" placeholder="网站名称" />
+      <button id="copyNameBtn" class="copy-name-btn" onclick="copySiteName()">复制名称</button>
+    </div>
     <p id="titleStatus" class="name-status"></p>
   </section>
   <div id="ddgLink"></div>
@@ -230,6 +255,7 @@
     const urlInput = document.getElementById('urlInput');
     const namePanel = document.getElementById('namePanel');
     const siteNameInput = document.getElementById('siteNameInput');
+    const copyNameBtn = document.getElementById('copyNameBtn');
     const titleStatus = document.getElementById('titleStatus');
     const brandNames = {
       github: 'GitHub',
@@ -328,7 +354,14 @@
         .map(cleanFilenameText)
         .filter(Boolean);
       const generic = /^(首页|主页|官网|登录|home|official site)$/i;
-      let name = pieces.find(piece => !generic.test(piece)) || cleanFilenameText(raw) || fallback;
+      const descriptiveChinese = /(官网|首页|指南|排行|下载|平台|发现|精选|内容|数据|服务)/;
+      const chineseName = pieces.find(piece =>
+        /[\u3400-\u9fff]/.test(piece) &&
+        piece.length <= 5 &&
+        !generic.test(piece) &&
+        !descriptiveChinese.test(piece)
+      );
+      let name = chineseName || pieces.find(piece => !generic.test(piece)) || cleanFilenameText(raw) || fallback;
       if (name.length > 40) {
         const fallbackInTitle = raw.toLowerCase().includes(fallback.toLowerCase());
         name = fallbackInTitle ? fallback : name.slice(0, 40).trim();
@@ -350,6 +383,17 @@
         .replace(new RegExp(`\\.${safeExt}$`, 'i'), '')
         .replace(/\s+/g, '-') || 'Icon';
       return `${safeSiteName}-${safeLabel}.${safeExt}`;
+    }
+
+    async function copySiteName() {
+      const name = getActiveSiteName();
+      try {
+        await navigator.clipboard.writeText(name);
+        copyNameBtn.textContent = '已复制';
+        setTimeout(() => copyNameBtn.textContent = '复制名称', 1500);
+      } catch {
+        titleStatus.textContent = '无法复制名称，请手动复制。';
+      }
     }
 
     function inferExtension(url, label) {
