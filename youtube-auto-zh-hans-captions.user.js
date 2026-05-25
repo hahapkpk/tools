@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.11
+// @version      0.5.12
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube with local translation and optional Chinese dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -37,6 +37,8 @@
   const CHECK_INTERVAL_MS = 120;
   const ROUTE_INTERVAL_MS = 800;
   const VOICE_MAX_LAG_SECONDS = 1.5;
+  const VOICE_SMART_LAG_THRESHOLD_SECONDS = 0.8;
+  const VOICE_SMART_MAX_PLAYBACK_RATE = 1.18;
   const VOICE_SENTENCE_MAX_GAP_SECONDS = 1.2;
   const VOICE_SENTENCE_MAX_UNITS = 120;
   const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -189,6 +191,7 @@
     volcFemaleQuickVoice: '',
     voiceRate: 1.08,
     voiceSyncMode: 'natural',
+    terminologyMap: '',
     originalVolume: 0.25
   };
 
@@ -351,7 +354,7 @@
         color: rgba(255,255,255,0.82);
         min-width: 0;
       }
-      #${CONTROL_ID} button, #${CONTROL_ID} select, #${CONTROL_ID} input {
+      #${CONTROL_ID} button, #${CONTROL_ID} select, #${CONTROL_ID} input, #${CONTROL_ID} textarea {
         border: 1px solid rgba(255,255,255,0.22);
         border-radius: 4px;
         background: rgba(255,255,255,0.1);
@@ -361,6 +364,13 @@
       }
       #${CONTROL_ID} select { width: 100%; }
       #${CONTROL_ID} input[type="range"] { width: 100%; }
+      #${CONTROL_ID} textarea {
+        width: 100%;
+        min-height: 66px;
+        padding: 5px 6px;
+        resize: vertical;
+        line-height: 1.45;
+      }
       #${CONTROL_ID} button {
         min-height: 26px;
         padding: 3px 8px;
@@ -996,7 +1006,7 @@
   function ensureControls(player) {
     let panel = document.getElementById(CONTROL_ID);
     if (panel) {
-      if (!panel.querySelector('[data-role="translationEngine"]') || !panel.querySelector('[data-role="voiceEngine"]') || !panel.querySelector('[data-role="volcAuthMode"]') || !panel.querySelector('[data-role="volcVoice"]') || !panel.querySelector('[data-role="volcFavoritesBar"]') || !panel.querySelector('[data-role="voiceSyncMode"]') || !panel.querySelector('[data-role="voiceProgressStatus"]') || !panel.querySelector('[data-role="originalVolume"]') || !panel.querySelector('[data-role="testVolcCredentials"]')) {
+      if (!panel.querySelector('[data-role="translationEngine"]') || !panel.querySelector('[data-role="voiceEngine"]') || !panel.querySelector('[data-role="volcAuthMode"]') || !panel.querySelector('[data-role="volcVoice"]') || !panel.querySelector('[data-role="volcFavoritesBar"]') || !panel.querySelector('[data-role="voiceSyncMode"]') || !panel.querySelector('[data-role="voiceProgressStatus"]') || !panel.querySelector('[data-role="originalVolume"]') || !panel.querySelector('[data-role="testVolcCredentials"]') || !panel.querySelector('[data-role="terminologyMap"]')) {
         panel.remove();
         panel = null;
       }
@@ -1185,7 +1195,7 @@
 
     const voiceSyncMode = document.createElement('select');
     voiceSyncMode.dataset.role = 'voiceSyncMode';
-    for (const [value, text] of [['natural', '自然流畅'], ['sync', '紧跟画面']]) {
+    for (const [value, text] of [['natural', '自然流畅'], ['smart', '智能语速追赶'], ['sync', '紧跟画面']]) {
       const option = document.createElement('option');
       option.value = value;
       option.textContent = text;
@@ -1193,6 +1203,13 @@
     }
     voiceSyncMode.value = state.settings.voiceSyncMode;
     voiceSyncMode.addEventListener('change', () => updateSetting('voiceSyncMode', voiceSyncMode.value));
+
+    const terminologyMap = document.createElement('textarea');
+    terminologyMap.dataset.role = 'terminologyMap';
+    terminologyMap.rows = 3;
+    terminologyMap.placeholder = 'Notion=诺申\nMCP=M C P';
+    terminologyMap.value = state.settings.terminologyMap || '';
+    terminologyMap.addEventListener('change', () => updateSetting('terminologyMap', terminologyMap.value));
 
     const voiceProgressWrap = document.createElement('span');
     voiceProgressWrap.className = `${SCRIPT_ID}-quick-buttons`;
@@ -1262,6 +1279,7 @@
       makeRow('测试语音', testVoiceButton),
       makeRow('配音语速', voiceRate),
       makeVolcRow('配音同步', voiceSyncMode),
+      makeVolcRow('专有名词修正表', terminologyMap),
       makeVolcRow('配音状态', voiceProgressWrap),
       makeRow('原声音量', originalVolumeWrap),
       buttons
@@ -1275,7 +1293,7 @@
   }
 
   function updateSetting(key, value) {
-    if (key === 'voiceEngine' || key === 'volcAuthMode' || key === 'voiceName' || key === 'volcVoice' || key === 'voiceRate' || key === 'voiceSyncMode') {
+    if (key === 'voiceEngine' || key === 'volcAuthMode' || key === 'voiceName' || key === 'volcVoice' || key === 'voiceRate' || key === 'voiceSyncMode' || key === 'terminologyMap') {
       cancelSpeech();
       state.spokenCueIndex = -1;
     }
@@ -1302,7 +1320,7 @@
   function syncControlValues() {
     const panel = document.getElementById(CONTROL_ID);
     if (!panel) return;
-    const inputs = panel.querySelectorAll('input, select');
+    const inputs = panel.querySelectorAll('input, select, textarea');
     for (const input of inputs) {
       const rowText = input.parentElement?.innerText || '';
       if (input.type === 'checkbox') {
@@ -1318,6 +1336,7 @@
       }
       if (input.dataset.role === 'voiceRate') input.value = String(state.settings.voiceRate);
       if (input.dataset.role === 'voiceSyncMode') input.value = state.settings.voiceSyncMode;
+      if (input.dataset.role === 'terminologyMap') input.value = state.settings.terminologyMap || '';
       if (input.dataset.role === 'translationEngine') input.value = state.settings.translationEngine;
       if (input.dataset.role === 'voiceEngine') input.value = state.settings.voiceEngine;
       if (input.dataset.role === 'volcAuthMode') input.value = state.settings.volcAuthMode;
@@ -2212,6 +2231,33 @@
     return getSortedChineseVoices().find(voice => isLikelyMaleVoice(voice)) || null;
   }
 
+  function parseTerminologyMap(value = state.settings.terminologyMap) {
+    return String(value || '')
+      .split(/\r?\n/)
+      .map(line => {
+        const separator = line.indexOf('=');
+        if (separator < 1) return null;
+        const source = line.slice(0, separator).trim();
+        const spoken = line.slice(separator + 1).trim();
+        return source && spoken ? { source, spoken } : null;
+      })
+      .filter(Boolean)
+      .sort((left, right) => right.source.length - left.source.length);
+  }
+
+  function escapeRegExp(text) {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function applyVoiceTerminology(text) {
+    let result = String(text || '');
+    for (const entry of parseTerminologyMap()) {
+      const flags = /[A-Za-z]/.test(entry.source) ? 'gi' : 'g';
+      result = result.replace(new RegExp(escapeRegExp(entry.source), flags), entry.spoken);
+    }
+    return result;
+  }
+
   function getVolcAudioCacheKey(text) {
     return `${state.settings.volcVoice}|${state.settings.voiceRate}|${text}`;
   }
@@ -2352,14 +2398,14 @@
   }
 
   function speakVolcCue(cue, index) {
-    const text = cue.text.replace(/\[[^\]]+\]/g, '').replace(/\s+/g, ' ').trim();
+    const text = applyVoiceTerminology(cue.text).replace(/\[[^\]]+\]/g, '').replace(/\s+/g, ' ').trim();
     if (!text || text.length < 2) return;
     speakVolcText(text);
     prefetchVolcCues(index + 1, 2);
   }
 
   function enqueueVolcCue(cue, index) {
-    const text = cue.text.replace(/\[[^\]]+\]/g, '').replace(/\s+/g, ' ').trim();
+    const text = applyVoiceTerminology(cue.text).replace(/\[[^\]]+\]/g, '').replace(/\s+/g, ' ').trim();
     if (!text || text.length < 2) return;
     state.remoteVoiceQueue.push({ text, index, start: cue.start, end: cue.end });
     refreshVoiceProgressStatus();
@@ -2370,6 +2416,25 @@
   function shouldSkipQueuedVolcCue(item, video) {
     if (state.settings.voiceSyncMode !== 'sync') return false;
     return Boolean(video && video.currentTime - Number(item.end || 0) > VOICE_MAX_LAG_SECONDS);
+  }
+
+  function getVolcPlaybackRate(item, video) {
+    if (state.settings.voiceSyncMode !== 'smart' || !item || !video) return 1;
+    const lag = Math.max(0, video.currentTime - Number(item.start || 0));
+    if (lag <= VOICE_SMART_LAG_THRESHOLD_SECONDS) return 1;
+    if (lag <= 2.5) return 1.06;
+    if (lag <= 5) return 1.12;
+    return VOICE_SMART_MAX_PLAYBACK_RATE;
+  }
+
+  function recoverVolcQueueAfterError(audio, token) {
+    if (token !== state.remoteVoiceToken || state.remoteAudio !== audio) return;
+    audio.pause();
+    state.remoteAudio = null;
+    state.remoteVoiceCurrent = null;
+    state.remoteVoiceStarting = false;
+    updateVoiceProgressStatus('播放异常，继续配音', 2500);
+    playNextVolcCue();
   }
 
   async function playNextVolcCue() {
@@ -2389,6 +2454,7 @@
     const token = state.remoteVoiceToken;
     state.remoteVoiceStarting = true;
     refreshVoiceProgressStatus();
+    let audio = null;
     try {
       const url = await getVolcAudioUrl(item.text);
       if (token !== state.remoteVoiceToken) return;
@@ -2397,9 +2463,12 @@
         playNextVolcCue();
         return;
       }
-      const audio = new Audio(url);
+      audio = new Audio(url);
+      audio.playbackRate = getVolcPlaybackRate(item, video);
+      audio.preservesPitch = true;
       state.remoteAudio = audio;
       state.remoteVoiceCurrent = item;
+      if (audio.playbackRate > 1) updateVoiceProgressStatus(`智能追赶 ${audio.playbackRate.toFixed(2)}x`, 1800);
       refreshVoiceProgressStatus();
       audio.addEventListener('ended', () => {
         if (token !== state.remoteVoiceToken) return;
@@ -2408,9 +2477,14 @@
         refreshVoiceProgressStatus();
         playNextVolcCue();
       }, { once: true });
+      audio.addEventListener('error', () => recoverVolcQueueAfterError(audio, token), { once: true });
       if (!video.paused) await audio.play();
     } catch (error) {
       if (token === state.remoteVoiceToken) {
+        if (audio) {
+          recoverVolcQueueAfterError(audio, token);
+          return;
+        }
         state.remoteAudio = null;
         state.remoteVoiceCurrent = null;
         state.remoteVoiceStarting = false;
@@ -2429,7 +2503,7 @@
       : Boolean(getVolcApiKey());
     if (state.settings.voiceEngine !== 'volc' || !hasCredentials) return;
     for (const cue of state.voiceCues.slice(startIndex, startIndex + count)) {
-      const text = cue.text.replace(/\[[^\]]+\]/g, '').replace(/\s+/g, ' ').trim();
+      const text = applyVoiceTerminology(cue.text).replace(/\[[^\]]+\]/g, '').replace(/\s+/g, ' ').trim();
       if (text.length >= 2) getVolcAudioUrl(text, false).catch(() => {});
     }
   }
