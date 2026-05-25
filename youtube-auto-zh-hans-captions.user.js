@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.10
+// @version      0.5.11
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube with local translation and optional Chinese dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -37,6 +37,8 @@
   const CHECK_INTERVAL_MS = 120;
   const ROUTE_INTERVAL_MS = 800;
   const VOICE_MAX_LAG_SECONDS = 1.5;
+  const VOICE_SENTENCE_MAX_GAP_SECONDS = 1.2;
+  const VOICE_SENTENCE_MAX_UNITS = 120;
   const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
   const TARGET_LANG = 'zh-Hans';
   const SOURCE_LANG_RE = /^en(?:-|$)/i;
@@ -193,6 +195,7 @@
   const state = {
     videoId: '',
     cues: [],
+    voiceCues: [],
     rawTargetCues: [],
     rawSourceCues: [],
     cueIndex: -1,
@@ -993,7 +996,7 @@
   function ensureControls(player) {
     let panel = document.getElementById(CONTROL_ID);
     if (panel) {
-      if (!panel.querySelector('[data-role="translationEngine"]') || !panel.querySelector('[data-role="voiceEngine"]') || !panel.querySelector('[data-role="volcAuthMode"]') || !panel.querySelector('[data-role="volcVoice"]') || !panel.querySelector('[data-role="volcFavoritesBar"]') || !panel.querySelector('[data-role="voiceSyncMode"]') || !panel.querySelector('[data-role="voiceProgressStatus"]') || !panel.querySelector('[data-role="originalVolume"]')) {
+      if (!panel.querySelector('[data-role="translationEngine"]') || !panel.querySelector('[data-role="voiceEngine"]') || !panel.querySelector('[data-role="volcAuthMode"]') || !panel.querySelector('[data-role="volcVoice"]') || !panel.querySelector('[data-role="volcFavoritesBar"]') || !panel.querySelector('[data-role="voiceSyncMode"]') || !panel.querySelector('[data-role="voiceProgressStatus"]') || !panel.querySelector('[data-role="originalVolume"]') || !panel.querySelector('[data-role="testVolcCredentials"]')) {
         panel.remove();
         panel = null;
       }
@@ -1106,6 +1109,12 @@
     }
     const testVoiceButton = makeButton('测试语音', '朗读一句示例，确认当前语音人物', () => testSelectedVoice());
     testVoiceButton.dataset.role = 'testVoiceButton';
+    const testVolcCredentialsButton = makeButton('测试 Key', '验证当前火山凭证并播放测试语音', () => {
+      if (state.settings.volcAuthMode === 'legacy') saveVolcLegacyCredentials(appId.value, accessToken.value);
+      else saveVolcApiKey(apiKey.value);
+      testVolcCredentials();
+    });
+    testVolcCredentialsButton.dataset.role = 'testVolcCredentials';
 
     const apiKeyWrap = document.createElement('span');
     apiKeyWrap.className = `${SCRIPT_ID}-api-key`;
@@ -1244,6 +1253,7 @@
       makeAuthRow('APP ID', appId, 'legacy'),
       makeAuthRow('Access Token', accessTokenWrap, 'legacy'),
       makeAuthRow('说明', legacyNote, 'legacy'),
+      makeVolcRow('凭证测试', testVolcCredentialsButton),
       makeVolcRow('火山音色', volcVoice),
       makeVolcRow('常用音色', volcFavorites),
       makeVolcRow('男声快捷', volcMaleQuickVoice),
@@ -1747,6 +1757,35 @@
     return merged;
   }
 
+  function mergeVoiceCues(displayCues) {
+    const merged = [];
+    let current = null;
+    for (const cue of displayCues) {
+      const singleLineText = String(cue.text || '').replace(/\n+/g, ' ');
+      const text = cleanCaptionText(singleLineText);
+      if (!text) continue;
+      const normalizedCue = { ...cue, text };
+      if (!current) {
+        current = normalizedCue;
+        continue;
+      }
+      const gap = normalizedCue.start - current.end;
+      const shouldSplit = /[。！？.!?]\s*$/.test(current.text) ||
+        gap > VOICE_SENTENCE_MAX_GAP_SECONDS ||
+        countTextUnits(current.text) >= VOICE_SENTENCE_MAX_UNITS ||
+        countTextUnits(`${current.text}${normalizedCue.text}`) > VOICE_SENTENCE_MAX_UNITS;
+      if (shouldSplit) {
+        merged.push(current);
+        current = normalizedCue;
+        continue;
+      }
+      current.text = cleanCaptionText(`${current.text}${needsSpace(current.text, normalizedCue.text) ? ' ' : ''}${normalizedCue.text}`);
+      current.end = Math.max(current.end, normalizedCue.end);
+    }
+    if (current) merged.push(current);
+    return merged;
+  }
+
   function countTextUnits(text) {
     return Array.from(text.replace(/\s/g, '')).length;
   }
@@ -1957,6 +1996,7 @@
   function applyCues(videoId, data, token, statusText) {
     if (token !== state.loadToken || videoId !== state.videoId) return;
     state.cues = data.cues || [];
+    state.voiceCues = mergeVoiceCues(state.cues);
     state.rawTargetCues = data.rawTargetCues || [];
     state.rawSourceCues = data.rawSourceCues || [];
     state.cueIndex = -1;
@@ -2051,18 +2091,36 @@
 
   function syncVoice(cue, index, video) {
     if (!state.settings.voiceEnabled || !cue || index < 0 || video.paused) return;
-    if (index === state.spokenCueIndex) return;
-    state.spokenCueIndex = index;
     if (state.settings.voiceEngine === 'volc') {
-      enqueueVolcCue(cue, index);
+      const voiceIndex = findVoiceCueIndex(video.currentTime);
+      const voiceCue = voiceIndex >= 0 ? state.voiceCues[voiceIndex] : null;
+      if (!voiceCue || voiceIndex === state.spokenCueIndex) return;
+      state.spokenCueIndex = voiceIndex;
+      enqueueVolcCue(voiceCue, voiceIndex);
       return;
     }
+    if (index === state.spokenCueIndex) return;
+    state.spokenCueIndex = index;
     if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance !== 'function') {
       showStatus('当前浏览器不支持中文配音');
       updateSetting('voiceEnabled', false);
       return;
     }
     speakCue(cue);
+  }
+
+  function findVoiceCueIndex(time) {
+    const adjusted = time + (Number(state.settings.offsetMs) || 0) / 1000;
+    let low = 0;
+    let high = state.voiceCues.length - 1;
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const cue = state.voiceCues[mid];
+      if (adjusted < cue.start) high = mid - 1;
+      else if (adjusted > cue.end) low = mid + 1;
+      else return mid;
+    }
+    return -1;
   }
 
   function speakCue(cue) {
@@ -2081,6 +2139,35 @@
       return;
     }
     speakText('这是一段中文语音测试，用来确认当前选择的配音人物。', Number(state.settings.voiceRate));
+  }
+
+  async function testVolcCredentials() {
+    const text = '这是火山语音连接测试。';
+    cancelSpeech();
+    const token = state.remoteVoiceToken;
+    showStatus('正在测试火山语音连接...', 30000);
+    try {
+      const url = await requestVolcAudioWithRetry(text);
+      if (token !== state.remoteVoiceToken) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      const audio = new Audio(url);
+      state.remoteAudio = audio;
+      audio.addEventListener('ended', () => {
+        URL.revokeObjectURL(url);
+        if (token !== state.remoteVoiceToken) return;
+        state.remoteAudio = null;
+        catchUpVolcNarration();
+      }, { once: true });
+      audio.addEventListener('error', () => URL.revokeObjectURL(url), { once: true });
+      await audio.play();
+      showStatus('火山凭证正常，语音连接成功', 5000);
+    } catch (error) {
+      if (token !== state.remoteVoiceToken) return;
+      state.remoteAudio = null;
+      showStatus(error.message || '火山语音连接测试失败', 7000);
+    }
   }
 
   function speakText(text, rate) {
@@ -2341,7 +2428,7 @@
       ? Object.values(getVolcLegacyCredentials()).every(Boolean)
       : Boolean(getVolcApiKey());
     if (state.settings.voiceEngine !== 'volc' || !hasCredentials) return;
-    for (const cue of state.cues.slice(startIndex, startIndex + count)) {
+    for (const cue of state.voiceCues.slice(startIndex, startIndex + count)) {
       const text = cue.text.replace(/\[[^\]]+\]/g, '').replace(/\s+/g, ' ').trim();
       if (text.length >= 2) getVolcAudioUrl(text, false).catch(() => {});
     }
@@ -2408,6 +2495,7 @@
     if (!videoId) return;
     state.videoId = videoId;
     state.cues = [];
+    state.voiceCues = [];
     state.rawTargetCues = [];
     state.rawSourceCues = [];
     state.cueIndex = -1;
