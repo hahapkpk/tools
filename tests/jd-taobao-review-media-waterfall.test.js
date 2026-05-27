@@ -81,9 +81,110 @@ test('淘宝 adapter 从已渲染卡片状态提取真实原图而非占位图',
   }]);
 });
 
+test('淘宝图集模式从 React reviews 提取真实图片而非占位缩略图', () => {
+  const item = {
+    __reactFiber$gallery: {
+      return: {
+        return: {
+          memoizedProps: {
+            reviews: [{
+              skuText: { 颜色分类: '粉蓝款' },
+              reviewInfo: {
+                date: '2026年5月15日',
+                content: '实物漂亮',
+                picList: ['//img.alicdn.com/imgextra/gallery-real.jpg'],
+                videoList: []
+              }
+            }]
+          }
+        }
+      }
+    }
+  };
+  const root = {
+    querySelectorAll(selector) {
+      if (selector.includes('commentsImgItem')) return [item];
+      return [];
+    }
+  };
+  assert.deepEqual(api.adapters.taobao.collectMedia(root), [{
+    type: 'image',
+    src: 'https://img.alicdn.com/imgextra/gallery-real.jpg',
+    poster: '',
+    text: '实物漂亮',
+    meta: '2026年5月15日 粉蓝款'
+  }]);
+});
+
 test('京东 adapter 在尚未渲染晒单媒体时返回空数组', () => {
   const root = { querySelectorAll: () => [] };
   assert.deepEqual(api.adapters.jd.collectMedia(root), []);
+});
+
+test('京东原生响应中的 pictureInfoList 转换为真实大图媒体', () => {
+  const payload = {
+    result: {
+      data: [{
+        commentInfo: {
+          commentData: '背起来舒服',
+          productSpecifications: '已购 黑色',
+          newCommentDate: '2026-05-20 20:56:20',
+          pictureInfoList: [{
+            picURL: 'https://img30.360buyimg.com/shaidan/s300x300_photo.jpg',
+            largePicURL: 'https://img30.360buyimg.com/shaidan/s1080x1080_photo.jpg',
+            mediaType: '1'
+          }]
+        }
+      }]
+    }
+  };
+  assert.deepEqual(api.collectJdPayloadMedia(payload), [{
+    type: 'image',
+    src: 'https://img30.360buyimg.com/shaidan/s1080x1080_photo.jpg',
+    poster: 'https://img30.360buyimg.com/shaidan/s300x300_photo.jpg',
+    text: '背起来舒服',
+    meta: '2026-05-20 20:56:20 已购 黑色'
+  }]);
+});
+
+test('京东原生 XHR 响应会把评价媒体送入图片墙监听器', () => {
+  class FakeXHR {
+    open(method, url) {
+      this.url = url;
+    }
+    addEventListener(name, listener) {
+      if (name === 'load') this.onLoad = listener;
+    }
+    send() {
+      this.responseText = JSON.stringify({
+        commentInfo: {
+          pictureInfoList: [{ largePicURL: 'https://img30.360buyimg.com/shaidan/real.jpg' }]
+        }
+      });
+      this.onLoad();
+    }
+  }
+  const received = [];
+  const host = { XMLHttpRequest: FakeXHR };
+  const stop = api.installJdResponseCapture(host, (items) => received.push(...items));
+  const request = new host.XMLHttpRequest();
+  request.open('POST', 'https://api.m.jd.com/client.action');
+  request.send();
+  stop();
+  assert.equal(received[0].src, 'https://img30.360buyimg.com/shaidan/real.jpg');
+});
+
+test('继续加载时优先驱动原生评价列表内部的滚动容器', () => {
+  const child = { clientHeight: 200, scrollHeight: 600, parentElement: null };
+  const root = {
+    clientHeight: 800,
+    scrollHeight: 800,
+    parentElement: null,
+    querySelectorAll() {
+      return [child];
+    }
+  };
+  assert.equal(api.findScrollable(root), child);
 });
 
 test('预览打开时点击外层只退回图片墙，再次点击才关闭图片墙', () => {
@@ -97,7 +198,7 @@ test('预览打开时点击外层只退回图片墙，再次点击才关闭图�
   assert.equal(state.snapshot().wallOpen, false);
 });
 
-test('重复初始化仅生成一个实拍墙入口', () => {
+test('重复初始化仅生成一个图片墙入口且显示新名称', () => {
   const children = [];
   const mount = {
     ownerDocument: {
@@ -118,6 +219,7 @@ test('重复初始化仅生成一个实拍墙入口', () => {
   api.ensureLauncher(mount, () => {});
   api.ensureLauncher(mount, () => {});
   assert.equal(children.filter(child => child.id === 'review-media-wall-launcher').length, 1);
+  assert.equal(children[0].textContent, '图片墙');
 });
 
 test('加载新增媒体只追加此前未见的地址', () => {

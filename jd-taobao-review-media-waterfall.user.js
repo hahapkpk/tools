@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         京东/淘宝评价实拍墙
+// @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.1.0
+// @version      0.2.0
 // @description  将京东和淘宝/天猫评价图视频以瀑布流弹窗展示。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -73,16 +73,58 @@
     return null;
   }
 
+  function getReactProps(element, predicate) {
+    const fiberKey = element && Object.keys(element).find((key) => key.startsWith('__reactFiber'));
+    let fiber = fiberKey ? element[fiberKey] : null;
+    for (let depth = 0; fiber && depth < 12; depth += 1, fiber = fiber.return) {
+      if (predicate(fiber.memoizedProps || {})) return fiber.memoizedProps;
+    }
+    return null;
+  }
+
+  function getTaobaoMeta(review) {
+    const sku = review.skuText;
+    const skuText = typeof sku === 'object' && sku
+      ? Object.values(sku).filter(Boolean).join(' ')
+      : (sku || '');
+    return [review.reviewInfo?.date, skuText].filter(Boolean).join(' ');
+  }
+
+  function appendTaobaoReviewMedia(items, review) {
+    const info = review?.reviewInfo;
+    if (!info) return;
+    const text = (info.content || '').trim().replace(/\s+/g, ' ');
+    const meta = getTaobaoMeta(review);
+    (info.picList || []).forEach((src) => {
+      items.push({ type: 'image', src: absoluteMediaUrl(src), poster: '', text, meta });
+    });
+    (info.videoList || []).forEach((video) => {
+      const src = absoluteMediaUrl(typeof video === 'string' ? video : (video.url || video.videoUrl || video.playUrl));
+      const poster = absoluteMediaUrl(typeof video === 'object' ? (video.cover || video.coverUrl || '') : '');
+      if (src) items.push({ type: 'video', src, poster, text, meta });
+    });
+  }
+
+  function collectFromTaobaoGallery(nativeRoot) {
+    if (!nativeRoot) return [];
+    const item = nativeRoot.querySelectorAll('[class*="commentsImgItem--"]')[0];
+    const props = getReactProps(item, (value) => Array.isArray(value.reviews));
+    if (!props) return [];
+    const items = [];
+    props.reviews.forEach((review) => appendTaobaoReviewMedia(items, review));
+    return items;
+  }
+
   function collectFromAlbums(nativeRoot) {
     if (!nativeRoot) return [];
+    const galleryItems = collectFromTaobaoGallery(nativeRoot);
+    if (galleryItems.length) return galleryItems;
     const items = [];
     const comments = nativeRoot.querySelectorAll('[class*="Comment--"]');
     comments.forEach((comment) => {
       const state = getTaobaoCommentState(comment);
       const text = (state?.reviewInfo?.content || comment.innerText || '').trim().replace(/\s+/g, ' ');
-      const meta = state
-        ? [state.reviewInfo.date, state.skuText].filter(Boolean).join(' ')
-        : '';
+      const meta = state ? getTaobaoMeta(state) : '';
       const pictures = state?.reviewInfo?.picList || [];
       const videos = state?.reviewInfo?.videoList || [];
       if (pictures.length || videos.length) {
@@ -103,6 +145,94 @@
       });
     });
     return items;
+  }
+
+  function collectJdPayloadMedia(payload) {
+    const items = [];
+    const visited = new Set();
+    const processed = new Set();
+
+    function addComment(info) {
+      if (!info || processed.has(info) || !Array.isArray(info.pictureInfoList)) return;
+      processed.add(info);
+      const text = String(info.commentData || '').trim().replace(/\s+/g, ' ');
+      const meta = [info.newCommentDate, info.productSpecifications].filter(Boolean).join(' ');
+      info.pictureInfoList.forEach((media) => {
+        const poster = absoluteMediaUrl(media.picURL || media.coverUrl || '');
+        const videoSrc = absoluteMediaUrl(media.videoPlayUrl || media.videoUrl || media.playUrl || '');
+        const imageSrc = absoluteMediaUrl(media.largePicURL || media.picURL || '');
+        if (String(media.mediaType) === '2' && videoSrc) {
+          items.push({ type: 'video', src: videoSrc, poster, text, meta });
+        } else if (imageSrc) {
+          items.push({ type: 'image', src: imageSrc, poster, text, meta });
+        }
+      });
+    }
+
+    function visit(value) {
+      if (!value || typeof value !== 'object' || visited.has(value)) return;
+      visited.add(value);
+      addComment(value.commentInfo || value);
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+      } else {
+        Object.values(value).forEach(visit);
+      }
+    }
+    visit(payload);
+    return items;
+  }
+
+  function installJdResponseCapture(host, onMedia) {
+    if (!host || !onMedia) return () => {};
+    const captureKey = '__reviewMediaWallJdResponseCapture';
+    let capture = host[captureKey];
+    if (!capture) {
+      capture = { listeners: new Set() };
+      capture.emit = (payload) => {
+        const items = collectJdPayloadMedia(payload);
+        if (items.length) capture.listeners.forEach((listener) => listener(items));
+      };
+      host[captureKey] = capture;
+
+      const XHR = host.XMLHttpRequest;
+      if (XHR?.prototype) {
+        const originalOpen = XHR.prototype.open;
+        const originalSend = XHR.prototype.send;
+        XHR.prototype.open = function open(method, url, ...args) {
+          this.__rmwJdResponseUrl = String(url || '');
+          return originalOpen.call(this, method, url, ...args);
+        };
+        XHR.prototype.send = function send(...args) {
+          if (/api\.m\.jd\.com\/client\.action/.test(this.__rmwJdResponseUrl || '')) {
+            this.addEventListener('load', () => {
+              try {
+                capture.emit(JSON.parse(this.responseText));
+              } catch (error) {
+                return undefined;
+              }
+              return undefined;
+            }, { once: true });
+          }
+          return originalSend.apply(this, args);
+        };
+      }
+
+      if (typeof host.fetch === 'function') {
+        const originalFetch = host.fetch;
+        host.fetch = function fetch(input, ...args) {
+          const url = String(typeof input === 'string' ? input : input?.url || '');
+          return originalFetch.call(this, input, ...args).then((response) => {
+            if (/api\.m\.jd\.com\/client\.action/.test(url)) {
+              response.clone().json().then((payload) => capture.emit(payload)).catch(() => {});
+            }
+            return response;
+          });
+        };
+      }
+    }
+    capture.listeners.add(onMedia);
+    return () => capture.listeners.delete(onMedia);
   }
 
   function collectJdMedia(nativeRoot) {
@@ -148,6 +278,9 @@
       },
       findNativeRoot(doc) {
         return doc.querySelector('#rateList');
+      },
+      observeResponses(onMedia) {
+        return installJdResponseCapture(root, onMedia);
       },
       openNativeReviews(doc) {
         const button = doc.querySelector('.all-btn');
@@ -227,7 +360,7 @@
     launcher.id = IDS.launcher;
     launcher.className = 'review-media-wall-launcher';
     launcher.type = 'button';
-    launcher.textContent = '实拍墙';
+    launcher.textContent = '图片墙';
     launcher.addEventListener('click', onOpen);
     mount.appendChild(launcher);
     return launcher;
@@ -338,7 +471,7 @@
       const media = doc.createElement('img');
       media.src = item.poster || item.src;
       media.loading = 'lazy';
-      media.alt = '用户评价实拍';
+      media.alt = '用户评价图片';
       card.appendChild(media);
       if (item.type === 'video') card.appendChild(makeElement(doc, 'span', 'rmw-play', '▶'));
       card.addEventListener('click', () => {
@@ -351,6 +484,14 @@
   }
 
   function findScrollable(element) {
+    const nested = element?.querySelectorAll
+      ? Array.from(element.querySelectorAll('*')).filter((node) => node.scrollHeight > node.clientHeight + 10)
+      : [];
+    if (nested.length) {
+      return nested.reduce((selected, node) => (
+        node.scrollHeight - node.clientHeight > selected.scrollHeight - selected.clientHeight ? node : selected
+      ));
+    }
     let current = element;
     while (current && current.parentElement) {
       if (current.scrollHeight > current.clientHeight + 10) return current;
@@ -365,14 +506,14 @@
     const state = createWallState();
     const controller = createWallController(adapter);
     state.openWall();
-    adapter.openNativeReviews(doc);
+    let stopCapture = null;
 
     const backdrop = makeElement(doc, 'div', '', '');
     backdrop.id = IDS.backdrop;
     const modal = makeElement(doc, 'section', '', '');
     modal.id = IDS.modal;
     const header = makeElement(doc, 'header', 'rmw-header', '');
-    header.appendChild(makeElement(doc, 'h2', 'rmw-title', '实拍墙'));
+    header.appendChild(makeElement(doc, 'h2', 'rmw-title', '图片墙'));
     header.appendChild(makeElement(doc, 'span', 'rmw-subtitle', '同步原评价窗口中的图/视频、排序和款式筛选'));
     const sync = makeElement(doc, 'button', 'rmw-sync', '同步筛选结果');
     const close = makeElement(doc, 'button', 'rmw-close', '×');
@@ -388,6 +529,13 @@
     let nativeRoot = null;
     let disconnect = null;
     let attempts = 0;
+    if (adapter.observeResponses) {
+      stopCapture = adapter.observeResponses((items) => {
+        controller.append(items);
+        renderCards(doc, grid, state, modal, controller.items(), '当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
+      });
+    }
+    adapter.openNativeReviews(doc);
     function syncMedia(reset) {
       nativeRoot = adapter.findNativeRoot(doc);
       if (!nativeRoot) {
@@ -416,13 +564,14 @@
     grid.addEventListener('scroll', () => {
       if (!nativeRoot || grid.scrollTop + grid.clientHeight < grid.scrollHeight - 180) return;
       const scroller = findScrollable(nativeRoot);
-      scroller.scrollTop = scroller.scrollHeight;
+      scroller.scrollTop = Math.min(scroller.scrollHeight, scroller.scrollTop + Math.max(scroller.clientHeight, 200));
       scroller.dispatchEvent(new root.Event('scroll', { bubbles: true }));
       root.setTimeout(() => syncMedia(false), 250);
     });
     sync.addEventListener('click', () => syncMedia(true));
     close.addEventListener('click', () => {
       disconnect?.();
+      stopCapture?.();
       state.closeWall();
       backdrop.remove();
     });
@@ -431,6 +580,7 @@
       state.onBackdrop();
       if (!state.snapshot().wallOpen) {
         disconnect?.();
+        stopCapture?.();
         backdrop.remove();
       }
     });
@@ -462,7 +612,10 @@
     IDS,
     createWallState,
     createWallController,
+    collectJdPayloadMedia,
+    installJdResponseCapture,
     collectWithFallback,
+    findScrollable,
     ensureLauncher,
     init
   };
