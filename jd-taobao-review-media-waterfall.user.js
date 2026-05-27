@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.2.0
-// @description  将京东和淘宝/天猫评价图视频以瀑布流弹窗展示。
+// @version      0.2.1
+// @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
 // @match        https://item.taobao.com/*
@@ -412,19 +412,20 @@
 .rmw-sync:hover { border-color:#e1251b; color:#e1251b; }
 .rmw-close { width:40px; padding:0; font-size:25px; line-height:30px; border:0; }
 .rmw-guide { padding:10px 24px; color:#666; font-size:13px; background:#fff; }
-#${IDS.grid} { flex:1; overflow:auto; padding:18px 20px 30px; column-count:5; column-gap:14px; }
-.rmw-card { position:relative; break-inside:avoid; margin:0 0 14px; border-radius:10px; overflow:hidden; background:#eee; cursor:zoom-in; }
-.rmw-card img, .rmw-card video { display:block; width:100%; height:auto; min-height:92px; object-fit:cover; }
+#${IDS.grid} { flex:1; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); align-content:start; gap:14px; overflow-y:auto; overflow-x:hidden; padding:18px 20px 30px; }
+.rmw-card { position:relative; aspect-ratio:1 / 1; border-radius:12px; overflow:hidden; background:#eee; cursor:zoom-in; }
+.rmw-card img, .rmw-card video { display:block; width:100%; height:100%; object-fit:cover; }
 .rmw-play { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); border-radius:50%; width:50px; height:50px; display:grid; place-items:center; background:rgba(0,0,0,.58); color:white; font-size:23px; }
-.rmw-status { break-inside:avoid; padding:26px 16px; text-align:center; color:#777; font-size:14px; }
+.rmw-status { grid-column:1 / -1; padding:26px 16px; text-align:center; color:#777; font-size:14px; }
 #${IDS.preview} { position:absolute; inset:0; z-index:2; display:flex; align-items:center; justify-content:center; padding:34px; background:rgba(0,0,0,.82); }
 .rmw-preview-content { display:flex; max-width:min(1280px,90vw); max-height:86vh; border-radius:12px; overflow:hidden; background:#111; }
 .rmw-preview-media { display:flex; align-items:center; justify-content:center; min-width:300px; max-width:min(900px,68vw); background:#000; }
 .rmw-preview-media img, .rmw-preview-media video { max-width:100%; max-height:84vh; object-fit:contain; }
 .rmw-context { width:min(330px,26vw); padding:24px; background:#fff; color:#222; overflow:auto; line-height:1.65; }
 .rmw-context h3 { margin:0 0 12px; font-size:16px; }
-@media (max-width:1100px) { #${IDS.grid} { column-count:4; } }
-@media (max-width:760px) { #${IDS.grid} { column-count:2; } .rmw-preview-content { flex-direction:column; } .rmw-context { width:auto; } }
+@media (max-width:1100px) { #${IDS.grid} { grid-template-columns:repeat(4,minmax(0,1fr)); } }
+@media (max-width:900px) { #${IDS.grid} { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media (max-width:760px) { #${IDS.grid} { grid-template-columns:repeat(2,minmax(0,1fr)); } .rmw-preview-content { flex-direction:column; } .rmw-context { width:auto; } }
 `;
     doc.head.appendChild(style);
   }

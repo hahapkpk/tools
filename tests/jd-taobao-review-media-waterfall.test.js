@@ -1,7 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 
 const api = require('../jd-taobao-review-media-waterfall.user.js');
+const source = fs.readFileSync(require.resolve('../jd-taobao-review-media-waterfall.user.js'), 'utf8');
 
 test('识别京东和淘宝天猫商品详情页', () => {
   assert.equal(api.detectSite('https://item.jd.com/100117729409.html'), 'jd');
@@ -220,6 +222,13 @@ test('重复初始化仅生成一个图片墙入口且显示新名称', () => {
   api.ensureLauncher(mount, () => {});
   assert.equal(children.filter(child => child.id === 'review-media-wall-launcher').length, 1);
   assert.equal(children[0].textContent, '图片墙');
+});
+
+test('图片墙采用规则方形图集并仅在内容区纵向滚动', () => {
+  assert.match(source, /#\$\{IDS\.grid\}\s*\{[^}]*display:grid;[^}]*grid-template-columns:repeat\(5,minmax\(0,1fr\)\);[^}]*overflow-y:auto;/s);
+  assert.match(source, /\.rmw-card\s*\{[^}]*aspect-ratio:1\s*\/\s*1;/s);
+  assert.match(source, /\.rmw-card img,\s*\.rmw-card video\s*\{[^}]*height:100%;[^}]*object-fit:cover;/s);
+  assert.doesNotMatch(source, /column-count:/);
 });
 
 test('加载新增媒体只追加此前未见的地址', () => {
