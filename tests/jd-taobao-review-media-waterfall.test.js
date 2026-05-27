@@ -226,9 +226,14 @@ test('重复初始化仅生成一个图片墙入口且显示新名称', () => {
 
 test('图片墙采用规则方形图集并仅在内容区纵向滚动', () => {
   assert.match(source, /#\$\{IDS\.grid\}\s*\{[^}]*display:grid;[^}]*grid-template-columns:repeat\(5,minmax\(0,1fr\)\);[^}]*overflow-y:auto;/s);
-  assert.match(source, /\.rmw-card\s*\{[^}]*aspect-ratio:1\s*\/\s*1;/s);
-  assert.match(source, /\.rmw-card img,\s*\.rmw-card video\s*\{[^}]*height:100%;[^}]*object-fit:cover;/s);
+  assert.match(source, /\.rmw-card::before\s*\{[^}]*content:'';[^}]*display:block;[^}]*padding-top:100%;/s);
+  assert.match(source, /\.rmw-card img,\s*\.rmw-card video\s*\{[^}]*position:absolute;[^}]*inset:0;[^}]*height:100%;[^}]*object-fit:cover;/s);
   assert.doesNotMatch(source, /column-count:/);
+});
+
+test('图片墙按实际列宽设置卡片高度以避免天猫网格行重叠', () => {
+  assert.match(source, /function sizeGridCards\(grid\)\s*\{[\s\S]*card\.style\.height\s*=\s*`\$\{Math\.round\(width\)\}px`;/);
+  assert.match(source, /renderCards\([\s\S]*sizeGridCards\(grid\);/);
 });
 
 test('加载新增媒体只追加此前未见的地址', () => {

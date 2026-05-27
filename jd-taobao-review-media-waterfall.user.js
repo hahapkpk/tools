@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.2.1
+// @version      0.2.2
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -413,8 +413,9 @@
 .rmw-close { width:40px; padding:0; font-size:25px; line-height:30px; border:0; }
 .rmw-guide { padding:10px 24px; color:#666; font-size:13px; background:#fff; }
 #${IDS.grid} { flex:1; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); align-content:start; gap:14px; overflow-y:auto; overflow-x:hidden; padding:18px 20px 30px; }
-.rmw-card { position:relative; aspect-ratio:1 / 1; border-radius:12px; overflow:hidden; background:#eee; cursor:zoom-in; }
-.rmw-card img, .rmw-card video { display:block; width:100%; height:100%; object-fit:cover; }
+.rmw-card { position:relative; border-radius:12px; overflow:hidden; background:#eee; cursor:zoom-in; }
+.rmw-card::before { content:''; display:block; padding-top:100%; }
+.rmw-card img, .rmw-card video { position:absolute; inset:0; display:block; width:100%; height:100%; object-fit:cover; }
 .rmw-play { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); border-radius:50%; width:50px; height:50px; display:grid; place-items:center; background:rgba(0,0,0,.58); color:white; font-size:23px; }
 .rmw-status { grid-column:1 / -1; padding:26px 16px; text-align:center; color:#777; font-size:14px; }
 #${IDS.preview} { position:absolute; inset:0; z-index:2; display:flex; align-items:center; justify-content:center; padding:34px; background:rgba(0,0,0,.82); }
@@ -461,6 +462,13 @@
     modal.appendChild(overlay);
   }
 
+  function sizeGridCards(grid) {
+    grid.querySelectorAll('.rmw-card').forEach((card) => {
+      const width = card.getBoundingClientRect().width;
+      if (width > 0) card.style.height = `${Math.round(width)}px`;
+    });
+  }
+
   function renderCards(doc, grid, state, modal, items, emptyMessage) {
     grid.textContent = '';
     if (!items.length) {
@@ -482,6 +490,7 @@
       grid.appendChild(card);
     });
     grid.appendChild(makeElement(doc, 'div', 'rmw-status', '继续向下滚动以加载更多原生评价媒体'));
+    sizeGridCards(grid);
   }
 
   function findScrollable(element) {
@@ -529,7 +538,13 @@
 
     let nativeRoot = null;
     let disconnect = null;
+    let disconnectResize = null;
     let attempts = 0;
+    if (root.ResizeObserver) {
+      const resizeObserver = new root.ResizeObserver(() => sizeGridCards(grid));
+      resizeObserver.observe(grid);
+      disconnectResize = () => resizeObserver.disconnect();
+    }
     if (adapter.observeResponses) {
       stopCapture = adapter.observeResponses((items) => {
         controller.append(items);
@@ -572,6 +587,7 @@
     sync.addEventListener('click', () => syncMedia(true));
     close.addEventListener('click', () => {
       disconnect?.();
+      disconnectResize?.();
       stopCapture?.();
       state.closeWall();
       backdrop.remove();
@@ -581,6 +597,7 @@
       state.onBackdrop();
       if (!state.snapshot().wallOpen) {
         disconnect?.();
+        disconnectResize?.();
         stopCapture?.();
         backdrop.remove();
       }
