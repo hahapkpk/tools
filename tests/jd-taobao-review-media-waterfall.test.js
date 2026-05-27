@@ -219,6 +219,32 @@ test('预览可以有边界地切换上一张和下一张', () => {
   assert.equal(state.snapshot().canNext, false);
 });
 
+test('会话状态仅在当前脚本实例内恢复筛选尺寸与浏览位置', () => {
+  const session = api.createWallSession();
+  session.setFilter('video');
+  session.setCardSize('large');
+  session.rememberView({ scrollTop: 420, previewKey: 'b.mp4' });
+  assert.deepEqual(session.snapshot(), {
+    mediaFilter: 'video',
+    cardSize: 'large',
+    scrollTop: 420,
+    previewKey: 'b.mp4',
+    contextCollapsed: false,
+    loadingState: 'idle',
+    stagnantLoads: 0
+  });
+});
+
+test('类型筛选决定预览计数和切换集合', () => {
+  const items = [{ type: 'image', src: 'a.jpg' }, { type: 'video', src: 'b.mp4' }];
+  assert.deepEqual(api.filterMedia(items, 'video').map(item => item.src), ['b.mp4']);
+  const state = api.createWallState();
+  state.openWall();
+  state.openPreview(api.filterMedia(items, 'video'), 0);
+  assert.equal(state.snapshot().previewTotal, 1);
+  assert.equal(state.snapshot().previewPosition, 1);
+});
+
 test('重复初始化仅生成一个图片墙入口且显示新名称', () => {
   const children = [];
   const mount = {
@@ -253,6 +279,78 @@ test('图片墙采用规则方形图集并仅在内容区纵向滚动', () => {
 test('图片墙按实际列宽设置卡片高度以避免天猫网格行重叠', () => {
   assert.match(source, /function sizeGridCards\(grid\)\s*\{[\s\S]*card\.style\.height\s*=\s*`\$\{Math\.round\(width\)\}px`;/);
   assert.match(source, /renderCards\([\s\S]*sizeGridCards\(grid\);/);
+});
+
+test('图片墙包含类型尺寸控制与键盘可达的卡片', () => {
+  assert.match(source, /rmw-filter/);
+  assert.match(source, /rmw-size/);
+  assert.match(source, /card\.tabIndex\s*=\s*0/);
+  assert.match(source, /event\.key === 'Enter' \|\| event\.key === ' '/);
+  assert.match(source, /scrollIntoView/);
+  assert.match(source, /rmw-current/);
+});
+
+test('加载状态防止重复请求并在连续无新增后结束', () => {
+  const session = api.createWallSession();
+  assert.equal(session.beginLoad(), true);
+  assert.equal(session.beginLoad(), false);
+  session.finishLoad(false);
+  assert.equal(session.snapshot().loadingState, 'idle');
+  session.beginLoad();
+  session.finishLoad(false);
+  assert.equal(session.snapshot().loadingState, 'exhausted');
+  session.retryLoad();
+  assert.equal(session.snapshot().loadingState, 'idle');
+  assert.equal(session.snapshot().stagnantLoads, 0);
+});
+
+test('入口复用同一页面会话状态对象和媒体控制器', () => {
+  assert.match(source, /const wallSession = createWallSession\(\)/);
+  assert.match(source, /const wallController = createWallController\(adapter\)/);
+  assert.match(source, /openWall\(doc, adapter, wallSession, wallController\)/);
+});
+
+test('重新打开图片墙时不会清空本页已经加载的媒体', () => {
+  assert.match(source, /syncMedia\(attempts === 1 && !controller\.items\(\)\.length\)/);
+});
+
+test('媒体同步重新渲染不会覆盖恢复后的滚动位置', () => {
+  assert.match(source, /const desiredScroll = restoredScroll \? grid\.scrollTop : sessionSnapshot\.scrollTop/);
+  assert.match(source, /grid\.scrollTop = desiredScroll/);
+});
+
+test('预览提供计数评价折叠与单项原图操作', () => {
+  const session = api.createWallSession();
+  session.toggleContext();
+  assert.equal(session.snapshot().contextCollapsed, true);
+  assert.match(source, /rmw-counter/);
+  assert.match(source, /rmw-context-toggle/);
+  assert.match(source, /打开原图/);
+  assert.match(source, /下载原图/);
+});
+
+test('评价信息收起后操作按钮仍保留在媒体区域以便重新展开', () => {
+  assert.match(source, /rmw-preview-tools/);
+  assert.match(source, /mediaBox\.appendChild\(tools\)/);
+  assert.match(source, /tools\.append\(toggle, original, download\)/);
+});
+
+test('预览打开时点击整个弹窗外侧遮罩也只返回图片墙', () => {
+  assert.match(source, /const hadPreview = Boolean\(state\.snapshot\(\)\.preview\)/);
+  assert.match(source, /if \(hadPreview\) \{[\s\S]*renderPreview\(doc, modal, state, wallSession, revealCurrentCard\);[\s\S]*revealCurrentCard\(\);[\s\S]*return;/);
+});
+
+test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', () => {
+  assert.match(source, /let highlightKey = ''/);
+  assert.match(source, /item\.src === highlightKey/);
+  assert.match(source, /highlightKey = key/);
+  assert.match(source, /highlightKey = ''/);
+});
+
+test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
+  assert.match(source, /@version\s+0\.4\.0/);
+  assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
+  assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
 
 test('加载新增媒体只追加此前未见的地址', () => {

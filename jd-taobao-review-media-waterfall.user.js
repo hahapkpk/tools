@@ -1,13 +1,15 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.3.0
+// @version      0.4.0
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
 // @match        https://item.taobao.com/*
 // @run-at       document-idle
 // @grant        none
+// @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/jd-taobao-review-media-waterfall.user.js
+// @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/jd-taobao-review-media-waterfall.user.js
 // ==/UserScript==
 
 (function (root, factory) {
@@ -51,6 +53,61 @@
       },
       items() {
         return media.slice();
+      }
+    };
+  }
+
+  function filterMedia(items, filter) {
+    return filter === 'all' ? items.slice() : items.filter((item) => item.type === filter);
+  }
+
+  function createWallSession() {
+    const saved = {
+      mediaFilter: 'all',
+      cardSize: 'medium',
+      scrollTop: 0,
+      previewKey: '',
+      contextCollapsed: false,
+      loadingState: 'idle',
+      stagnantLoads: 0
+    };
+    return {
+      setFilter(value) {
+        saved.mediaFilter = value;
+      },
+      setCardSize(value) {
+        saved.cardSize = value;
+      },
+      toggleContext() {
+        saved.contextCollapsed = !saved.contextCollapsed;
+      },
+      rememberView({ scrollTop, previewKey }) {
+        if (Number.isFinite(scrollTop)) saved.scrollTop = scrollTop;
+        if (typeof previewKey === 'string') saved.previewKey = previewKey;
+      },
+      beginLoad() {
+        if (saved.loadingState === 'loading' || saved.loadingState === 'exhausted') return false;
+        saved.loadingState = 'loading';
+        return true;
+      },
+      finishLoad(added) {
+        if (added) {
+          saved.stagnantLoads = 0;
+          saved.loadingState = 'idle';
+          return;
+        }
+        saved.stagnantLoads += 1;
+        saved.loadingState = saved.stagnantLoads >= 2 ? 'exhausted' : 'idle';
+      },
+      failLoad() {
+        saved.loadingState = 'error';
+      },
+      retryLoad() {
+        saved.loadingState = 'idle';
+        saved.stagnantLoads = 0;
+      },
+      snapshot() {
+        return { ...saved };
       }
     };
   }
@@ -371,6 +428,8 @@
           wallOpen,
           preview,
           previewIndex,
+          previewPosition: preview ? previewIndex + 1 : 0,
+          previewTotal: previewItems.length,
           canPrevious: previewIndex > 0,
           canNext: previewIndex >= 0 && previewIndex < previewItems.length - 1
         };
@@ -438,22 +497,39 @@
 .rmw-sync:hover { border-color:#e1251b; color:#e1251b; }
 .rmw-close { width:40px; padding:0; font-size:25px; line-height:30px; border:0; }
 .rmw-guide { padding:10px 24px; color:#666; font-size:13px; background:#fff; }
+.rmw-toolbar { display:flex; align-items:center; gap:18px; padding:10px 20px; background:#fff; border-top:1px solid #f3f3f3; }
+.rmw-group { display:flex; gap:6px; }
+.rmw-filter, .rmw-size { height:32px; padding:0 13px; border:1px solid #e4e4e4; border-radius:17px; background:#fff; color:#555; cursor:pointer; }
+.rmw-filter.is-active, .rmw-size.is-active { border-color:#ff3b30; color:#ff3b30; background:#fff1f0; }
+.rmw-loaded { margin-left:auto; color:#777; font-size:13px; }
 #${IDS.grid} { flex:1; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); align-content:start; gap:14px; overflow-y:auto; overflow-x:hidden; padding:18px 20px 30px; }
-.rmw-card { position:relative; border-radius:12px; overflow:hidden; background:#eee; cursor:zoom-in; }
+.rmw-size-small { grid-template-columns:repeat(6,minmax(0,1fr)) !important; }
+.rmw-size-medium { grid-template-columns:repeat(5,minmax(0,1fr)) !important; }
+.rmw-size-large { grid-template-columns:repeat(4,minmax(0,1fr)) !important; }
+.rmw-card { position:relative; border-radius:12px; overflow:hidden; background:#eee; cursor:zoom-in; outline:none; transition:box-shadow .16s ease, transform .16s ease; }
+.rmw-card:focus-visible { box-shadow:0 0 0 3px #ff3b30; }
+.rmw-card.rmw-current { box-shadow:0 0 0 4px #ff3b30; transform:scale(.985); }
 .rmw-card::before { content:''; display:block; padding-top:100%; }
 .rmw-card img, .rmw-card video { position:absolute; inset:0; display:block; width:100%; height:100%; object-fit:cover; }
 .rmw-play { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); border-radius:50%; width:50px; height:50px; display:grid; place-items:center; background:rgba(0,0,0,.58); color:white; font-size:23px; }
 .rmw-status { grid-column:1 / -1; padding:26px 16px; text-align:center; color:#777; font-size:14px; }
+.rmw-retry { margin-left:12px; height:32px; padding:0 15px; border:1px solid #e1251b; border-radius:16px; background:#fff; color:#e1251b; cursor:pointer; }
 #${IDS.preview} { position:absolute; inset:0; z-index:2; display:flex; align-items:center; justify-content:center; padding:34px; background:rgba(0,0,0,.82); }
 .rmw-preview-content { display:flex; max-width:min(1280px,90vw); max-height:86vh; border-radius:12px; overflow:hidden; background:#111; }
-.rmw-preview-media { display:flex; align-items:center; justify-content:center; min-width:300px; max-width:min(900px,68vw); background:#000; }
+.rmw-preview-content.is-collapsed .rmw-context { display:none; }
+.rmw-preview-media { position:relative; display:flex; align-items:center; justify-content:center; min-width:300px; max-width:min(900px,68vw); background:#000; }
+.rmw-preview-content.is-collapsed .rmw-preview-media { max-width:min(1240px,86vw); }
 .rmw-preview-media img, .rmw-preview-media video { max-width:100%; max-height:84vh; object-fit:contain; }
+.rmw-counter { position:absolute; top:14px; left:50%; transform:translateX(-50%); padding:6px 14px; border-radius:18px; background:rgba(0,0,0,.58); color:#fff; font-size:14px; }
+.rmw-preview-tools { position:absolute; top:12px; right:12px; z-index:2; display:flex; gap:8px; }
 .rmw-preview-nav { position:absolute; top:50%; z-index:1; transform:translateY(-50%); width:52px; height:72px; border:0; border-radius:28px; background:rgba(0,0,0,.5); color:#fff; font-size:36px; line-height:1; cursor:pointer; }
 .rmw-preview-nav:hover { background:rgba(0,0,0,.72); }
 .rmw-preview-prev { left:18px; }
 .rmw-preview-next { right:18px; }
 .rmw-context { width:min(330px,26vw); padding:24px; background:#fff; color:#222; overflow:auto; line-height:1.65; }
 .rmw-context h3 { margin:0 0 12px; font-size:16px; }
+.rmw-context-toggle, .rmw-media-action { display:inline-flex; align-items:center; height:32px; margin:0 8px 12px 0; padding:0 12px; border:1px solid #ddd; border-radius:17px; background:#fff; color:#333; cursor:pointer; text-decoration:none; font-size:13px; }
+.rmw-preview-tools .rmw-context-toggle, .rmw-preview-tools .rmw-media-action { margin:0; }
 @media (max-width:1100px) { #${IDS.grid} { grid-template-columns:repeat(4,minmax(0,1fr)); } }
 @media (max-width:900px) { #${IDS.grid} { grid-template-columns:repeat(3,minmax(0,1fr)); } }
 @media (max-width:760px) { #${IDS.grid} { grid-template-columns:repeat(2,minmax(0,1fr)); } .rmw-preview-content { flex-direction:column; } .rmw-context { width:auto; } }
@@ -461,18 +537,20 @@
     doc.head.appendChild(style);
   }
 
-  function renderPreview(doc, modal, state) {
+  function renderPreview(doc, modal, state, session, onReturn) {
     const previous = doc.getElementById(IDS.preview);
     if (previous) previous.remove();
     const snapshot = state.snapshot();
     const item = snapshot.preview;
     if (!item) return;
 
+    const sessionSnapshot = session.snapshot();
     const overlay = makeElement(doc, 'div', '', '');
     overlay.id = IDS.preview;
     overlay.tabIndex = -1;
-    const content = makeElement(doc, 'div', 'rmw-preview-content', '');
+    const content = makeElement(doc, 'div', `rmw-preview-content${sessionSnapshot.contextCollapsed ? ' is-collapsed' : ''}`, '');
     const mediaBox = makeElement(doc, 'div', 'rmw-preview-media', '');
+    mediaBox.appendChild(makeElement(doc, 'span', 'rmw-counter', `${snapshot.previewPosition} / ${snapshot.previewTotal}`));
     const media = doc.createElement(item.type === 'video' ? 'video' : 'img');
     media.src = item.src;
     if (item.type === 'video') {
@@ -483,13 +561,30 @@
     mediaBox.appendChild(media);
     const context = makeElement(doc, 'aside', 'rmw-context', '');
     context.appendChild(makeElement(doc, 'h3', '', item.type === 'video' ? '视频评价' : '图片评价'));
+    const tools = makeElement(doc, 'div', 'rmw-preview-tools', '');
+    const toggle = makeElement(doc, 'button', 'rmw-context-toggle', sessionSnapshot.contextCollapsed ? '展开评价' : '收起评价');
+    toggle.type = 'button';
+    toggle.addEventListener('click', () => {
+      session.toggleContext();
+      renderPreview(doc, modal, state, session, onReturn);
+    });
+    const original = makeElement(doc, 'a', 'rmw-media-action', '打开原图');
+    original.href = item.src;
+    original.target = '_blank';
+    original.rel = 'noopener noreferrer';
+    const download = makeElement(doc, 'a', 'rmw-media-action', '下载原图');
+    download.href = item.src;
+    download.download = '';
+    tools.append(toggle, original, download);
+    mediaBox.appendChild(tools);
     context.appendChild(makeElement(doc, 'p', '', item.text || '该媒体暂无可见评价文字。'));
     if (item.meta) context.appendChild(makeElement(doc, 'p', '', item.meta));
     content.append(mediaBox, context);
     overlay.appendChild(content);
     function shift(delta) {
       state.shiftPreview(delta);
-      renderPreview(doc, modal, state);
+      session.rememberView({ previewKey: state.snapshot().preview?.src || '' });
+      renderPreview(doc, modal, state, session, onReturn);
     }
     if (snapshot.canPrevious) {
       const previousButton = makeElement(doc, 'button', 'rmw-preview-nav rmw-preview-prev', '‹');
@@ -508,14 +603,16 @@
     overlay.addEventListener('click', (event) => {
       if (event.target !== overlay) return;
       state.onBackdrop();
-      renderPreview(doc, modal, state);
+      renderPreview(doc, modal, state, session, onReturn);
+      onReturn();
     });
     overlay.addEventListener('keydown', (event) => {
       if (event.key === 'ArrowLeft' && state.snapshot().canPrevious) shift(-1);
       if (event.key === 'ArrowRight' && state.snapshot().canNext) shift(1);
       if (event.key === 'Escape') {
         state.onBackdrop();
-        renderPreview(doc, modal, state);
+        renderPreview(doc, modal, state, session, onReturn);
+        onReturn();
       }
     });
     modal.appendChild(overlay);
@@ -529,27 +626,51 @@
     });
   }
 
-  function renderCards(doc, grid, state, modal, items, emptyMessage) {
+  function statusMessage(session, total) {
+    const status = session.snapshot().loadingState;
+    if (status === 'loading') return `已加载 ${total} 项，正在加载更多...`;
+    if (status === 'exhausted') return `已加载 ${total} 项，没有更多内容`;
+    if (status === 'error') return `已加载 ${total} 项，加载失败`;
+    return `已加载 ${total} 项，继续向下滚动以加载更多`;
+  }
+
+  function renderCards(doc, grid, state, modal, items, emptyMessage, session, onReturn, onRetry, highlightKey) {
     grid.textContent = '';
     if (!items.length) {
       grid.appendChild(makeElement(doc, 'div', 'rmw-status', emptyMessage));
-      return;
-    }
-    items.forEach((item, index) => {
+    } else items.forEach((item, index) => {
       const card = makeElement(doc, 'div', 'rmw-card', '');
+      card.tabIndex = 0;
+      card.dataset.mediaKey = item.src;
+      if (item.src === highlightKey) card.classList.add('rmw-current');
       const media = doc.createElement('img');
       media.src = item.poster || item.src;
       media.loading = 'lazy';
       media.alt = '用户评价图片';
       card.appendChild(media);
       if (item.type === 'video') card.appendChild(makeElement(doc, 'span', 'rmw-play', '▶'));
-      card.addEventListener('click', () => {
+      function openPreview() {
+        session.rememberView({ scrollTop: grid.scrollTop, previewKey: item.src });
         state.openPreview(items, index);
-        renderPreview(doc, modal, state);
+        renderPreview(doc, modal, state, session, onReturn);
+      }
+      card.addEventListener('click', openPreview);
+      card.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openPreview();
+        }
       });
       grid.appendChild(card);
     });
-    grid.appendChild(makeElement(doc, 'div', 'rmw-status', '继续向下滚动以加载更多原生评价媒体'));
+    const status = makeElement(doc, 'div', 'rmw-status', statusMessage(session, items.length));
+    if (session.snapshot().loadingState === 'error') {
+      const retry = makeElement(doc, 'button', 'rmw-retry', '重试');
+      retry.type = 'button';
+      retry.addEventListener('click', onRetry);
+      status.appendChild(retry);
+    }
+    grid.appendChild(status);
     sizeGridCards(grid);
   }
 
@@ -570,11 +691,11 @@
     return element;
   }
 
-  function openWall(doc, adapter) {
+  function openWall(doc, adapter, wallSession = createWallSession(), wallController = createWallController(adapter)) {
     const old = doc.getElementById(IDS.backdrop);
     if (old) old.remove();
     const state = createWallState();
-    const controller = createWallController(adapter);
+    const controller = wallController;
     state.openWall();
     let stopCapture = null;
 
@@ -582,6 +703,7 @@
     backdrop.id = IDS.backdrop;
     const modal = makeElement(doc, 'section', '', '');
     modal.id = IDS.modal;
+    modal.tabIndex = -1;
     const header = makeElement(doc, 'header', 'rmw-header', '');
     header.appendChild(makeElement(doc, 'h2', 'rmw-title', '图片墙'));
     header.appendChild(makeElement(doc, 'span', 'rmw-subtitle', '同步原评价窗口中的图/视频、排序和款式筛选'));
@@ -590,6 +712,24 @@
     header.append(sync, close);
     modal.appendChild(header);
     modal.appendChild(makeElement(doc, 'div', 'rmw-guide', '需要调整“最新 / 当前商品 / 时间排序 / 款式筛选”时，请在原评价窗口选择后点击“同步筛选结果”。'));
+    const toolbar = makeElement(doc, 'div', 'rmw-toolbar', '');
+    const filterGroup = makeElement(doc, 'div', 'rmw-group', '');
+    const sizeGroup = makeElement(doc, 'div', 'rmw-group', '');
+    const loaded = makeElement(doc, 'span', 'rmw-loaded', '');
+    [['all', '全部'], ['image', '图片'], ['video', '视频']].forEach(([value, label]) => {
+      const button = makeElement(doc, 'button', 'rmw-filter', label);
+      button.type = 'button';
+      button.dataset.value = value;
+      filterGroup.appendChild(button);
+    });
+    [['small', '小'], ['medium', '中'], ['large', '大']].forEach(([value, label]) => {
+      const button = makeElement(doc, 'button', 'rmw-size', label);
+      button.type = 'button';
+      button.dataset.value = value;
+      sizeGroup.appendChild(button);
+    });
+    toolbar.append(filterGroup, sizeGroup, loaded);
+    modal.appendChild(toolbar);
     const grid = makeElement(doc, 'main', '', '');
     grid.id = IDS.grid;
     modal.appendChild(grid);
@@ -600,6 +740,38 @@
     let disconnect = null;
     let disconnectResize = null;
     let attempts = 0;
+    let restoredScroll = false;
+    let highlightKey = '';
+    function revealCurrentCard() {
+      modal.focus();
+      const key = wallSession.snapshot().previewKey;
+      highlightKey = key;
+      const card = Array.from(grid.querySelectorAll('.rmw-card')).find((node) => node.dataset.mediaKey === key);
+      if (!card) return;
+      card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      card.classList.add('rmw-current');
+      root.setTimeout(() => {
+        if (highlightKey !== key) return;
+        highlightKey = '';
+        grid.querySelectorAll('.rmw-current').forEach((node) => node.classList.remove('rmw-current'));
+      }, 1000);
+    }
+    function renderWall(emptyMessage) {
+      const sessionSnapshot = wallSession.snapshot();
+      const desiredScroll = restoredScroll ? grid.scrollTop : sessionSnapshot.scrollTop;
+      grid.className = `rmw-size-${sessionSnapshot.cardSize}`;
+      const visible = filterMedia(controller.items(), sessionSnapshot.mediaFilter);
+      loaded.textContent = `已收集 ${controller.items().length} 项 / 当前显示 ${visible.length} 项`;
+      filterGroup.querySelectorAll('.rmw-filter').forEach((button) => {
+        button.classList.toggle('is-active', button.dataset.value === sessionSnapshot.mediaFilter);
+      });
+      sizeGroup.querySelectorAll('.rmw-size').forEach((button) => {
+        button.classList.toggle('is-active', button.dataset.value === sessionSnapshot.cardSize);
+      });
+      renderCards(doc, grid, state, modal, visible, emptyMessage, wallSession, revealCurrentCard, requestMore, highlightKey);
+      grid.scrollTop = desiredScroll;
+      restoredScroll = true;
+    }
     if (root.ResizeObserver) {
       const resizeObserver = new root.ResizeObserver(() => sizeGridCards(grid));
       resizeObserver.observe(grid);
@@ -607,23 +779,28 @@
     }
     if (adapter.observeResponses) {
       stopCapture = adapter.observeResponses((items) => {
+        const before = controller.items().length;
         controller.append(items);
-        renderCards(doc, grid, state, modal, controller.items(), '当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
+        wallSession.finishLoad(controller.items().length > before);
+        renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
       });
     }
     adapter.openNativeReviews(doc);
     function syncMedia(reset) {
       nativeRoot = adapter.findNativeRoot(doc);
       if (!nativeRoot) {
-        renderCards(doc, grid, state, modal, [], '正在等待原生评价窗口加载...');
+        renderWall('正在等待原生评价窗口加载...');
         return false;
       }
       adapter.selectMedia(nativeRoot);
       const observed = collectWithFallback(adapter, nativeRoot, doc);
-      const items = reset
-        ? (controller.replace(observed), controller.items())
-        : (controller.append(observed), controller.items());
-      renderCards(doc, grid, state, modal, items, '当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
+      const before = controller.items().length;
+      if (reset) controller.replace(observed);
+      else controller.append(observed);
+      if (wallSession.snapshot().loadingState === 'loading') {
+        wallSession.finishLoad(controller.items().length > before);
+      }
+      renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
       if (!disconnect && root.MutationObserver) {
         const observer = new root.MutationObserver(() => syncMedia(false));
         observer.observe(nativeRoot, { childList: true, subtree: true });
@@ -633,22 +810,48 @@
     }
     function waitForNative() {
       attempts += 1;
-      if (!syncMedia(attempts === 1) && attempts < 12) root.setTimeout(waitForNative, 250);
+      if (!syncMedia(attempts === 1 && !controller.items().length) && attempts < 12) root.setTimeout(waitForNative, 250);
     }
     waitForNative();
 
+    function requestMore() {
+      if (!nativeRoot || !wallSession.beginLoad()) return;
+      renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
+      try {
+        const scroller = findScrollable(nativeRoot);
+        scroller.scrollTop = Math.min(scroller.scrollHeight, scroller.scrollTop + Math.max(scroller.clientHeight, 200));
+        scroller.dispatchEvent(new root.Event('scroll', { bubbles: true }));
+        root.setTimeout(() => syncMedia(false), 300);
+      } catch (error) {
+        wallSession.failLoad();
+        renderWall('评价加载失败，请重试。');
+      }
+    }
     grid.addEventListener('scroll', () => {
-      if (!nativeRoot || grid.scrollTop + grid.clientHeight < grid.scrollHeight - 180) return;
-      const scroller = findScrollable(nativeRoot);
-      scroller.scrollTop = Math.min(scroller.scrollHeight, scroller.scrollTop + Math.max(scroller.clientHeight, 200));
-      scroller.dispatchEvent(new root.Event('scroll', { bubbles: true }));
-      root.setTimeout(() => syncMedia(false), 250);
+      wallSession.rememberView({ scrollTop: grid.scrollTop, previewKey: wallSession.snapshot().previewKey });
+      if (grid.scrollTop + grid.clientHeight >= grid.scrollHeight - 180) requestMore();
     });
-    sync.addEventListener('click', () => syncMedia(true));
+    filterGroup.addEventListener('click', (event) => {
+      const button = event.target.closest?.('.rmw-filter');
+      if (!button) return;
+      wallSession.setFilter(button.dataset.value);
+      renderWall('当前类型暂无已加载媒体。');
+    });
+    sizeGroup.addEventListener('click', (event) => {
+      const button = event.target.closest?.('.rmw-size');
+      if (!button) return;
+      wallSession.setCardSize(button.dataset.value);
+      renderWall('当前类型暂无已加载媒体。');
+    });
+    sync.addEventListener('click', () => {
+      wallSession.retryLoad();
+      syncMedia(true);
+    });
     function dismissWall() {
       disconnect?.();
       disconnectResize?.();
       stopCapture?.();
+      wallSession.rememberView({ scrollTop: grid.scrollTop, previewKey: wallSession.snapshot().previewKey });
       state.closeWall();
       backdrop.remove();
       adapter.closeNativeReviews?.(nativeRoot || adapter.findNativeRoot(doc));
@@ -656,10 +859,18 @@
     close.addEventListener('click', dismissWall);
     backdrop.addEventListener('click', (event) => {
       if (event.target !== backdrop) return;
+      const hadPreview = Boolean(state.snapshot().preview);
       state.onBackdrop();
-      if (!state.snapshot().wallOpen) {
-        dismissWall();
+      if (hadPreview) {
+        renderPreview(doc, modal, state, wallSession, revealCurrentCard);
+        revealCurrentCard();
+        return;
       }
+      dismissWall();
+    });
+    backdrop.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || state.snapshot().preview) return;
+      dismissWall();
     });
   }
 
@@ -669,11 +880,13 @@
     const site = detectSite(root.location.href);
     if (!site) return;
     const adapter = adapters[site];
+    const wallSession = createWallSession();
+    const wallController = createWallController(adapter);
     addStyles(doc);
 
     function mountLauncher() {
       const mount = adapter.findMount(doc);
-      if (mount) ensureLauncher(mount, () => openWall(doc, adapter));
+      if (mount) ensureLauncher(mount, () => openWall(doc, adapter, wallSession, wallController));
     }
     mountLauncher();
     if (root.MutationObserver) {
@@ -685,6 +898,8 @@
   return {
     detectSite,
     createMediaStore,
+    filterMedia,
+    createWallSession,
     adapters,
     IDS,
     createWallState,
