@@ -111,4 +111,5 @@
 ## 交付
 
 - 发布文件位于 `hahapkpk/tools` 仓库根目录中的单一 `.user.js` 文件。
-- 推送到 GitHub 后，提供可直接供 Tampermonkey 安装测试的 raw 文件地址。
+- 每次生成或更新脚本后，交付说明都必须附上最新脚本更新地址，便于用户直接导入或覆盖更新。
+- 推送到 GitHub 后，更新地址使用可直接供 Tampermonkey 安装测试的 raw 文件地址。
