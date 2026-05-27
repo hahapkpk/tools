@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.2.2
+// @version      0.3.0
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -286,6 +286,9 @@
         const button = doc.querySelector('.all-btn');
         if (button) button.click();
       },
+      closeNativeReviews(nativeRoot) {
+        nativeRoot?.querySelector('[class*="_closeIcon_"]')?.click();
+      },
       selectMedia(nativeRoot) {
         return clickText(nativeRoot, '图/视频');
       },
@@ -303,6 +306,9 @@
       openNativeReviews(doc) {
         const button = doc.querySelector('[class*="ShowButton--"]');
         if (button) button.click();
+      },
+      closeNativeReviews(nativeRoot) {
+        nativeRoot?.querySelector('[class*="closeWrap--"]')?.click();
       },
       selectMedia(nativeRoot) {
         return clickText(nativeRoot, '图/视频');
@@ -328,26 +334,46 @@
   function createWallState() {
     let wallOpen = false;
     let preview = null;
+    let previewItems = [];
+    let previewIndex = -1;
+    function clearPreview() {
+      preview = null;
+      previewItems = [];
+      previewIndex = -1;
+    }
     return {
       openWall() {
         wallOpen = true;
       },
       closeWall() {
         wallOpen = false;
-        preview = null;
+        clearPreview();
       },
-      openPreview(item) {
-        preview = item;
+      openPreview(items, index) {
+        previewItems = Array.isArray(items) ? items : [items];
+        previewIndex = Math.max(0, Math.min(Number(index) || 0, previewItems.length - 1));
+        preview = previewItems[previewIndex] || null;
+      },
+      shiftPreview(delta) {
+        if (!preview) return;
+        previewIndex = Math.max(0, Math.min(previewIndex + delta, previewItems.length - 1));
+        preview = previewItems[previewIndex] || null;
       },
       onBackdrop() {
         if (preview) {
-          preview = null;
+          clearPreview();
         } else {
           wallOpen = false;
         }
       },
       snapshot() {
-        return { wallOpen, preview };
+        return {
+          wallOpen,
+          preview,
+          previewIndex,
+          canPrevious: previewIndex > 0,
+          canNext: previewIndex >= 0 && previewIndex < previewItems.length - 1
+        };
       }
     };
   }
@@ -422,6 +448,10 @@
 .rmw-preview-content { display:flex; max-width:min(1280px,90vw); max-height:86vh; border-radius:12px; overflow:hidden; background:#111; }
 .rmw-preview-media { display:flex; align-items:center; justify-content:center; min-width:300px; max-width:min(900px,68vw); background:#000; }
 .rmw-preview-media img, .rmw-preview-media video { max-width:100%; max-height:84vh; object-fit:contain; }
+.rmw-preview-nav { position:absolute; top:50%; z-index:1; transform:translateY(-50%); width:52px; height:72px; border:0; border-radius:28px; background:rgba(0,0,0,.5); color:#fff; font-size:36px; line-height:1; cursor:pointer; }
+.rmw-preview-nav:hover { background:rgba(0,0,0,.72); }
+.rmw-preview-prev { left:18px; }
+.rmw-preview-next { right:18px; }
 .rmw-context { width:min(330px,26vw); padding:24px; background:#fff; color:#222; overflow:auto; line-height:1.65; }
 .rmw-context h3 { margin:0 0 12px; font-size:16px; }
 @media (max-width:1100px) { #${IDS.grid} { grid-template-columns:repeat(4,minmax(0,1fr)); } }
@@ -431,13 +461,16 @@
     doc.head.appendChild(style);
   }
 
-  function renderPreview(doc, modal, state, item) {
+  function renderPreview(doc, modal, state) {
     const previous = doc.getElementById(IDS.preview);
     if (previous) previous.remove();
+    const snapshot = state.snapshot();
+    const item = snapshot.preview;
     if (!item) return;
 
     const overlay = makeElement(doc, 'div', '', '');
     overlay.id = IDS.preview;
+    overlay.tabIndex = -1;
     const content = makeElement(doc, 'div', 'rmw-preview-content', '');
     const mediaBox = makeElement(doc, 'div', 'rmw-preview-media', '');
     const media = doc.createElement(item.type === 'video' ? 'video' : 'img');
@@ -454,12 +487,39 @@
     if (item.meta) context.appendChild(makeElement(doc, 'p', '', item.meta));
     content.append(mediaBox, context);
     overlay.appendChild(content);
+    function shift(delta) {
+      state.shiftPreview(delta);
+      renderPreview(doc, modal, state);
+    }
+    if (snapshot.canPrevious) {
+      const previousButton = makeElement(doc, 'button', 'rmw-preview-nav rmw-preview-prev', '‹');
+      previousButton.type = 'button';
+      previousButton.setAttribute('aria-label', '上一张');
+      previousButton.addEventListener('click', () => shift(-1));
+      overlay.appendChild(previousButton);
+    }
+    if (snapshot.canNext) {
+      const nextButton = makeElement(doc, 'button', 'rmw-preview-nav rmw-preview-next', '›');
+      nextButton.type = 'button';
+      nextButton.setAttribute('aria-label', '下一张');
+      nextButton.addEventListener('click', () => shift(1));
+      overlay.appendChild(nextButton);
+    }
     overlay.addEventListener('click', (event) => {
       if (event.target !== overlay) return;
       state.onBackdrop();
-      renderPreview(doc, modal, state, null);
+      renderPreview(doc, modal, state);
+    });
+    overlay.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowLeft' && state.snapshot().canPrevious) shift(-1);
+      if (event.key === 'ArrowRight' && state.snapshot().canNext) shift(1);
+      if (event.key === 'Escape') {
+        state.onBackdrop();
+        renderPreview(doc, modal, state);
+      }
     });
     modal.appendChild(overlay);
+    overlay.focus();
   }
 
   function sizeGridCards(grid) {
@@ -475,7 +535,7 @@
       grid.appendChild(makeElement(doc, 'div', 'rmw-status', emptyMessage));
       return;
     }
-    items.forEach((item) => {
+    items.forEach((item, index) => {
       const card = makeElement(doc, 'div', 'rmw-card', '');
       const media = doc.createElement('img');
       media.src = item.poster || item.src;
@@ -484,8 +544,8 @@
       card.appendChild(media);
       if (item.type === 'video') card.appendChild(makeElement(doc, 'span', 'rmw-play', '▶'));
       card.addEventListener('click', () => {
-        state.openPreview(item);
-        renderPreview(doc, modal, state, item);
+        state.openPreview(items, index);
+        renderPreview(doc, modal, state);
       });
       grid.appendChild(card);
     });
@@ -585,21 +645,20 @@
       root.setTimeout(() => syncMedia(false), 250);
     });
     sync.addEventListener('click', () => syncMedia(true));
-    close.addEventListener('click', () => {
+    function dismissWall() {
       disconnect?.();
       disconnectResize?.();
       stopCapture?.();
       state.closeWall();
       backdrop.remove();
-    });
+      adapter.closeNativeReviews?.(nativeRoot || adapter.findNativeRoot(doc));
+    }
+    close.addEventListener('click', dismissWall);
     backdrop.addEventListener('click', (event) => {
       if (event.target !== backdrop) return;
       state.onBackdrop();
       if (!state.snapshot().wallOpen) {
-        disconnect?.();
-        disconnectResize?.();
-        stopCapture?.();
-        backdrop.remove();
+        dismissWall();
       }
     });
   }

@@ -192,12 +192,31 @@ test('继续加载时优先驱动原生评价列表内部的滚动容器', () =>
 test('预览打开时点击外层只退回图片墙，再次点击才关闭图片墙', () => {
   const state = api.createWallState();
   state.openWall();
-  state.openPreview({ src: 'a.jpg' });
+  state.openPreview([{ src: 'a.jpg' }], 0);
   state.onBackdrop();
   assert.equal(state.snapshot().wallOpen, true);
   assert.equal(state.snapshot().preview, null);
   state.onBackdrop();
   assert.equal(state.snapshot().wallOpen, false);
+});
+
+test('预览可以有边界地切换上一张和下一张', () => {
+  const items = [{ src: 'a.jpg' }, { src: 'b.jpg' }, { src: 'c.jpg' }];
+  const state = api.createWallState();
+  state.openWall();
+  state.openPreview(items, 1);
+  assert.equal(state.snapshot().preview.src, 'b.jpg');
+  assert.equal(state.snapshot().canPrevious, true);
+  assert.equal(state.snapshot().canNext, true);
+  state.shiftPreview(-1);
+  state.shiftPreview(-1);
+  assert.equal(state.snapshot().preview.src, 'a.jpg');
+  assert.equal(state.snapshot().canPrevious, false);
+  state.shiftPreview(1);
+  state.shiftPreview(1);
+  state.shiftPreview(1);
+  assert.equal(state.snapshot().preview.src, 'c.jpg');
+  assert.equal(state.snapshot().canNext, false);
 });
 
 test('重复初始化仅生成一个图片墙入口且显示新名称', () => {
@@ -304,6 +323,28 @@ test('淘宝打开原生评价抽屉使用查看全部评价按钮', () => {
     }
   };
   api.adapters.taobao.openNativeReviews(doc);
+  assert.equal(clicks, 1);
+});
+
+test('关闭图片墙会关闭淘宝原生评价抽屉', () => {
+  let clicks = 0;
+  const root = {
+    querySelector(selector) {
+      return selector.includes('closeWrap') ? { click() { clicks += 1; } } : null;
+    }
+  };
+  api.adapters.taobao.closeNativeReviews(root);
+  assert.equal(clicks, 1);
+});
+
+test('关闭图片墙会关闭京东原生评价弹窗', () => {
+  let clicks = 0;
+  const root = {
+    querySelector(selector) {
+      return selector.includes('_closeIcon_') ? { click() { clicks += 1; } } : null;
+    }
+  };
+  api.adapters.jd.closeNativeReviews(root);
   assert.equal(clicks, 1);
 });
 
