@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         my Twitter X Translator Lite
 // @namespace    http://tampermonkey.net/
-// @version      20.7
+// @version      20.8
 // @description  Support Twitter/X and Discord real-time translation, user notes and VIP marking, with customizable translation font size and color, one-click local backup and restore.
 // @author       fl
 // @license      MIT
@@ -26,6 +26,8 @@
     'use strict';
 
     console.log("🚀 启动...");
+    const SCRIPT_VERSION = '20.8';
+    const TRANSLATION_CACHE_LIMIT = 300;
 
     // ================= 1. 配置与存储 =================
     const DEFAULT_UI = {
@@ -256,9 +258,17 @@
             delete vips[handle.toLowerCase()];
             Storage.setVips(vips);
         },
+        getTranslationCache: () => {
+            const raw = safeParse(GM_getValue('ling_translation_cache', '[]'), []);
+            return Array.isArray(raw) ? raw.filter(entry => Array.isArray(entry) && entry.length === 2) : [];
+        },
+        setTranslationCache: (entries) => {
+            const normalized = Array.isArray(entries) ? entries.filter(entry => Array.isArray(entry) && entry.length === 2) : [];
+            GM_setValue('ling_translation_cache', JSON.stringify(normalized.slice(-TRANSLATION_CACHE_LIMIT)));
+        },
         export: () => {
             const config = { ...Storage.getConfig(), deepseekApiKey: '' };
-            const data = { ver: "20.7", ts: new Date().getTime(), notes: Storage.getNotes(), vips: Storage.getVips(), config };
+            const data = { ver: SCRIPT_VERSION, ts: new Date().getTime(), notes: Storage.getNotes(), vips: Storage.getVips(), config };
             const blob = new Blob([JSON.stringify(data)], {type: 'text/plain'});
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a'); a.href = url;
@@ -391,25 +401,99 @@
         return (data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '').trim();
     }
 
-    async function translateText(text) {
-        const cfg = Storage.getConfig();
-        const providers = [cfg.translator];
-        if (cfg.fallbackTranslator !== 'none' && cfg.fallbackTranslator !== cfg.translator) {
-            providers.push(cfg.fallbackTranslator);
+    function buildTranslationCacheKey(text, cfg) {
+        return JSON.stringify([
+            cfg.translator,
+            cfg.fallbackTranslator,
+            cfg.deepseekApiBase,
+            cfg.deepseekModel,
+            cfg.deepseekLayout,
+            text
+        ]);
+    }
+
+    function createTranslationCoordinator(options) {
+        const loadCache = typeof options.loadCache === 'function' ? options.loadCache : () => [];
+        const saveCache = typeof options.saveCache === 'function' ? options.saveCache : () => {};
+        const makeCacheKey = typeof options.makeCacheKey === 'function' ? options.makeCacheKey : (text) => text;
+        const translate = typeof options.translate === 'function' ? options.translate : async (text) => text;
+        const maxEntries = Number.isFinite(options.maxEntries) ? options.maxEntries : 200;
+
+        let cacheLoaded = false;
+        const cache = new Map();
+        const inFlight = new Map();
+
+        function ensureCacheLoaded() {
+            if (cacheLoaded) return;
+            cacheLoaded = true;
+            const storedEntries = loadCache();
+            if (!Array.isArray(storedEntries)) return;
+            storedEntries.forEach((entry) => {
+                if (!Array.isArray(entry) || entry.length !== 2) return;
+                cache.set(String(entry[0]), String(entry[1]));
+            });
         }
 
-        let lastError = null;
-        for (const provider of providers) {
-            try {
-                if (provider === 'deepseek') return await translateWithDeepSeek(text, cfg);
-                return await translateWithGoogle(text);
-            } catch (err) {
-                lastError = err;
-                console.warn(`[LingGe] ${provider} translation failed:`, err);
-            }
+        function persistCache() {
+            saveCache(Array.from(cache.entries()).slice(-maxEntries));
         }
-        throw lastError || new Error('No translation provider available');
+
+        return function coordinateTranslation(text, cfg) {
+            ensureCacheLoaded();
+            const cacheKey = makeCacheKey(text, cfg);
+            if (cache.has(cacheKey)) {
+                return Promise.resolve(cache.get(cacheKey));
+            }
+            if (inFlight.has(cacheKey)) {
+                return inFlight.get(cacheKey);
+            }
+
+            const task = (async () => translate(text, cfg))()
+                .then((result) => {
+                    if (result) {
+                        if (cache.has(cacheKey)) cache.delete(cacheKey);
+                        cache.set(cacheKey, result);
+                        while (cache.size > maxEntries) {
+                            const oldestKey = cache.keys().next().value;
+                            cache.delete(oldestKey);
+                        }
+                        persistCache();
+                    }
+                    return result;
+                })
+                .finally(() => {
+                    inFlight.delete(cacheKey);
+                });
+
+            inFlight.set(cacheKey, task);
+            return task;
+        };
     }
+
+    const translateText = createTranslationCoordinator({
+        loadCache: () => Storage.getTranslationCache(),
+        saveCache: (entries) => Storage.setTranslationCache(entries),
+        maxEntries: TRANSLATION_CACHE_LIMIT,
+        makeCacheKey: (text, cfg) => buildTranslationCacheKey(text, cfg),
+        translate: async (text, cfg) => {
+            const providers = [cfg.translator];
+            if (cfg.fallbackTranslator !== 'none' && cfg.fallbackTranslator !== cfg.translator) {
+                providers.push(cfg.fallbackTranslator);
+            }
+
+            let lastError = null;
+            for (const provider of providers) {
+                try {
+                    if (provider === 'deepseek') return await translateWithDeepSeek(text, cfg);
+                    return await translateWithGoogle(text);
+                } catch (err) {
+                    lastError = err;
+                    console.warn(`[LingGe] ${provider} translation failed:`, err);
+                }
+            }
+            throw lastError || new Error('No translation provider available');
+        }
+    });
 
     function splitSentences(text) {
         const normalized = text
@@ -472,7 +556,32 @@
         if (platform !== 'twitter' && platform !== 'discord') return false;
         const sourceText = (text || '').trim();
         if (!sourceText) return false;
-        return !/[\u3400-\u9fff\uf900-\ufaff]/.test(sourceText);
+        const normalized = sourceText
+            .replace(/https?:\/\/\S+/gi, ' ')
+            .replace(/www\.\S+/gi, ' ')
+            .replace(/[@#][^\s#@/]+/g, ' ')
+            .replace(/\b\d+(?:[.,:/-]\d+)*\b/g, ' ')
+            .replace(/[_*~`|()[\]{}<>+=/\\-]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (!normalized) return false;
+        if (!/[\p{L}\p{Script=Han}]/u.test(normalized)) return false;
+
+        if (/[\u3040-\u30ff]/.test(normalized)) return true;
+        if (/[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]/.test(normalized)) return true;
+        if (/[\u0400-\u04ff\u0370-\u03ff\u0590-\u05ff\u0600-\u06ff\u0900-\u0d7f\u0e00-\u0e7f]/.test(normalized)) return true;
+
+        const hasHan = /[\u3400-\u9fff\uf900-\ufaff]/.test(normalized);
+        if (hasHan) {
+            const hasChineseSignal = /[的了呢吗吧啊呀哦嘛着过把被很和并及与在是有我你他她它们这那就都还将给向对对于通过自动数据读取发布构建自己终于已经]/.test(normalized)
+                || /[，。！？；：“”‘’、】【（）《》]/.test(normalized);
+            if (hasChineseSignal) return false;
+            return false;
+        }
+
+        const latinWords = normalized.match(/[A-Za-z]+(?:['’-][A-Za-z]+)*/g) || [];
+        const latinLetters = (normalized.match(/[A-Za-z]/g) || []).length;
+        return latinWords.length >= 2 || latinLetters >= 8;
     }
 
     function processContent(element, text, platform) {
@@ -655,7 +764,7 @@
                 <div class="ling-mini-btn" id="ling-btn-rs">📥 恢复</div>
             </div>
 
-            <div style="margin-top:8px;font-size:10px;color:#666;text-align:center;">V20.7 Lite</div>
+            <div style="margin-top:8px;font-size:10px;color:#666;text-align:center;">V${SCRIPT_VERSION} Lite</div>
         `;
         document.body.appendChild(div);
 
