@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         my Twitter X Translator Lite
 // @namespace    http://tampermonkey.net/
-// @version      20.8
+// @version      20.9
 // @description  Support Twitter/X and Discord real-time translation, user notes and VIP marking, with customizable translation font size and color, one-click local backup and restore.
 // @author       fl
 // @license      MIT
@@ -26,7 +26,7 @@
     'use strict';
 
     console.log("🚀 启动...");
-    const SCRIPT_VERSION = '20.8';
+    const SCRIPT_VERSION = '20.9';
     const TRANSLATION_CACHE_LIMIT = 300;
 
     // ================= 1. 配置与存储 =================
@@ -922,29 +922,95 @@
         return nodes;
     }
 
+    function isInsideExistingTranslation(node) {
+        return Boolean(node && node.closest && node.closest('.ling-trans-box'));
+    }
+
+    function findTwitterTextNodes(article) {
+        const candidates = [];
+        const selectors = [
+            'div[data-testid="tweetText"]',
+            'div[lang][dir="auto"]',
+            'span[lang][dir="auto"]',
+            'div[dir="auto"][lang]',
+            'span[dir="auto"][lang]'
+        ];
+
+        selectors.forEach(selector => {
+            collectMatches(article, selector).forEach(node => {
+                if (isInsideExistingTranslation(node)) return;
+                if (node.closest('[data-testid="User-Name"]')) return;
+                if (node.closest('time')) return;
+                const text = (node.innerText || node.textContent || '').trim();
+                if (text.length < 10) return;
+                if (!shouldTranslateToChinese(text, 'twitter')) return;
+                if (candidates.some(existing => existing === node || existing.contains(node) || node.contains(existing))) return;
+                candidates.push(node);
+            });
+        });
+
+        return candidates;
+    }
+
     function scanTwitter(root = document) {
-        collectMatches(root, 'div[data-testid="tweetText"]').forEach(t => processContent(t, t.innerText, 'twitter'));
-        collectMatches(root, 'article').forEach(processUser);
+        const articles = collectMatches(root, 'article');
+        if (articles.length) {
+            articles.forEach(article => {
+                processUser(article);
+                findTwitterTextNodes(article).forEach(t => processContent(t, t.innerText || t.textContent, 'twitter'));
+            });
+            return;
+        }
+
+        collectMatches(root, 'div[data-testid="tweetText"]').forEach(t => processContent(t, t.innerText || t.textContent, 'twitter'));
     }
 
     function scanDiscord(root = document) {
         collectMatches(root, 'div[id^="message-content"]').forEach(msg => processContent(msg, msg.innerText, 'discord'));
     }
 
+    let rescanTimer = null;
+    function scheduleScan(root = document, delay = 180) {
+        if (rescanTimer) clearTimeout(rescanTimer);
+        rescanTimer = setTimeout(() => {
+            rescanTimer = null;
+            if (isTwitterHost()) scanTwitter(root);
+            else if (isDiscordHost()) scanDiscord(root);
+        }, delay);
+    }
+
     const observer = new MutationObserver((ms) => {
-        ms.forEach(m => m.addedNodes.forEach(n => {
-            if (n.nodeType === 1) {
-                if (isTwitterHost()) scanTwitter(n);
-                else if (isDiscordHost()) scanDiscord(n);
+        let needsDeferredScan = false;
+        ms.forEach(m => {
+            if (m.type === 'characterData') {
+                needsDeferredScan = true;
+                return;
             }
-        }));
+            m.addedNodes.forEach(n => {
+                if (n.nodeType === 1) {
+                    if (isTwitterHost()) scanTwitter(n);
+                    else if (isDiscordHost()) scanDiscord(n);
+                } else if (n.nodeType === 3) {
+                    needsDeferredScan = true;
+                }
+            });
+        });
+        if (needsDeferredScan) scheduleScan();
     });
+
+    let lastLocation = location.href;
+    setInterval(() => {
+        if (location.href === lastLocation) return;
+        lastLocation = location.href;
+        scheduleScan(document, 350);
+    }, 800);
 
     const start = () => {
         if(document.body) {
             if (isTwitterHost()) scanTwitter();
             else if (isDiscordHost()) scanDiscord();
-            observer.observe(document.body, {childList: true, subtree: true});
+            observer.observe(document.body, {childList: true, subtree: true, characterData: true});
+            scheduleScan(document, 900);
         } else setTimeout(start, 500);
     };
     start();

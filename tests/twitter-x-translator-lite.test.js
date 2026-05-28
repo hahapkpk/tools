@@ -25,19 +25,75 @@ function extractFunction(name) {
   throw new Error(`Could not extract ${name}`);
 }
 
+function createMockElement({ tagName = 'div', attrs = {}, text = '', children = [] } = {}) {
+  const element = {
+    tagName: tagName.toUpperCase(),
+    attrs,
+    innerText: text,
+    textContent: text,
+    parent: null,
+    children: [],
+    contains(node) {
+      if (node === element) return true;
+      return element.children.some(child => child.contains(node));
+    },
+    matches(selector) {
+      if (selector === 'article') return element.tagName === 'ARTICLE';
+      if (selector === 'div[data-testid="tweetText"]') return element.tagName === 'DIV' && attrs['data-testid'] === 'tweetText';
+      if (selector === 'div[lang][dir="auto"]') return element.tagName === 'DIV' && Boolean(attrs.lang) && attrs.dir === 'auto';
+      if (selector === 'span[lang][dir="auto"]') return element.tagName === 'SPAN' && Boolean(attrs.lang) && attrs.dir === 'auto';
+      if (selector === 'div[dir="auto"][lang]') return element.tagName === 'DIV' && attrs.dir === 'auto' && Boolean(attrs.lang);
+      if (selector === 'span[dir="auto"][lang]') return element.tagName === 'SPAN' && attrs.dir === 'auto' && Boolean(attrs.lang);
+      return false;
+    },
+    querySelectorAll(selector) {
+      const results = [];
+      const visit = (node) => {
+        node.children.forEach(child => {
+          if (child.matches(selector)) results.push(child);
+          visit(child);
+        });
+      };
+      visit(element);
+      return results;
+    },
+    closest(selector) {
+      let node = element;
+      while (node) {
+        if (selector === '.ling-trans-box' && node.attrs.class === 'ling-trans-box') return node;
+        if (selector === '[data-testid="User-Name"]' && node.attrs['data-testid'] === 'User-Name') return node;
+        if (selector === 'time' && node.tagName === 'TIME') return node;
+        node = node.parent;
+      }
+      return null;
+    }
+  };
+
+  element.children = children;
+  element.children.forEach(child => {
+    child.parent = element;
+  });
+  return element;
+}
+
 const context = {
   setTimeout,
   clearTimeout,
   Promise,
   Map,
-  JSON
+  JSON,
+  Boolean
 };
 vm.createContext(context);
 vm.runInContext(`
 ${extractFunction('shouldTranslateToChinese')}
 ${extractFunction('createTranslationCoordinator')}
+${extractFunction('collectMatches')}
+${extractFunction('isInsideExistingTranslation')}
+${extractFunction('findTwitterTextNodes')}
 this.shouldTranslateToChinese = shouldTranslateToChinese;
 this.createTranslationCoordinator = createTranslationCoordinator;
+this.findTwitterTextNodes = findTwitterTextNodes;
 `, context);
 
 test('does not translate Simplified Chinese mixed with English product names', () => {
@@ -70,6 +126,28 @@ test('translates Japanese and Korean text to Simplified Chinese', () => {
 
 test('does not translate short noise with only punctuation and emoji', () => {
   assert.equal(context.shouldTranslateToChinese('!!! 🚀✨', 'twitter'), false);
+});
+
+test('finds Twitter comment text even without tweetText test id', () => {
+  const article = createMockElement({
+    tagName: 'article',
+    children: [
+      createMockElement({
+        tagName: 'div',
+        attrs: { 'data-testid': 'User-Name' },
+        text: 'Steve Brown @_SteveBrown · 6小时'
+      }),
+      createMockElement({
+        tagName: 'div',
+        attrs: { lang: 'en', dir: 'auto' },
+        text: 'So bad ass. With tabs I could see not opening chrome again'
+      })
+    ]
+  });
+
+  const matches = context.findTwitterTextNodes(article);
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].innerText, 'So bad ass. With tabs I could see not opening chrome again');
 });
 
 test('deduplicates in-flight translation requests and reuses cached results', async () => {
