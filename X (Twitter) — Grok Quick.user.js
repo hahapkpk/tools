@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.3.25
+// @version      3.3.26
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -219,6 +219,7 @@
 
   const INJECT_MAX_ATTEMPTS = 100;
   const INJECT_INTERVAL_MS = 80;
+  const HIJACK_ARTICLE_SCAN_LIMIT = 40;
 
   let _activeTimer = null;
   let _pendingTask = null;
@@ -226,6 +227,8 @@
   const _hijackedButtons = new WeakSet();
   const _nativeClickBypass = new WeakSet();
   let _hijackScheduled = false;
+  let _panelCheckScheduled = false;
+  const _pendingHijackArticles = new Set();
 
   // ════════════════════════════════════════════════════════════════
   //  配置读写
@@ -993,7 +996,7 @@
     const modal = document.createElement("div"); modal.id = "gq-settings-modal";
 
     modal.innerHTML = `
-      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.3.25</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
+      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.3.26</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
       <div class="gq-modal-body">
         <!-- 语言 & 模式 -->
         <div class="gq-section-card"><div class="gq-section-header">⚙️ ${t("lang_label")} & ${t("send_mode_label")}</div><div class="gq-section-body">
@@ -1237,14 +1240,72 @@
     requestAnimationFrame(() => { _hijackScheduled = false; hijackThrottled(); });
   }
 
+  function schedulePanelCheck() {
+    if (_panelCheckScheduled) return;
+    _panelCheckScheduled = true;
+    requestAnimationFrame(() => {
+      _panelCheckScheduled = false;
+      injectGrokResizeHandle();
+    });
+  }
+
+  function collectCandidateArticles(root = document) {
+    const articles = root === document
+      ? [...document.querySelectorAll("article")]
+      : [
+          ...(root.matches?.("article") ? [root] : []),
+          ...(root.querySelectorAll?.("article") || []),
+        ];
+    return articles
+      .filter(article => article.isConnected && !article.querySelector(".gq-quick-trigger"))
+      .slice(0, HIJACK_ARTICLE_SCAN_LIMIT);
+  }
+
+  function queueArticleForHijack(article) {
+    if (!article || !article.isConnected) return;
+    article.removeAttribute("data-gq-hijack-seen");
+    _pendingHijackArticles.add(article);
+  }
+
+  function scheduleHijackForMutations(mutations) {
+    let shouldCheckPanel = false;
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes) {
+        if (!(node instanceof Element)) continue;
+
+        const article = node.closest?.("article");
+        if (article) queueArticleForHijack(article);
+        collectCandidateArticles(node).forEach(queueArticleForHijack);
+
+        if (
+          node.matches?.("[data-testid='GrokDrawer']") ||
+          node.querySelector?.("[data-testid='GrokDrawer']")
+        ) {
+          shouldCheckPanel = true;
+        }
+      }
+    }
+    if (_pendingHijackArticles.size) scheduleHijack();
+    if (shouldCheckPanel) schedulePanelCheck();
+  }
+
   function hijackThrottled() {
-    document.querySelectorAll("article").forEach(article => {
+    const articles = _pendingHijackArticles.size
+      ? [..._pendingHijackArticles].filter(article => article.isConnected)
+      : collectCandidateArticles(document);
+    _pendingHijackArticles.clear();
+
+    articles.forEach(article => {
+      if (article.getAttribute("data-gq-hijack-seen") === "1" && article.querySelector(".gq-quick-trigger")) return;
       findArticleGrokButtons(article).forEach(origBtn => {
         if (!origBtn || origBtn.classList.contains("gq-quick-trigger") || _hijackedButtons.has(origBtn)) return;
         if (origBtn.closest("[role='group']") && !isLikelyGrokButton(origBtn)) return;
         const newBtn = replaceWithQuickButton(origBtn);
-        if (newBtn) _hijackedButtons.add(newBtn);
+        if (newBtn) {
+          _hijackedButtons.add(newBtn);
+        }
       });
+      article.setAttribute("data-gq-hijack-seen", "1");
     });
   }
 
@@ -1268,7 +1329,7 @@
       origBtn.style.color = "#FF1493";
       origBtn.style.cursor = "pointer";
       origBtn.setAttribute("aria-label", "Grok Quick: \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49");
-      origBtn.title = "Grok Quick v3.3.25 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
+      origBtn.title = "Grok Quick v3.3.26 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
 
       origBtn.addEventListener("click", (e) => {
         if (_nativeClickBypass.has(origBtn)) return;
@@ -1724,13 +1785,9 @@
   // ════════════════════════════════════════════════════════════════
   //  启动
   // ════════════════════════════════════════════════════════════════
-  const observer = new MutationObserver(scheduleHijack);
+  const observer = new MutationObserver(scheduleHijackForMutations);
   observer.observe(document.body, { childList: true, subtree: true });
 
-  const panelObserver = new MutationObserver(() => {
-    if (document.querySelector("[data-testid='GrokDrawer']:not([data-gq-resize])")) injectGrokResizeHandle();
-  });
-  panelObserver.observe(document.body, { childList: true, subtree: true });
   injectGrokResizeHandle();
 
   document.addEventListener("pointerdown", (e) => {
@@ -1743,7 +1800,7 @@
   let scrollTimer = null;
   window.addEventListener("scroll", () => { if (scrollTimer) return; scrollTimer = setTimeout(() => { scrollTimer = null; scheduleHijack(); }, 200); }, { passive: true });
 
-  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.3.25 \u8BBE\u7F6E", openSettings);
+  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.3.26 \u8BBE\u7F6E", openSettings);
   GM_registerMenuCommand("\u21BA \u91CD\u7F6E Grok \u9762\u677F\u5E03\u5C40", resetGrokPanelLayout);
-  console.log("[Grok Quick] v3.3.25 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
+  console.log("[Grok Quick] v3.3.26 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
 })();
