@@ -235,6 +235,21 @@ test('会话状态仅在当前脚本实例内恢复筛选尺寸与浏览位置',
   });
 });
 
+test('图片墙缩略图尺寸会写入本地存储并在下次会话恢复', () => {
+  const saved = new Map();
+  const storage = {
+    getItem(key) {
+      return saved.get(key) || null;
+    },
+    setItem(key, value) {
+      saved.set(key, value);
+    }
+  };
+  const session = api.createWallSession(storage);
+  session.setCardSize('small');
+  assert.equal(api.createWallSession(storage).snapshot().cardSize, 'small');
+});
+
 test('类型筛选决定预览计数和切换集合', () => {
   const items = [{ type: 'image', src: 'a.jpg' }, { type: 'video', src: 'b.mp4' }];
   assert.deepEqual(api.filterMedia(items, 'video').map(item => item.src), ['b.mp4']);
@@ -335,6 +350,19 @@ test('评价信息收起后操作按钮仍保留在媒体区域以便重新展�
   assert.match(source, /tools\.append\(toggle, original, download\)/);
 });
 
+test('打开预览前会提前预热原图以减少黑屏等待', () => {
+  assert.match(source, /function preloadPreviewMedia/);
+  assert.match(source, /new root\.Image\(\)/);
+  assert.match(source, /preloadPreviewAround\(items, index\)/);
+});
+
+test('图片墙弹窗头部不再显示标题副标题和说明文案', () => {
+  assert.doesNotMatch(source, /rmw-subtitle/);
+  assert.doesNotMatch(source, /rmw-guide/);
+  assert.doesNotMatch(source, /makeElement\(doc, 'h2', 'rmw-title', '图片墙'\)/);
+  assert.doesNotMatch(source, /需要调整/);
+});
+
 test('预览打开时点击整个弹窗外侧遮罩也只返回图片墙', () => {
   assert.match(source, /const hadPreview = Boolean\(state\.snapshot\(\)\.preview\)/);
   assert.match(source, /if \(hadPreview\) \{[\s\S]*renderPreview\(doc, modal, state, wallSession, revealCurrentCard\);[\s\S]*revealCurrentCard\(\);[\s\S]*return;/);
@@ -348,7 +376,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.4\.0/);
+  assert.match(source, /@version\s+0\.4\.1/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });

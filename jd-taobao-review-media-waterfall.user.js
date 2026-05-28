@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.4.0
+// @version      0.4.1
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -61,10 +61,34 @@
     return filter === 'all' ? items.slice() : items.filter((item) => item.type === filter);
   }
 
-  function createWallSession() {
+  const STORAGE_KEYS = {
+    cardSize: 'reviewMediaWall.cardSize'
+  };
+  const CARD_SIZES = new Set(['small', 'medium', 'large']);
+  const preloadedPreviewMedia = new Set();
+
+  function readStoredCardSize(storage) {
+    try {
+      const value = storage?.getItem(STORAGE_KEYS.cardSize);
+      return CARD_SIZES.has(value) ? value : '';
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function writeStoredCardSize(storage, value) {
+    try {
+      storage?.setItem(STORAGE_KEYS.cardSize, value);
+    } catch (error) {
+      return undefined;
+    }
+    return undefined;
+  }
+
+  function createWallSession(storage = root.localStorage) {
     const saved = {
       mediaFilter: 'all',
-      cardSize: 'medium',
+      cardSize: readStoredCardSize(storage) || 'medium',
       scrollTop: 0,
       previewKey: '',
       contextCollapsed: false,
@@ -76,7 +100,9 @@
         saved.mediaFilter = value;
       },
       setCardSize(value) {
+        if (!CARD_SIZES.has(value)) return;
         saved.cardSize = value;
+        writeStoredCardSize(storage, value);
       },
       toggleContext() {
         saved.contextCollapsed = !saved.contextCollapsed;
@@ -114,6 +140,18 @@
 
   function getMediaSource(element) {
     return element.currentSrc || element.src || element.getAttribute?.('src') || '';
+  }
+
+  function preloadPreviewMedia(item) {
+    if (!item?.src || item.type !== 'image' || preloadedPreviewMedia.has(item.src) || !root.Image) return;
+    preloadedPreviewMedia.add(item.src);
+    const image = new root.Image();
+    image.decoding = 'async';
+    image.src = item.src;
+  }
+
+  function preloadPreviewAround(items, index) {
+    [index, index + 1, index - 1].forEach((position) => preloadPreviewMedia(items[position]));
   }
 
   function absoluteMediaUrl(url) {
@@ -490,13 +528,10 @@
 #${IDS.launcher}:hover { color:#e1251b; }
 #${IDS.backdrop} { position:fixed; inset:0; z-index:2147483000; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.56); }
 #${IDS.modal} { position:relative; display:flex; flex-direction:column; width:min(1460px,94vw); height:min(92vh,1020px); border-radius:16px; overflow:hidden; background:#f7f7f7; box-shadow:0 20px 70px rgba(0,0,0,.34); }
-.rmw-header { display:flex; align-items:center; gap:14px; padding:18px 24px 12px; background:#fff; border-bottom:1px solid #ededed; }
-.rmw-title { margin:0; font-size:24px; color:#111; }
-.rmw-subtitle { flex:1; color:#777; font-size:13px; }
+.rmw-header { display:flex; align-items:center; justify-content:flex-end; gap:14px; padding:14px 24px; background:#fff; border-bottom:1px solid #ededed; }
 .rmw-sync, .rmw-close { border:1px solid #ddd; border-radius:18px; background:#fff; cursor:pointer; height:36px; padding:0 16px; font-size:14px; }
 .rmw-sync:hover { border-color:#e1251b; color:#e1251b; }
 .rmw-close { width:40px; padding:0; font-size:25px; line-height:30px; border:0; }
-.rmw-guide { padding:10px 24px; color:#666; font-size:13px; background:#fff; }
 .rmw-toolbar { display:flex; align-items:center; gap:18px; padding:10px 20px; background:#fff; border-top:1px solid #f3f3f3; }
 .rmw-group { display:flex; gap:6px; }
 .rmw-filter, .rmw-size { height:32px; padding:0 13px; border:1px solid #e4e4e4; border-radius:17px; background:#fff; color:#555; cursor:pointer; }
@@ -553,6 +588,7 @@
     mediaBox.appendChild(makeElement(doc, 'span', 'rmw-counter', `${snapshot.previewPosition} / ${snapshot.previewTotal}`));
     const media = doc.createElement(item.type === 'video' ? 'video' : 'img');
     media.src = item.src;
+    if (media.tagName === 'IMG') media.decoding = 'async';
     if (item.type === 'video') {
       media.controls = true;
       media.autoplay = true;
@@ -646,12 +682,15 @@
       const media = doc.createElement('img');
       media.src = item.poster || item.src;
       media.loading = 'lazy';
+      media.decoding = 'async';
       media.alt = '用户评价图片';
       card.appendChild(media);
+      preloadPreviewMedia(item);
       if (item.type === 'video') card.appendChild(makeElement(doc, 'span', 'rmw-play', '▶'));
       function openPreview() {
         session.rememberView({ scrollTop: grid.scrollTop, previewKey: item.src });
         state.openPreview(items, index);
+        preloadPreviewAround(items, index);
         renderPreview(doc, modal, state, session, onReturn);
       }
       card.addEventListener('click', openPreview);
@@ -705,13 +744,10 @@
     modal.id = IDS.modal;
     modal.tabIndex = -1;
     const header = makeElement(doc, 'header', 'rmw-header', '');
-    header.appendChild(makeElement(doc, 'h2', 'rmw-title', '图片墙'));
-    header.appendChild(makeElement(doc, 'span', 'rmw-subtitle', '同步原评价窗口中的图/视频、排序和款式筛选'));
     const sync = makeElement(doc, 'button', 'rmw-sync', '同步筛选结果');
     const close = makeElement(doc, 'button', 'rmw-close', '×');
     header.append(sync, close);
     modal.appendChild(header);
-    modal.appendChild(makeElement(doc, 'div', 'rmw-guide', '需要调整“最新 / 当前商品 / 时间排序 / 款式筛选”时，请在原评价窗口选择后点击“同步筛选结果”。'));
     const toolbar = makeElement(doc, 'div', 'rmw-toolbar', '');
     const filterGroup = makeElement(doc, 'div', 'rmw-group', '');
     const sizeGroup = makeElement(doc, 'div', 'rmw-group', '');
