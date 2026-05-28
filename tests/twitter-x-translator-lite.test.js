@@ -28,10 +28,12 @@ function extractFunction(name) {
 function createMockElement({ tagName = 'div', attrs = {}, text = '', children = [] } = {}) {
   const element = {
     tagName: tagName.toUpperCase(),
+    nodeType: 1,
     attrs,
     innerText: text,
     textContent: text,
     parent: null,
+    parentElement: null,
     children: [],
     contains(node) {
       if (node === element) return true;
@@ -63,6 +65,7 @@ function createMockElement({ tagName = 'div', attrs = {}, text = '', children = 
         if (selector === '.ling-trans-box' && node.attrs.class === 'ling-trans-box') return node;
         if (selector === '[data-testid="User-Name"]' && node.attrs['data-testid'] === 'User-Name') return node;
         if (selector === 'time' && node.tagName === 'TIME') return node;
+        if (selector === 'article' && node.tagName === 'ARTICLE') return node;
         node = node.parent;
       }
       return null;
@@ -72,6 +75,7 @@ function createMockElement({ tagName = 'div', attrs = {}, text = '', children = 
   element.children = children;
   element.children.forEach(child => {
     child.parent = element;
+    child.parentElement = element;
   });
   return element;
 }
@@ -90,9 +94,11 @@ ${extractFunction('shouldTranslateToChinese')}
 ${extractFunction('createTranslationCoordinator')}
 ${extractFunction('collectMatches')}
 ${extractFunction('isInsideExistingTranslation')}
+${extractFunction('getTwitterScanRoot')}
 ${extractFunction('findTwitterTextNodes')}
 this.shouldTranslateToChinese = shouldTranslateToChinese;
 this.createTranslationCoordinator = createTranslationCoordinator;
+this.getTwitterScanRoot = getTwitterScanRoot;
 this.findTwitterTextNodes = findTwitterTextNodes;
 `, context);
 
@@ -148,6 +154,24 @@ test('finds Twitter comment text even without tweetText test id', () => {
   const matches = context.findTwitterTextNodes(article);
   assert.equal(matches.length, 1);
   assert.equal(matches[0].innerText, 'So bad ass. With tabs I could see not opening chrome again');
+});
+
+test('uses nearest article as scan root for nested Twitter text nodes', () => {
+  const textNode = createMockElement({
+    tagName: 'div',
+    attrs: { lang: 'en', dir: 'auto' },
+    text: 'With all new plugins and skills I suggest you all copy the post into Code'
+  });
+  const wrapper = createMockElement({
+    tagName: 'div',
+    children: [textNode]
+  });
+  const article = createMockElement({
+    tagName: 'article',
+    children: [wrapper]
+  });
+
+  assert.equal(context.getTwitterScanRoot(textNode), article);
 });
 
 test('deduplicates in-flight translation requests and reuses cached results', async () => {

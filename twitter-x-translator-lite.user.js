@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         my Twitter X Translator Lite
 // @namespace    http://tampermonkey.net/
-// @version      20.9
+// @version      20.11
 // @description  Support Twitter/X and Discord real-time translation, user notes and VIP marking, with customizable translation font size and color, one-click local backup and restore.
 // @author       fl
 // @license      MIT
@@ -26,8 +26,9 @@
     'use strict';
 
     console.log("🚀 启动...");
-    const SCRIPT_VERSION = '20.9';
+    const SCRIPT_VERSION = '20.11';
     const TRANSLATION_CACHE_LIMIT = 300;
+    const TRANSLATION_PENDING_TIMEOUT = 25000;
 
     // ================= 1. 配置与存储 =================
     const DEFAULT_UI = {
@@ -586,7 +587,13 @@
 
     function processContent(element, text, platform) {
         const sourceText = (text || '').trim();
-        if (!sourceText || element.dataset.lingPending === "true") return;
+        if (!sourceText) return;
+        if (element.dataset.lingPending === "true") {
+            const pendingAt = Number(element.dataset.lingPendingAt || 0);
+            if (pendingAt && Date.now() - pendingAt < TRANSLATION_PENDING_TIMEOUT) return;
+            delete element.dataset.lingPending;
+            delete element.dataset.lingPendingAt;
+        }
         if (sourceText.length < 10) return;
         if (element.dataset.lingProcessed === "true" && element.dataset.lingText === sourceText) return;
 
@@ -594,7 +601,11 @@
 
         if (needTrans) {
             element.dataset.lingPending = "true";
-            translateText(sourceText)
+            element.dataset.lingPendingAt = String(Date.now());
+            Promise.race([
+                translateText(sourceText),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Translation request watchdog timeout')), TRANSLATION_PENDING_TIMEOUT))
+            ])
                 .then(transResult => {
                     if (transResult) {
                         renderBox(element, transResult, platform);
@@ -603,7 +614,10 @@
                     }
                 })
                 .catch(err => console.error('Translation error:', err))
-                .finally(() => { delete element.dataset.lingPending; });
+                .finally(() => {
+                    delete element.dataset.lingPending;
+                    delete element.dataset.lingPendingAt;
+                });
         } else {
             element.dataset.lingProcessed = "true";
             element.dataset.lingText = sourceText;
@@ -926,6 +940,15 @@
         return Boolean(node && node.closest && node.closest('.ling-trans-box'));
     }
 
+    function getTwitterScanRoot(node) {
+        const doc = typeof document !== 'undefined' ? document : null;
+        if (!node) return doc;
+        if ((doc && node === doc) || node.nodeType === 9) return doc || node;
+        const element = node.nodeType === 1 ? node : node.parentElement;
+        if (!element || !element.closest) return doc || node;
+        return element.closest('article') || element;
+    }
+
     function findTwitterTextNodes(article) {
         const candidates = [];
         const selectors = [
@@ -953,7 +976,8 @@
     }
 
     function scanTwitter(root = document) {
-        const articles = collectMatches(root, 'article');
+        const scanRoot = getTwitterScanRoot(root);
+        const articles = collectMatches(scanRoot, 'article');
         if (articles.length) {
             articles.forEach(article => {
                 processUser(article);
@@ -962,7 +986,13 @@
             return;
         }
 
-        collectMatches(root, 'div[data-testid="tweetText"]').forEach(t => processContent(t, t.innerText || t.textContent, 'twitter'));
+        if (scanRoot.matches && scanRoot.matches('article')) {
+            processUser(scanRoot);
+            findTwitterTextNodes(scanRoot).forEach(t => processContent(t, t.innerText || t.textContent, 'twitter'));
+            return;
+        }
+
+        collectMatches(scanRoot, 'div[data-testid="tweetText"]').forEach(t => processContent(t, t.innerText || t.textContent, 'twitter'));
     }
 
     function scanDiscord(root = document) {
@@ -971,10 +1001,11 @@
 
     let rescanTimer = null;
     function scheduleScan(root = document, delay = 180) {
+        const scanRoot = root && root !== document ? getTwitterScanRoot(root) : document;
         if (rescanTimer) clearTimeout(rescanTimer);
         rescanTimer = setTimeout(() => {
             rescanTimer = null;
-            if (isTwitterHost()) scanTwitter(root);
+            if (isTwitterHost()) scanTwitter(scanRoot);
             else if (isDiscordHost()) scanDiscord(root);
         }, delay);
     }
@@ -998,6 +1029,14 @@
         if (needsDeferredScan) scheduleScan();
     });
 
+    let startupSweepCount = 0;
+    function runStartupSweep() {
+        if (startupSweepCount >= 8) return;
+        startupSweepCount += 1;
+        scheduleScan(document, 60);
+        setTimeout(runStartupSweep, startupSweepCount < 4 ? 700 : 1400);
+    }
+
     let lastLocation = location.href;
     setInterval(() => {
         if (location.href === lastLocation) return;
@@ -1011,6 +1050,7 @@
             else if (isDiscordHost()) scanDiscord();
             observer.observe(document.body, {childList: true, subtree: true, characterData: true});
             scheduleScan(document, 900);
+            runStartupSweep();
         } else setTimeout(start, 500);
     };
     start();
