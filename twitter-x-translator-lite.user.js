@@ -5,6 +5,8 @@
 // @description  Support Twitter/X and Discord real-time translation, user notes and VIP marking, with customizable translation font size and color, one-click local backup and restore.
 // @author       fl
 // @license      MIT
+// @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/twitter-x-translator-lite.user.js
+// @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/twitter-x-translator-lite.user.js
 // @match        https://twitter.com/*
 // @match        https://x.com/*
 // @match        https://pro.twitter.com/*
@@ -466,18 +468,20 @@
         });
     }
 
+    function shouldTranslateToChinese(text, platform) {
+        if (platform !== 'twitter' && platform !== 'discord') return false;
+        const sourceText = (text || '').trim();
+        if (!sourceText) return false;
+        return !/[\u3400-\u9fff\uf900-\ufaff]/.test(sourceText);
+    }
+
     function processContent(element, text, platform) {
         const sourceText = (text || '').trim();
         if (!sourceText || element.dataset.lingPending === "true") return;
         if (sourceText.length < 10) return;
         if (element.dataset.lingProcessed === "true" && element.dataset.lingText === sourceText) return;
 
-        let needTrans = false;
-        if (platform === 'twitter' || platform === 'discord') {
-            const cnChars = sourceText.match(/[\u4e00-\u9fa5]/g) || [];
-            const isForeign = !cnChars.length || cnChars.length / sourceText.length < 0.3;
-            if (isForeign) needTrans = true;
-        }
+        const needTrans = shouldTranslateToChinese(sourceText, platform);
 
         if (needTrans) {
             element.dataset.lingPending = "true";
