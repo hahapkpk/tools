@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.4.1
+// @version      0.4.2
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -520,30 +520,28 @@
   }
 
   function addStyles(doc) {
-    if (doc.getElementById('review-media-wall-style')) return;
-    const style = doc.createElement('style');
+    const style = doc.getElementById('review-media-wall-style') || doc.createElement('style');
     style.id = 'review-media-wall-style';
     style.textContent = `
 #${IDS.launcher} { display:inline-flex; align-items:center; height:100%; padding:0 22px; border:0; background:transparent; color:#111; font-size:16px; font-weight:600; cursor:pointer; }
 #${IDS.launcher}:hover { color:#e1251b; }
-#${IDS.backdrop} { position:fixed; inset:0; z-index:2147483000; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.56); }
-#${IDS.modal} { position:relative; display:flex; flex-direction:column; width:min(1460px,94vw); height:min(92vh,1020px); border-radius:16px; overflow:hidden; background:#f7f7f7; box-shadow:0 20px 70px rgba(0,0,0,.34); }
-.rmw-header { display:flex; align-items:center; justify-content:flex-end; gap:14px; padding:14px 24px; background:#fff; border-bottom:1px solid #ededed; }
-.rmw-sync, .rmw-close { border:1px solid #ddd; border-radius:18px; background:#fff; cursor:pointer; height:36px; padding:0 16px; font-size:14px; }
-.rmw-sync:hover { border-color:#e1251b; color:#e1251b; }
-.rmw-close { width:40px; padding:0; font-size:25px; line-height:30px; border:0; }
-.rmw-toolbar { display:flex; align-items:center; gap:18px; padding:10px 20px; background:#fff; border-top:1px solid #f3f3f3; }
-.rmw-group { display:flex; gap:6px; }
-.rmw-filter, .rmw-size { height:32px; padding:0 13px; border:1px solid #e4e4e4; border-radius:17px; background:#fff; color:#555; cursor:pointer; }
-.rmw-filter.is-active, .rmw-size.is-active { border-color:#ff3b30; color:#ff3b30; background:#fff1f0; }
-.rmw-loaded { margin-left:auto; color:#777; font-size:13px; }
-#${IDS.grid} { flex:1; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); align-content:start; gap:14px; overflow-y:auto; overflow-x:hidden; padding:18px 20px 30px; }
+#${IDS.backdrop} { position:fixed; inset:0; z-index:2147483000; display:flex; align-items:center; justify-content:center; background:rgba(32,33,36,.42); }
+#${IDS.modal} { position:relative; display:flex; flex-direction:column; width:min(1460px,94vw); height:min(92vh,1020px); border-radius:28px; overflow:hidden; background:#fff; box-shadow:0 1px 3px rgba(60,64,67,.30), 0 8px 24px rgba(60,64,67,.15); }
+.rmw-toolbar { display:flex; align-items:center; gap:12px; padding:16px 20px 12px; background:#fff; border-bottom:1px solid #edf0f3; }
+.rmw-group { display:flex; gap:8px; }
+.rmw-filter, .rmw-size, .rmw-sync, .rmw-close { height:36px; padding:0 14px; border:1px solid #dadce0; border-radius:999px; background:#fff; color:#3c4043; cursor:pointer; font-size:14px; line-height:34px; transition:background .14s ease, border-color .14s ease, box-shadow .14s ease, color .14s ease; }
+.rmw-filter:hover, .rmw-size:hover, .rmw-sync:hover, .rmw-close:hover { background:#f8fafd; border-color:#c9d7f1; box-shadow:0 1px 2px rgba(60,64,67,.12); }
+.rmw-filter.is-active, .rmw-size.is-active { border-color:#1a73e8; color:#1a73e8; background:#e8f0fe; }
+.rmw-loaded { margin-left:auto; color:#5f6368; font-size:13px; white-space:nowrap; }
+.rmw-sync { color:#1a73e8; }
+.rmw-close { width:36px; padding:0; border-color:transparent; color:#5f6368; font-size:24px; line-height:30px; }
+#${IDS.grid} { flex:1; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); align-content:start; gap:14px; overflow-y:auto; overflow-x:hidden; padding:18px 20px 30px; background:#fff; }
 .rmw-size-small { grid-template-columns:repeat(6,minmax(0,1fr)) !important; }
 .rmw-size-medium { grid-template-columns:repeat(5,minmax(0,1fr)) !important; }
 .rmw-size-large { grid-template-columns:repeat(4,minmax(0,1fr)) !important; }
-.rmw-card { position:relative; border-radius:12px; overflow:hidden; background:#eee; cursor:zoom-in; outline:none; transition:box-shadow .16s ease, transform .16s ease; }
-.rmw-card:focus-visible { box-shadow:0 0 0 3px #ff3b30; }
-.rmw-card.rmw-current { box-shadow:0 0 0 4px #ff3b30; transform:scale(.985); }
+.rmw-card { position:relative; border-radius:18px; overflow:hidden; background:#f1f3f4; cursor:zoom-in; outline:none; transition:box-shadow .16s ease, transform .16s ease; }
+.rmw-card:focus-visible { box-shadow:0 0 0 3px #1a73e8; }
+.rmw-card.rmw-current { box-shadow:0 0 0 4px #1a73e8; transform:scale(.985); }
 .rmw-card::before { content:''; display:block; padding-top:100%; }
 .rmw-card img, .rmw-card video { position:absolute; inset:0; display:block; width:100%; height:100%; object-fit:cover; }
 .rmw-play { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); border-radius:50%; width:50px; height:50px; display:grid; place-items:center; background:rgba(0,0,0,.58); color:white; font-size:23px; }
@@ -569,7 +567,7 @@
 @media (max-width:900px) { #${IDS.grid} { grid-template-columns:repeat(3,minmax(0,1fr)); } }
 @media (max-width:760px) { #${IDS.grid} { grid-template-columns:repeat(2,minmax(0,1fr)); } .rmw-preview-content { flex-direction:column; } .rmw-context { width:auto; } }
 `;
-    doc.head.appendChild(style);
+    if (!style.parentNode) doc.head.appendChild(style);
   }
 
   function renderPreview(doc, modal, state, session, onReturn) {
@@ -743,15 +741,15 @@
     const modal = makeElement(doc, 'section', '', '');
     modal.id = IDS.modal;
     modal.tabIndex = -1;
-    const header = makeElement(doc, 'header', 'rmw-header', '');
-    const sync = makeElement(doc, 'button', 'rmw-sync', '同步筛选结果');
-    const close = makeElement(doc, 'button', 'rmw-close', '×');
-    header.append(sync, close);
-    modal.appendChild(header);
     const toolbar = makeElement(doc, 'div', 'rmw-toolbar', '');
     const filterGroup = makeElement(doc, 'div', 'rmw-group', '');
     const sizeGroup = makeElement(doc, 'div', 'rmw-group', '');
     const loaded = makeElement(doc, 'span', 'rmw-loaded', '');
+    const sync = makeElement(doc, 'button', 'rmw-sync', '同步');
+    const close = makeElement(doc, 'button', 'rmw-close', '×');
+    sync.type = 'button';
+    close.type = 'button';
+    close.setAttribute('aria-label', '关闭图片墙');
     [['all', '全部'], ['image', '图片'], ['video', '视频']].forEach(([value, label]) => {
       const button = makeElement(doc, 'button', 'rmw-filter', label);
       button.type = 'button';
@@ -764,7 +762,7 @@
       button.dataset.value = value;
       sizeGroup.appendChild(button);
     });
-    toolbar.append(filterGroup, sizeGroup, loaded);
+    toolbar.append(filterGroup, sizeGroup, loaded, sync, close);
     modal.appendChild(toolbar);
     const grid = makeElement(doc, 'main', '', '');
     grid.id = IDS.grid;

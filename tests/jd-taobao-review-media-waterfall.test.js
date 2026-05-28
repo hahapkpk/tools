@@ -357,10 +357,28 @@ test('打开预览前会提前预热原图以减少黑屏等待', () => {
 });
 
 test('图片墙弹窗头部不再显示标题副标题和说明文案', () => {
+  assert.doesNotMatch(source, /rmw-header/);
   assert.doesNotMatch(source, /rmw-subtitle/);
   assert.doesNotMatch(source, /rmw-guide/);
   assert.doesNotMatch(source, /makeElement\(doc, 'h2', 'rmw-title', '图片墙'\)/);
   assert.doesNotMatch(source, /需要调整/);
+});
+
+test('关闭按钮和同步按钮位于工具栏中而不是独立顶部栏', () => {
+  assert.match(source, /toolbar\.append\(filterGroup, sizeGroup, loaded, sync, close\)/);
+  assert.doesNotMatch(source, /makeElement\(doc, 'header', 'rmw-header'/);
+  assert.doesNotMatch(source, /modal\.appendChild\(header\)/);
+});
+
+test('图片墙使用轻量 Google 风格的白底圆角和蓝色交互色', () => {
+  assert.match(source, /border-radius:28px/);
+  assert.match(source, /#1a73e8/);
+  assert.match(source, /box-shadow:0 1px 3px rgba\(60,64,67,\.[0-9]+\)/);
+});
+
+test('样式节点存在时会更新内容以支持油猴热更新后的新界面', () => {
+  assert.match(source, /const style = doc\.getElementById\('review-media-wall-style'\) \|\| doc\.createElement\('style'\)/);
+  assert.doesNotMatch(source, /if \(doc\.getElementById\('review-media-wall-style'\)\) return/);
 });
 
 test('预览打开时点击整个弹窗外侧遮罩也只返回图片墙', () => {
@@ -376,7 +394,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.4\.1/);
+  assert.match(source, /@version\s+0\.4\.2/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
