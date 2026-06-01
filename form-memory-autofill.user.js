@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         通用网页填表记忆助手
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.1.0
-// @description  自动记住当前网页表单内容，刷新后恢复输入框、下拉框、复选框、单选框、账号和密码等字段。
+// @version      0.2.0
+// @description  自动记住当前网页表单内容，刷新后恢复输入框、下拉框、复选框、单选框、点击式选项、账号和密码等字段。
 // @author       hahapkpk
 // @match        http://*/*
 // @match        https://*/*
@@ -19,7 +19,7 @@
   'use strict';
 
   const SCRIPT_ID = 'codex-form-memory-autofill';
-  const VERSION = '0.1.0';
+  const VERSION = '0.2.0';
   const DEBUG = false;
   const AUTO_SAVE_KEY = `${SCRIPT_ID}:auto-save-enabled`;
   const UI_ID = `${SCRIPT_ID}-panel`;
@@ -130,6 +130,96 @@
     ].join(','))).filter(el => !el.disabled && !el.readOnly && !el.closest('[data-codex-form-memory-ignore]'));
   }
 
+  function normalizedText(el) {
+    return (el.getAttribute('aria-label') || el.innerText || el.textContent || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 120);
+  }
+
+  function getClickableControls() {
+    const selectors = [
+      '[role="radio"]',
+      '[role="checkbox"]',
+      '[role="switch"]',
+      '[role="option"]',
+      '[aria-checked]',
+      '[aria-selected]'
+    ];
+    return Array.from(document.querySelectorAll(selectors.join(','))).filter(el => {
+      if (el.closest('[data-codex-form-memory-ignore]')) return false;
+      if (el.matches('input,textarea,select,option')) return false;
+      if (el.getAttribute('aria-disabled') === 'true') return false;
+      const role = (el.getAttribute('role') || '').toLowerCase();
+      return role || el.hasAttribute('aria-checked') || el.hasAttribute('aria-selected');
+    });
+  }
+
+  function clickableGroupKey(el) {
+    const group = el.closest('[role="radiogroup"],[role="group"],[role="listbox"],fieldset,form');
+    const groupText = group
+      ? (group.id || group.getAttribute('aria-label') || group.getAttribute('aria-labelledby') || normalizedText(group))
+      : 'no-group';
+    const groupIndex = group ? Array.from(document.querySelectorAll('[role="radiogroup"],[role="group"],[role="listbox"],fieldset,form')).indexOf(group) : -1;
+    const role = (el.getAttribute('role') || 'aria-control').toLowerCase();
+    return `${role}::${groupText || 'group'}::group-index-${groupIndex}`;
+  }
+
+  function clickableChoiceKey(el) {
+    const role = (el.getAttribute('role') || 'aria-control').toLowerCase();
+    return [
+      role,
+      el.id || '',
+      el.getAttribute('name') || '',
+      el.getAttribute('value') || '',
+      el.getAttribute('data-value') || '',
+      normalizedText(el)
+    ].join('|');
+  }
+
+  function isClickableSelected(el) {
+    const checked = el.getAttribute('aria-checked');
+    const selected = el.getAttribute('aria-selected');
+    if (checked != null) return checked === 'true';
+    if (selected != null) return selected === 'true';
+    return el.matches('[data-state="checked"],[data-checked="true"],.checked,.selected,.active,[class*="checked"],[class*="selected"]');
+  }
+
+  function customClickableSnapshot() {
+    const clickables = {};
+    getClickableControls().forEach(el => {
+      const groupKey = clickableGroupKey(el);
+      if (!clickables[groupKey]) clickables[groupKey] = [];
+      clickables[groupKey].push({
+        key: clickableChoiceKey(el),
+        text: normalizedText(el),
+        selected: isClickableSelected(el)
+      });
+    });
+    return clickables;
+  }
+
+  function restoreCustomClickables(clickables) {
+    if (!clickables) return 0;
+
+    let count = 0;
+    getClickableControls().forEach(el => {
+      const records = clickables[clickableGroupKey(el)];
+      if (!records) return;
+
+      const record = records.find(item => item.key === clickableChoiceKey(el))
+        || records.find(item => item.text && item.text === normalizedText(el));
+      if (!record) return;
+
+      const selected = isClickableSelected(el);
+      if (record.selected !== selected) {
+        el.click();
+        count += 1;
+      }
+    });
+    return count;
+  }
+
   function getFieldValue(el) {
     const tag = el.tagName.toLowerCase();
     const type = (el.type || '').toLowerCase();
@@ -211,7 +301,8 @@
       href: location.href,
       title: document.title,
       savedAt: new Date().toISOString(),
-      fields
+      fields,
+      clickables: customClickableSnapshot()
     };
   }
 
@@ -225,15 +316,16 @@
 
   function restoreNow(showToast = false) {
     const data = readValue(pageKey(), null);
-    if (!data || !data.fields) {
+    if (!data || (!data.fields && !data.clickables)) {
       if (showToast) toast('当前页面没有已保存的表单内容');
       return 0;
     }
 
     let count = 0;
     getFields().forEach(el => {
-      if (restoreField(el, data.fields[fieldKey(el)])) count += 1;
+      if (restoreField(el, data.fields && data.fields[fieldKey(el)])) count += 1;
     });
+    count += restoreCustomClickables(data.clickables);
     log('restored', count, data);
     if (showToast) toast(`已恢复 ${count} 个字段`);
     return count;
@@ -266,6 +358,11 @@
     }, true);
     document.addEventListener('change', event => {
       if (event.target && getFields().includes(event.target)) debouncedSave();
+    }, true);
+    document.addEventListener('click', event => {
+      if (event.target && event.target.closest('[role="radio"],[role="checkbox"],[role="switch"],[role="option"],[aria-checked],[aria-selected]')) {
+        setTimeout(() => debouncedSave(), 0);
+      }
     }, true);
   }
 
@@ -374,7 +471,11 @@
 
     function refreshStatus() {
       const data = readValue(pageKey(), null);
-      const count = data && data.fields ? Object.keys(data.fields).length : 0;
+      const fieldCount = data && data.fields ? Object.keys(data.fields).length : 0;
+      const clickableCount = data && data.clickables
+        ? Object.values(data.clickables).flat().filter(item => item.selected).length
+        : 0;
+      const count = fieldCount + clickableCount;
       status.textContent = `${isAutoSaveEnabled() ? '自动保存开启' : '自动保存关闭'} · 已记 ${count} 项`;
     }
 
