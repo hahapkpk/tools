@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         通用网页填表记忆助手
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.2.0
-// @description  自动记住当前网页表单内容，刷新后恢复输入框、下拉框、复选框、单选框、点击式选项、账号和密码等字段。
+// @version      0.3.0
+// @description  自动记住当前网页表单内容，刷新后恢复输入框、下拉框、复选框、单选框、多选、打勾项、点击式选项、账号和密码等字段。
 // @author       hahapkpk
 // @match        http://*/*
 // @match        https://*/*
@@ -19,7 +19,7 @@
   'use strict';
 
   const SCRIPT_ID = 'codex-form-memory-autofill';
-  const VERSION = '0.2.0';
+  const VERSION = '0.3.0';
   const DEBUG = false;
   const AUTO_SAVE_KEY = `${SCRIPT_ID}:auto-save-enabled`;
   const UI_ID = `${SCRIPT_ID}-panel`;
@@ -144,23 +144,65 @@
       '[role="switch"]',
       '[role="option"]',
       '[aria-checked]',
-      '[aria-selected]'
+      '[aria-selected]',
+      'label',
+      '[class*="radio" i]',
+      '[class*="checkbox" i]',
+      '[class*="check" i]',
+      '[class*="choice" i]',
+      '[class*="option" i]',
+      '[class*="select-item" i]',
+      '[class*="selected" i]',
+      '[class*="active" i]',
+      '[data-state="checked"]',
+      '[data-state="selected"]',
+      '[data-checked]',
+      '[data-selected]',
+      '[data-value]'
     ];
     return Array.from(document.querySelectorAll(selectors.join(','))).filter(el => {
       if (el.closest('[data-codex-form-memory-ignore]')) return false;
       if (el.matches('input,textarea,select,option')) return false;
       if (el.getAttribute('aria-disabled') === 'true') return false;
+      if (el.matches('a[href],button,[type="button"],[type="submit"],[role="button"]')) return false;
       const role = (el.getAttribute('role') || '').toLowerCase();
-      return role || el.hasAttribute('aria-checked') || el.hasAttribute('aria-selected');
+      const text = normalizedText(el);
+      const hasChoiceSignal = /radio|checkbox|check|choice|option|select-item|selected|active/i.test(el.className || '')
+        || Array.from(el.attributes).some(attr => /^(data-(state|checked|selected|value|option|choice)|aria-(checked|selected))$/i.test(attr.name));
+      return Boolean(text) && (role || el.tagName.toLowerCase() === 'label' || hasChoiceSignal);
     });
   }
 
+  function findClickableTarget(target) {
+    if (!target || target.nodeType !== 1) return null;
+    return target.closest([
+      '[role="radio"]',
+      '[role="checkbox"]',
+      '[role="switch"]',
+      '[role="option"]',
+      '[aria-checked]',
+      '[aria-selected]',
+      'label',
+      '[class*="radio" i]',
+      '[class*="checkbox" i]',
+      '[class*="check" i]',
+      '[class*="choice" i]',
+      '[class*="option" i]',
+      '[class*="select-item" i]',
+      '[data-state="checked"]',
+      '[data-state="selected"]',
+      '[data-checked]',
+      '[data-selected]',
+      '[data-value]'
+    ].join(','));
+  }
+
   function clickableGroupKey(el) {
-    const group = el.closest('[role="radiogroup"],[role="group"],[role="listbox"],fieldset,form');
+    const group = el.closest('[role="radiogroup"],[role="group"],[role="listbox"],fieldset,form,[class*="question" i],[class*="field" i],[class*="form-item" i],[class*="option-group" i]');
     const groupText = group
       ? (group.id || group.getAttribute('aria-label') || group.getAttribute('aria-labelledby') || normalizedText(group))
       : 'no-group';
-    const groupIndex = group ? Array.from(document.querySelectorAll('[role="radiogroup"],[role="group"],[role="listbox"],fieldset,form')).indexOf(group) : -1;
+    const groupIndex = group ? Array.from(document.querySelectorAll('[role="radiogroup"],[role="group"],[role="listbox"],fieldset,form,[class*="question" i],[class*="field" i],[class*="form-item" i],[class*="option-group" i]')).indexOf(group) : -1;
     const role = (el.getAttribute('role') || 'aria-control').toLowerCase();
     return `${role}::${groupText || 'group'}::group-index-${groupIndex}`;
   }
@@ -182,7 +224,11 @@
     const selected = el.getAttribute('aria-selected');
     if (checked != null) return checked === 'true';
     if (selected != null) return selected === 'true';
-    return el.matches('[data-state="checked"],[data-checked="true"],.checked,.selected,.active,[class*="checked"],[class*="selected"]');
+    const linkedInput = el.tagName.toLowerCase() === 'label' && el.htmlFor
+      ? document.getElementById(el.htmlFor)
+      : el.querySelector('input[type="checkbox"],input[type="radio"]');
+    if (linkedInput) return Boolean(linkedInput.checked);
+    return el.matches('[data-state="checked"],[data-state="selected"],[data-checked="true"],[data-selected="true"],.checked,.selected,.active,[class*="checked" i],[class*="selected" i],[class*="active" i]');
   }
 
   function customClickableSnapshot() {
@@ -360,7 +406,7 @@
       if (event.target && getFields().includes(event.target)) debouncedSave();
     }, true);
     document.addEventListener('click', event => {
-      if (event.target && event.target.closest('[role="radio"],[role="checkbox"],[role="switch"],[role="option"],[aria-checked],[aria-selected]')) {
+      if (findClickableTarget(event.target)) {
         setTimeout(() => debouncedSave(), 0);
       }
     }, true);
