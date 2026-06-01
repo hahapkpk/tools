@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         通用网页填表记忆助手
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.3.0
+// @version      0.3.1
 // @description  自动记住当前网页表单内容，刷新后恢复输入框、下拉框、复选框、单选框、多选、打勾项、点击式选项、账号和密码等字段。
 // @author       hahapkpk
 // @match        http://*/*
@@ -11,15 +11,15 @@
 // @grant        GM_setValue
 // @grant        GM_deleteValue
 // @grant        GM_registerMenuCommand
-// @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/form-memory-autofill.user.js
-// @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/form-memory-autofill.user.js
+// @downloadURL  https://github.com/hahapkpk/tools/raw/refs/heads/main/form-memory-autofill.user.js
+// @updateURL    https://github.com/hahapkpk/tools/raw/refs/heads/main/form-memory-autofill.user.js
 // ==/UserScript==
 
 (function () {
   'use strict';
 
   const SCRIPT_ID = 'codex-form-memory-autofill';
-  const VERSION = '0.3.0';
+  const VERSION = '0.3.1';
   const DEBUG = false;
   const AUTO_SAVE_KEY = `${SCRIPT_ID}:auto-save-enabled`;
   const UI_ID = `${SCRIPT_ID}-panel`;
