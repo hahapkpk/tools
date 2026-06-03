@@ -350,10 +350,34 @@ test('评价信息收起后操作按钮仍保留在媒体区域以便重新展�
   assert.match(source, /tools\.append\(toggle, original, download\)/);
 });
 
+test('退出预览返回图片墙时使用即时定位避免点击外部区域迟钝', () => {
+  assert.match(source, /card\.scrollIntoView\(\{ block: 'center', behavior: 'auto' \}\)/);
+  assert.doesNotMatch(source, /scrollIntoView\(\{ block: 'center', behavior: 'smooth' \}\)/);
+});
+
+test('预览右侧评价文字采用更清晰的大字号分层排版', () => {
+  assert.match(source, /rmw-context-title/);
+  assert.match(source, /rmw-context-text/);
+  assert.match(source, /rmw-context-meta/);
+  assert.match(source, /\.rmw-context-text\s*\{[^}]*font-size:18px;[^}]*line-height:1\.85;/s);
+  assert.match(source, /\.rmw-context-meta\s*\{[^}]*font-size:15px;[^}]*line-height:1\.7;/s);
+});
+
 test('打开预览前会提前预热原图以减少黑屏等待', () => {
   assert.match(source, /function preloadPreviewMedia/);
   assert.match(source, /new root\.Image\(\)/);
   assert.match(source, /preloadPreviewAround\(items, index\)/);
+});
+
+test('预览图片先显示缩略图并在原图加载后替换以提升打开速度', () => {
+  assert.match(source, /const previewSrc = item\.poster \|\| item\.src/);
+  assert.match(source, /media\.src = previewSrc/);
+  assert.match(source, /fullImage\.onload = \(\) => \{ media\.src = item\.src; \}/);
+});
+
+test('预览外层关闭使用 pointerdown 提前响应', () => {
+  assert.match(source, /overlay\.addEventListener\('pointerdown'/);
+  assert.doesNotMatch(source, /overlay\.addEventListener\('click', \(event\) => \{[\s\S]*state\.onBackdrop\(\);[\s\S]*onReturn\(\);[\s\S]*\}\);/);
 });
 
 test('图片墙弹窗头部不再显示标题副标题和说明文案', () => {
@@ -394,7 +418,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.4\.2/);
+  assert.match(source, /@version\s+0\.4\.3/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });

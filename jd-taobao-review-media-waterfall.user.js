@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.4.2
+// @version      0.4.3
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -559,8 +559,10 @@
 .rmw-preview-nav:hover { background:rgba(0,0,0,.72); }
 .rmw-preview-prev { left:18px; }
 .rmw-preview-next { right:18px; }
-.rmw-context { width:min(330px,26vw); padding:24px; background:#fff; color:#222; overflow:auto; line-height:1.65; }
-.rmw-context h3 { margin:0 0 12px; font-size:16px; }
+.rmw-context { width:min(390px,30vw); padding:32px 34px; background:#fff; color:#202124; overflow:auto; }
+.rmw-context-title { margin:0 0 20px; font-size:26px; line-height:1.28; font-weight:700; letter-spacing:-.02em; color:#202124; }
+.rmw-context-text { margin:0; font-size:18px; line-height:1.85; font-weight:400; color:#202124; white-space:pre-wrap; overflow-wrap:anywhere; }
+.rmw-context-meta { margin:18px 0 0; padding-top:16px; border-top:1px solid #edf0f3; font-size:15px; line-height:1.7; color:#5f6368; overflow-wrap:anywhere; }
 .rmw-context-toggle, .rmw-media-action { display:inline-flex; align-items:center; height:32px; margin:0 8px 12px 0; padding:0 12px; border:1px solid #ddd; border-radius:17px; background:#fff; color:#333; cursor:pointer; text-decoration:none; font-size:13px; }
 .rmw-preview-tools .rmw-context-toggle, .rmw-preview-tools .rmw-media-action { margin:0; }
 @media (max-width:1100px) { #${IDS.grid} { grid-template-columns:repeat(4,minmax(0,1fr)); } }
@@ -585,8 +587,19 @@
     const mediaBox = makeElement(doc, 'div', 'rmw-preview-media', '');
     mediaBox.appendChild(makeElement(doc, 'span', 'rmw-counter', `${snapshot.previewPosition} / ${snapshot.previewTotal}`));
     const media = doc.createElement(item.type === 'video' ? 'video' : 'img');
-    media.src = item.src;
-    if (media.tagName === 'IMG') media.decoding = 'async';
+    if (media.tagName === 'IMG') {
+      const previewSrc = item.poster || item.src;
+      media.decoding = 'async';
+      media.src = previewSrc;
+      if (item.src && item.src !== previewSrc && root.Image) {
+        const fullImage = new root.Image();
+        fullImage.decoding = 'async';
+        fullImage.onload = () => { media.src = item.src; };
+        fullImage.src = item.src;
+      }
+    } else {
+      media.src = item.src;
+    }
     if (item.type === 'video') {
       media.controls = true;
       media.autoplay = true;
@@ -594,7 +607,7 @@
     }
     mediaBox.appendChild(media);
     const context = makeElement(doc, 'aside', 'rmw-context', '');
-    context.appendChild(makeElement(doc, 'h3', '', item.type === 'video' ? '视频评价' : '图片评价'));
+    context.appendChild(makeElement(doc, 'h3', 'rmw-context-title', item.type === 'video' ? '视频评价' : '图片评价'));
     const tools = makeElement(doc, 'div', 'rmw-preview-tools', '');
     const toggle = makeElement(doc, 'button', 'rmw-context-toggle', sessionSnapshot.contextCollapsed ? '展开评价' : '收起评价');
     toggle.type = 'button';
@@ -611,8 +624,8 @@
     download.download = '';
     tools.append(toggle, original, download);
     mediaBox.appendChild(tools);
-    context.appendChild(makeElement(doc, 'p', '', item.text || '该媒体暂无可见评价文字。'));
-    if (item.meta) context.appendChild(makeElement(doc, 'p', '', item.meta));
+    context.appendChild(makeElement(doc, 'p', 'rmw-context-text', item.text || '该媒体暂无可见评价文字。'));
+    if (item.meta) context.appendChild(makeElement(doc, 'p', 'rmw-context-meta', item.meta));
     content.append(mediaBox, context);
     overlay.appendChild(content);
     function shift(delta) {
@@ -634,8 +647,9 @@
       nextButton.addEventListener('click', () => shift(1));
       overlay.appendChild(nextButton);
     }
-    overlay.addEventListener('click', (event) => {
+    overlay.addEventListener('pointerdown', (event) => {
       if (event.target !== overlay) return;
+      event.preventDefault();
       state.onBackdrop();
       renderPreview(doc, modal, state, session, onReturn);
       onReturn();
@@ -782,7 +796,7 @@
       highlightKey = key;
       const card = Array.from(grid.querySelectorAll('.rmw-card')).find((node) => node.dataset.mediaKey === key);
       if (!card) return;
-      card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      card.scrollIntoView({ block: 'center', behavior: 'auto' });
       card.classList.add('rmw-current');
       root.setTimeout(() => {
         if (highlightKey !== key) return;
