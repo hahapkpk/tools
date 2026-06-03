@@ -357,10 +357,21 @@ test('退出预览返回图片墙时使用即时定位避免点击外部区域�
 
 test('预览右侧评价文字采用更清晰的大字号分层排版', () => {
   assert.match(source, /rmw-context-title/);
+  assert.match(source, /rmw-context-label/);
   assert.match(source, /rmw-context-text/);
   assert.match(source, /rmw-context-meta/);
-  assert.match(source, /\.rmw-context-text\s*\{[^}]*font-size:18px;[^}]*line-height:1\.85;/s);
-  assert.match(source, /\.rmw-context-meta\s*\{[^}]*font-size:15px;[^}]*line-height:1\.7;/s);
+  assert.match(source, /\.rmw-context-title\s*\{[^}]*font-size:30px;/s);
+  assert.match(source, /\.rmw-context-text\s*\{[^}]*font-size:20px;[^}]*line-height:1\.9;/s);
+  assert.match(source, /\.rmw-context-meta\s*\{[^}]*font-size:17px;[^}]*line-height:1\.75;/s);
+  assert.match(source, /makeElement\(doc, 'span', 'rmw-context-label', '评价内容'\)/);
+  assert.match(source, /makeElement\(doc, 'span', 'rmw-context-label rmw-context-meta-label', '购买信息'\)/);
+});
+
+test('淘宝天猫评价内容使用同一套预览阅读排版', () => {
+  assert.match(source, /function appendTaobaoReviewMedia/);
+  assert.match(source, /items\.push\(\{ type: 'image', src: absoluteMediaUrl\(src\), poster: '', text, meta \}\)/);
+  assert.match(source, /context\.appendChild\(makeElement\(doc, 'p', 'rmw-context-text', item\.text \|\|/);
+  assert.match(source, /context\.appendChild\(makeElement\(doc, 'p', 'rmw-context-meta', item\.meta\)\)/);
 });
 
 test('打开预览前会提前预热原图以减少黑屏等待', () => {
@@ -418,7 +429,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.4\.3/);
+  assert.match(source, /@version\s+0\.4\.4/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });

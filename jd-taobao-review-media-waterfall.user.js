@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.4.3
+// @version      0.4.4
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -559,10 +559,11 @@
 .rmw-preview-nav:hover { background:rgba(0,0,0,.72); }
 .rmw-preview-prev { left:18px; }
 .rmw-preview-next { right:18px; }
-.rmw-context { width:min(390px,30vw); padding:32px 34px; background:#fff; color:#202124; overflow:auto; }
-.rmw-context-title { margin:0 0 20px; font-size:26px; line-height:1.28; font-weight:700; letter-spacing:-.02em; color:#202124; }
-.rmw-context-text { margin:0; font-size:18px; line-height:1.85; font-weight:400; color:#202124; white-space:pre-wrap; overflow-wrap:anywhere; }
-.rmw-context-meta { margin:18px 0 0; padding-top:16px; border-top:1px solid #edf0f3; font-size:15px; line-height:1.7; color:#5f6368; overflow-wrap:anywhere; }
+.rmw-context { width:min(460px,32vw); padding:38px 40px; background:#fff; color:#202124; overflow:auto; }
+.rmw-context-title { margin:0 0 26px; font-size:30px; line-height:1.22; font-weight:700; letter-spacing:-.025em; color:#202124; }
+.rmw-context-label { display:block; margin:0 0 10px; font-size:14px; line-height:1.4; font-weight:700; letter-spacing:.08em; color:#1a73e8; }
+.rmw-context-text { margin:0; font-size:20px; line-height:1.9; font-weight:400; color:#202124; white-space:pre-wrap; overflow-wrap:anywhere; }
+.rmw-context-meta { margin:22px 0 0; padding-top:18px; border-top:1px solid #edf0f3; font-size:17px; line-height:1.75; color:#5f6368; overflow-wrap:anywhere; }
 .rmw-context-toggle, .rmw-media-action { display:inline-flex; align-items:center; height:32px; margin:0 8px 12px 0; padding:0 12px; border:1px solid #ddd; border-radius:17px; background:#fff; color:#333; cursor:pointer; text-decoration:none; font-size:13px; }
 .rmw-preview-tools .rmw-context-toggle, .rmw-preview-tools .rmw-media-action { margin:0; }
 @media (max-width:1100px) { #${IDS.grid} { grid-template-columns:repeat(4,minmax(0,1fr)); } }
@@ -608,6 +609,7 @@
     mediaBox.appendChild(media);
     const context = makeElement(doc, 'aside', 'rmw-context', '');
     context.appendChild(makeElement(doc, 'h3', 'rmw-context-title', item.type === 'video' ? '视频评价' : '图片评价'));
+    context.appendChild(makeElement(doc, 'span', 'rmw-context-label', '评价内容'));
     const tools = makeElement(doc, 'div', 'rmw-preview-tools', '');
     const toggle = makeElement(doc, 'button', 'rmw-context-toggle', sessionSnapshot.contextCollapsed ? '展开评价' : '收起评价');
     toggle.type = 'button';
@@ -625,7 +627,10 @@
     tools.append(toggle, original, download);
     mediaBox.appendChild(tools);
     context.appendChild(makeElement(doc, 'p', 'rmw-context-text', item.text || '该媒体暂无可见评价文字。'));
-    if (item.meta) context.appendChild(makeElement(doc, 'p', 'rmw-context-meta', item.meta));
+    if (item.meta) {
+      context.appendChild(makeElement(doc, 'span', 'rmw-context-label rmw-context-meta-label', '购买信息'));
+      context.appendChild(makeElement(doc, 'p', 'rmw-context-meta', item.meta));
+    }
     content.append(mediaBox, context);
     overlay.appendChild(content);
     function shift(delta) {
