@@ -446,7 +446,7 @@ test('图片墙弹窗头部不再显示标题副标题和说明文案', () => {
 });
 
 test('关闭按钮和同步按钮位于工具栏中而不是独立顶部栏', () => {
-  assert.match(source, /toolbar\.append\(filterGroup, sizeGroup, loaded, sync, close\)/);
+  assert.match(source, /toolbar\.append\(filterGroup, sizeGroup, currentProduct, loaded, sync, close\)/);
   assert.doesNotMatch(source, /makeElement\(doc, 'header', 'rmw-header'/);
   assert.doesNotMatch(source, /modal\.appendChild\(header\)/);
 });
@@ -475,7 +475,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.4\.6/);
+  assert.match(source, /@version\s+0\.4\.7/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
@@ -508,6 +508,64 @@ test('图视频筛选已激活时不重复触发原生点击', () => {
   const root = { querySelectorAll: () => [selected] };
   assert.equal(api.adapters.taobao.selectMedia(root), true);
   assert.equal(clicks, 0);
+});
+
+test('京东当前商品筛选复用原生当前商品开关', () => {
+  let clicked = 0;
+  const current = {
+    className: '_skuSelect_test',
+    textContent: '当前商品',
+    innerText: '当前商品',
+    children: [],
+    click() {
+      clicked += 1;
+    }
+  };
+  const root = {
+    querySelectorAll() {
+      return [current];
+    }
+  };
+  assert.equal(api.adapters.jd.openCurrentProductFilter(root), 'immediate');
+  assert.equal(clicked, 1);
+});
+
+test('淘宝当前商品筛选打开原生款式筛选面板', () => {
+  let clicked = 0;
+  const root = {
+    querySelector(selector) {
+      if (!selector.includes('shapeFliterWrap')) return null;
+      return {
+        click() {
+          clicked += 1;
+        }
+      };
+    }
+  };
+  assert.equal(api.adapters.taobao.openCurrentProductFilter(root), 'interactive');
+  assert.equal(clicked, 1);
+});
+
+test('淘宝只把评价款式筛选弹层识别为当前商品筛选面板', () => {
+  const documentWithProductPanel = {
+    querySelectorAll() {
+      return [
+        { innerText: '商品规格\n颜色分类' },
+        { innerText: '款式筛选\n商品规格\n清空选择\n确定' }
+      ];
+    }
+  };
+  assert.equal(api.adapters.taobao.isCurrentProductFilterOpen(documentWithProductPanel), true);
+  documentWithProductPanel.querySelectorAll = () => [{ innerText: '商品规格\n颜色分类' }];
+  assert.equal(api.adapters.taobao.isCurrentProductFilterOpen(documentWithProductPanel), false);
+});
+
+test('图片墙工具栏提供当前商品筛选并在淘宝交互筛选后恢复同步', () => {
+  assert.match(source, /makeElement\(doc, 'button', 'rmw-current-product', '当前商品'\)/);
+  assert.match(source, /adapter\.openCurrentProductFilter\(nativeRoot\)/);
+  assert.match(source, /backdrop\.style\.display = 'none'/);
+  assert.match(source, /waitForCurrentProductFilter/);
+  assert.match(source, /syncMedia\(true\)/);
 });
 
 test('淘宝图视频筛选项含数量子节点时点击真实筛选容器', () => {

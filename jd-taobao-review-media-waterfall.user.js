@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.4.6
+// @version      0.4.7
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -427,6 +427,9 @@
       selectMedia(nativeRoot) {
         return clickText(nativeRoot, '图/视频');
       },
+      openCurrentProductFilter(nativeRoot) {
+        return clickText(nativeRoot, '当前商品') ? 'immediate' : false;
+      },
       collectMedia: collectJdMedia
     },
     taobao: {
@@ -447,6 +450,16 @@
       },
       selectMedia(nativeRoot) {
         return clickText(nativeRoot, '图/视频');
+      },
+      openCurrentProductFilter(nativeRoot) {
+        const trigger = nativeRoot?.querySelector('[class*="shapeFliterWrap--"]');
+        if (!trigger) return false;
+        trigger.click();
+        return 'interactive';
+      },
+      isCurrentProductFilterOpen(doc) {
+        return Array.from(doc.querySelectorAll('[class*="dialogWrap--"]'))
+          .some((dialog) => (dialog.innerText || '').trim().startsWith('款式筛选'));
       },
       collectMedia: collectFromAlbums
     }
@@ -569,8 +582,8 @@
 #${IDS.modal} { position:relative; display:flex; flex-direction:column; width:min(1460px,94vw); height:min(92vh,1020px); border-radius:28px; overflow:hidden; background:#fff; box-shadow:0 1px 3px rgba(60,64,67,.30), 0 8px 24px rgba(60,64,67,.15); }
 .rmw-toolbar { display:flex; align-items:center; gap:12px; padding:16px 20px 12px; background:#fff; border-bottom:1px solid #edf0f3; }
 .rmw-group { display:flex; gap:8px; }
-.rmw-filter, .rmw-size, .rmw-sync, .rmw-close { height:36px; padding:0 14px; border:1px solid #dadce0; border-radius:999px; background:#fff; color:#3c4043; cursor:pointer; font-size:14px; line-height:34px; transition:background .14s ease, border-color .14s ease, box-shadow .14s ease, color .14s ease; }
-.rmw-filter:hover, .rmw-size:hover, .rmw-sync:hover, .rmw-close:hover { background:#f8fafd; border-color:#c9d7f1; box-shadow:0 1px 2px rgba(60,64,67,.12); }
+.rmw-filter, .rmw-size, .rmw-current-product, .rmw-sync, .rmw-close { height:36px; padding:0 14px; border:1px solid #dadce0; border-radius:999px; background:#fff; color:#3c4043; cursor:pointer; font-size:14px; line-height:34px; transition:background .14s ease, border-color .14s ease, box-shadow .14s ease, color .14s ease; }
+.rmw-filter:hover, .rmw-size:hover, .rmw-current-product:hover, .rmw-sync:hover, .rmw-close:hover { background:#f8fafd; border-color:#c9d7f1; box-shadow:0 1px 2px rgba(60,64,67,.12); }
 .rmw-filter.is-active, .rmw-size.is-active { border-color:#1a73e8; color:#1a73e8; background:#e8f0fe; }
 .rmw-loaded { margin-left:auto; color:#5f6368; font-size:13px; white-space:nowrap; }
 .rmw-sync { color:#1a73e8; }
@@ -855,10 +868,12 @@
     const toolbar = makeElement(doc, 'div', 'rmw-toolbar', '');
     const filterGroup = makeElement(doc, 'div', 'rmw-group', '');
     const sizeGroup = makeElement(doc, 'div', 'rmw-group', '');
+    const currentProduct = makeElement(doc, 'button', 'rmw-current-product', '当前商品');
     const loaded = makeElement(doc, 'span', 'rmw-loaded', '');
     const sync = makeElement(doc, 'button', 'rmw-sync', '同步');
     const close = makeElement(doc, 'button', 'rmw-close', '×');
     sync.type = 'button';
+    currentProduct.type = 'button';
     close.type = 'button';
     close.setAttribute('aria-label', '关闭图片墙');
     [['all', '全部'], ['image', '图片'], ['video', '视频']].forEach(([value, label]) => {
@@ -873,7 +888,7 @@
       button.dataset.value = value;
       sizeGroup.appendChild(button);
     });
-    toolbar.append(filterGroup, sizeGroup, loaded, sync, close);
+    toolbar.append(filterGroup, sizeGroup, currentProduct, loaded, sync, close);
     modal.appendChild(toolbar);
     const grid = makeElement(doc, 'main', '', '');
     grid.id = IDS.grid;
@@ -959,6 +974,24 @@
     }
     waitForNative();
 
+    function waitForCurrentProductFilter() {
+      let sawFilter = false;
+      let checks = 0;
+      function checkFilter() {
+        checks += 1;
+        const filterOpen = adapter.isCurrentProductFilterOpen?.(doc);
+        sawFilter ||= Boolean(filterOpen);
+        if (filterOpen || (!sawFilter && checks < 8)) {
+          root.setTimeout(checkFilter, 200);
+          return;
+        }
+        backdrop.style.display = 'flex';
+        syncMedia(true);
+        modal.focus();
+      }
+      checkFilter();
+    }
+
     function requestMore() {
       if (!nativeRoot || !wallSession.beginLoad()) return;
       renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
@@ -987,6 +1020,16 @@
       if (!button) return;
       wallSession.setCardSize(button.dataset.value);
       renderWall('当前类型暂无已加载媒体。');
+    });
+    currentProduct.addEventListener('click', () => {
+      nativeRoot = adapter.findNativeRoot(doc);
+      const behavior = adapter.openCurrentProductFilter(nativeRoot);
+      if (behavior === 'interactive') {
+        backdrop.style.display = 'none';
+        waitForCurrentProductFilter();
+        return;
+      }
+      if (behavior === 'immediate') root.setTimeout(() => syncMedia(true), 180);
     });
     sync.addEventListener('click', () => {
       wallSession.retryLoad();
