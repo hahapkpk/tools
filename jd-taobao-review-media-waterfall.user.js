@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.4.8
-// @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。点击已选中的当前卡片可取消选中。
+// @version      0.4.9
+// @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。当前商品筛选支持点击两次回到全部。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
 // @match        https://item.taobao.com/*
@@ -406,6 +406,20 @@
     return true;
   }
 
+  function toggleText(nativeRoot, text) {
+    if (!nativeRoot) return false;
+    const matches = Array.from(nativeRoot.querySelectorAll('*')).filter((element) => {
+      const value = (element.textContent || element.innerText || '').trim();
+      return value === text || value.startsWith(text);
+    });
+    const target = matches.find((element) => /(?:imprItem|_tag(?:_|-))/i.test(String(element.className || '')))
+      || matches.find((element) => element.children.length === 0)
+      || matches[0];
+    if (!target) return false;
+    target.click();
+    return true;
+  }
+
   const adapters = {
     jd: {
       findMount(doc) {
@@ -428,7 +442,7 @@
         return clickText(nativeRoot, '图/视频');
       },
       openCurrentProductFilter(nativeRoot) {
-        return clickText(nativeRoot, '当前商品') ? 'immediate' : false;
+        return toggleText(nativeRoot, '当前商品') ? 'immediate' : false;
       },
       collectMedia: collectJdMedia
     },
@@ -584,7 +598,7 @@
 .rmw-group { display:flex; gap:8px; }
 .rmw-filter, .rmw-size, .rmw-current-product, .rmw-sync, .rmw-close { height:36px; padding:0 14px; border:1px solid #dadce0; border-radius:999px; background:#fff; color:#3c4043; cursor:pointer; font-size:14px; line-height:34px; transition:background .14s ease, border-color .14s ease, box-shadow .14s ease, color .14s ease; }
 .rmw-filter:hover, .rmw-size:hover, .rmw-current-product:hover, .rmw-sync:hover, .rmw-close:hover { background:#f8fafd; border-color:#c9d7f1; box-shadow:0 1px 2px rgba(60,64,67,.12); }
-.rmw-filter.is-active, .rmw-size.is-active { border-color:#1a73e8; color:#1a73e8; background:#e8f0fe; }
+.rmw-filter.is-active, .rmw-size.is-active, .rmw-current-product.is-active { border-color:#1a73e8; color:#1a73e8; background:#e8f0fe; }
 .rmw-loaded { margin-left:auto; color:#5f6368; font-size:13px; white-space:nowrap; }
 .rmw-sync { color:#1a73e8; }
 .rmw-close { width:36px; padding:0; border-color:transparent; color:#5f6368; font-size:24px; line-height:30px; }
@@ -906,6 +920,7 @@
     let attempts = 0;
     let restoredScroll = false;
     let highlightKey = '';
+    let currentProductActive = false;
     function revealCurrentCard() {
       modal.focus();
       const key = wallSession.snapshot().previewKey;
@@ -1032,6 +1047,8 @@
     });
     currentProduct.addEventListener('click', () => {
       nativeRoot = adapter.findNativeRoot(doc);
+      currentProductActive = !currentProductActive;
+      currentProduct.classList.toggle('is-active', currentProductActive);
       const behavior = adapter.openCurrentProductFilter(nativeRoot);
       if (behavior === 'interactive') {
         backdrop.style.display = 'none';
