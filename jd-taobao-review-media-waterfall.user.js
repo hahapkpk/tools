@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.4.7
-// @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。
+// @version      0.4.8
+// @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。点击已选中的当前卡片可取消选中。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
 // @match        https://item.taobao.com/*
@@ -792,7 +792,7 @@
     return `已加载 ${total} 项，继续向下滚动以加载更多`;
   }
 
-  function renderCards(doc, grid, state, modal, items, emptyMessage, session, onReturn, onRetry, highlightKey) {
+  function renderCards(doc, grid, state, modal, items, emptyMessage, session, onReturn, onRetry, highlightKey, onDeselect) {
     grid.textContent = '';
     if (!items.length) {
       grid.appendChild(makeElement(doc, 'div', 'rmw-status', emptyMessage));
@@ -810,6 +810,10 @@
       preloadPreviewMedia(item);
       if (item.type === 'video') card.appendChild(makeElement(doc, 'span', 'rmw-play', '▶'));
       function openPreview() {
+        if (item.src === highlightKey) {
+          onDeselect();
+          return;
+        }
         session.rememberView({ scrollTop: grid.scrollTop, previewKey: item.src });
         state.openPreview(items, index);
         preloadPreviewAround(items, index);
@@ -916,6 +920,11 @@
         grid.querySelectorAll('.rmw-current').forEach((node) => node.classList.remove('rmw-current'));
       }, 1000);
     }
+    function deselectCurrentCard() {
+      highlightKey = '';
+      wallSession.rememberView({ previewKey: '' });
+      grid.querySelectorAll('.rmw-current').forEach((node) => node.classList.remove('rmw-current'));
+    }
     function renderWall(emptyMessage) {
       const sessionSnapshot = wallSession.snapshot();
       const desiredScroll = restoredScroll ? grid.scrollTop : sessionSnapshot.scrollTop;
@@ -928,7 +937,7 @@
       sizeGroup.querySelectorAll('.rmw-size').forEach((button) => {
         button.classList.toggle('is-active', button.dataset.value === sessionSnapshot.cardSize);
       });
-      renderCards(doc, grid, state, modal, visible, emptyMessage, wallSession, revealCurrentCard, requestMore, highlightKey);
+      renderCards(doc, grid, state, modal, visible, emptyMessage, wallSession, revealCurrentCard, requestMore, highlightKey, deselectCurrentCard);
       grid.scrollTop = desiredScroll;
       restoredScroll = true;
     }
