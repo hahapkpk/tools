@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.4.4
+// @version      0.4.5
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -62,10 +62,39 @@
   }
 
   const STORAGE_KEYS = {
-    cardSize: 'reviewMediaWall.cardSize'
+    cardSize: 'reviewMediaWall.cardSize',
+    contextWidth: 'reviewMediaWall.contextWidth'
   };
   const CARD_SIZES = new Set(['small', 'medium', 'large']);
+  const DEFAULT_CONTEXT_WIDTH = 420;
+  const MIN_CONTEXT_WIDTH = 320;
+  const MAX_CONTEXT_WIDTH = 700;
   const preloadedPreviewMedia = new Set();
+
+  function clampContextWidth(value) {
+    return Math.max(MIN_CONTEXT_WIDTH, Math.min(MAX_CONTEXT_WIDTH, Math.round(Number(value) || DEFAULT_CONTEXT_WIDTH)));
+  }
+
+  function contextWidthKey(site) {
+    return `${STORAGE_KEYS.contextWidth}.${site || 'shared'}`;
+  }
+
+  function readStoredContextWidth(storage, site) {
+    try {
+      return clampContextWidth(storage?.getItem(contextWidthKey(site)));
+    } catch (error) {
+      return DEFAULT_CONTEXT_WIDTH;
+    }
+  }
+
+  function writeStoredContextWidth(storage, site, value) {
+    try {
+      storage?.setItem(contextWidthKey(site), String(value));
+    } catch (error) {
+      return undefined;
+    }
+    return undefined;
+  }
 
   function readStoredCardSize(storage) {
     try {
@@ -85,13 +114,14 @@
     return undefined;
   }
 
-  function createWallSession(storage = root.localStorage) {
+  function createWallSession(storage = root.localStorage, site = 'shared') {
     const saved = {
       mediaFilter: 'all',
       cardSize: readStoredCardSize(storage) || 'medium',
       scrollTop: 0,
       previewKey: '',
       contextCollapsed: false,
+      contextWidth: readStoredContextWidth(storage, site),
       loadingState: 'idle',
       stagnantLoads: 0
     };
@@ -106,6 +136,14 @@
       },
       toggleContext() {
         saved.contextCollapsed = !saved.contextCollapsed;
+      },
+      setContextWidth(value) {
+        saved.contextWidth = clampContextWidth(value);
+        writeStoredContextWidth(storage, site, saved.contextWidth);
+      },
+      resetContextWidth() {
+        saved.contextWidth = DEFAULT_CONTEXT_WIDTH;
+        writeStoredContextWidth(storage, site, saved.contextWidth);
       },
       rememberView({ scrollTop, previewKey }) {
         if (Number.isFinite(scrollTop)) saved.scrollTop = scrollTop;
@@ -559,7 +597,10 @@
 .rmw-preview-nav:hover { background:rgba(0,0,0,.72); }
 .rmw-preview-prev { left:18px; }
 .rmw-preview-next { right:18px; }
-.rmw-context { width:min(460px,32vw); padding:38px 40px; background:#fff; color:#202124; overflow:auto; }
+.rmw-context-resizer { position:relative; flex:0 0 10px; width:10px; background:#f1f3f4; cursor:col-resize; touch-action:none; }
+.rmw-context-resizer::after { content:''; position:absolute; left:3px; top:50%; width:4px; height:48px; border-radius:3px; background:#c4c7c5; transform:translateY(-50%); transition:background .15s ease, height .15s ease; }
+.rmw-context-resizer:hover::after, .rmw-context-resizer.is-dragging::after { height:72px; background:#1a73e8; }
+.rmw-context { box-sizing:border-box; flex:0 0 auto; width:420px; min-width:320px; max-width:700px; padding:38px 40px; background:#fff; color:#202124; overflow:auto; }
 .rmw-context-title { margin:0 0 26px; font-size:30px; line-height:1.22; font-weight:700; letter-spacing:-.025em; color:#202124; }
 .rmw-context-label { display:block; margin:0 0 10px; font-size:14px; line-height:1.4; font-weight:700; letter-spacing:.08em; color:#1a73e8; }
 .rmw-context-text { margin:0; font-size:20px; line-height:1.9; font-weight:400; color:#202124; white-space:pre-wrap; overflow-wrap:anywhere; }
@@ -568,7 +609,7 @@
 .rmw-preview-tools .rmw-context-toggle, .rmw-preview-tools .rmw-media-action { margin:0; }
 @media (max-width:1100px) { #${IDS.grid} { grid-template-columns:repeat(4,minmax(0,1fr)); } }
 @media (max-width:900px) { #${IDS.grid} { grid-template-columns:repeat(3,minmax(0,1fr)); } }
-@media (max-width:760px) { #${IDS.grid} { grid-template-columns:repeat(2,minmax(0,1fr)); } .rmw-preview-content { flex-direction:column; } .rmw-context { width:auto; } }
+@media (max-width:760px) { #${IDS.grid} { grid-template-columns:repeat(2,minmax(0,1fr)); } .rmw-preview-content { flex-direction:column; } .rmw-context-resizer { display:none; } .rmw-context { width:auto !important; min-width:0; max-width:none; } }
 `;
     if (!style.parentNode) doc.head.appendChild(style);
   }
@@ -607,7 +648,10 @@
       if (item.poster) media.poster = item.poster;
     }
     mediaBox.appendChild(media);
+    const resizer = makeElement(doc, 'div', 'rmw-context-resizer', '');
+    resizer.title = '拖动调整评价区域宽度，双击恢复默认宽度';
     const context = makeElement(doc, 'aside', 'rmw-context', '');
+    context.style.width = `${sessionSnapshot.contextWidth}px`;
     context.appendChild(makeElement(doc, 'h3', 'rmw-context-title', item.type === 'video' ? '视频评价' : '图片评价'));
     context.appendChild(makeElement(doc, 'span', 'rmw-context-label', '评价内容'));
     const tools = makeElement(doc, 'div', 'rmw-preview-tools', '');
@@ -631,7 +675,42 @@
       context.appendChild(makeElement(doc, 'span', 'rmw-context-label rmw-context-meta-label', '购买信息'));
       context.appendChild(makeElement(doc, 'p', 'rmw-context-meta', item.meta));
     }
-    content.append(mediaBox, context);
+    let pendingWidth = sessionSnapshot.contextWidth;
+    let resizing = false;
+    function finishResize() {
+      if (!resizing) return;
+      resizing = false;
+      resizer.classList.remove('is-dragging');
+      root.removeEventListener('pointermove', moveResize);
+      root.removeEventListener('pointerup', finishResize);
+      root.removeEventListener('pointercancel', finishResize);
+      const width = pendingWidth;
+      session.setContextWidth(width);
+    }
+    function moveResize(event) {
+      if (!resizing) return;
+      const bounds = content.getBoundingClientRect();
+      pendingWidth = clampContextWidth(bounds.right - event.clientX);
+      context.style.width = `${pendingWidth}px`;
+    }
+    resizer.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      resizing = true;
+      resizer.classList.add('is-dragging');
+      try {
+        resizer.setPointerCapture(event.pointerId);
+      } catch (error) {
+        // Window-level listeners below keep dragging working when pointer capture is unavailable.
+      }
+      root.addEventListener('pointermove', moveResize);
+      root.addEventListener('pointerup', finishResize);
+      root.addEventListener('pointercancel', finishResize);
+    });
+    resizer.addEventListener('dblclick', () => {
+      session.resetContextWidth();
+      context.style.width = `${session.snapshot().contextWidth}px`;
+    });
+    content.append(mediaBox, resizer, context);
     overlay.appendChild(content);
     function shift(delta) {
       state.shiftPreview(delta);
@@ -933,7 +1012,7 @@
     const site = detectSite(root.location.href);
     if (!site) return;
     const adapter = adapters[site];
-    const wallSession = createWallSession();
+    const wallSession = createWallSession(root.localStorage, site);
     const wallController = createWallController(adapter);
     addStyles(doc);
 

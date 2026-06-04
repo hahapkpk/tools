@@ -230,6 +230,7 @@ test('会话状态仅在当前脚本实例内恢复筛选尺寸与浏览位置',
     scrollTop: 420,
     previewKey: 'b.mp4',
     contextCollapsed: false,
+    contextWidth: 420,
     loadingState: 'idle',
     stagnantLoads: 0
   });
@@ -248,6 +249,34 @@ test('图片墙缩略图尺寸会写入本地存储并在下次会话恢复', ()
   const session = api.createWallSession(storage);
   session.setCardSize('small');
   assert.equal(api.createWallSession(storage).snapshot().cardSize, 'small');
+});
+
+test('京东和淘宝分别记忆预览文字区域宽度', () => {
+  const saved = new Map();
+  const storage = {
+    getItem(key) {
+      return saved.get(key) || null;
+    },
+    setItem(key, value) {
+      saved.set(key, String(value));
+    }
+  };
+  const jd = api.createWallSession(storage, 'jd');
+  const taobao = api.createWallSession(storage, 'taobao');
+  jd.setContextWidth(360);
+  taobao.setContextWidth(520);
+  assert.equal(api.createWallSession(storage, 'jd').snapshot().contextWidth, 360);
+  assert.equal(api.createWallSession(storage, 'taobao').snapshot().contextWidth, 520);
+});
+
+test('预览文字区域宽度限制在合理范围且支持恢复默认值', () => {
+  const session = api.createWallSession(undefined, 'jd');
+  session.setContextWidth(100);
+  assert.equal(session.snapshot().contextWidth, 320);
+  session.setContextWidth(900);
+  assert.equal(session.snapshot().contextWidth, 700);
+  session.resetContextWidth();
+  assert.equal(session.snapshot().contextWidth, 420);
 });
 
 test('类型筛选决定预览计数和切换集合', () => {
@@ -320,7 +349,7 @@ test('加载状态防止重复请求并在连续无新增后结束', () => {
 });
 
 test('入口复用同一页面会话状态对象和媒体控制器', () => {
-  assert.match(source, /const wallSession = createWallSession\(\)/);
+  assert.match(source, /const wallSession = createWallSession\(root\.localStorage, site\)/);
   assert.match(source, /const wallController = createWallController\(adapter\)/);
   assert.match(source, /openWall\(doc, adapter, wallSession, wallController\)/);
 });
@@ -365,6 +394,15 @@ test('预览右侧评价文字采用更清晰的大字号分层排版', () => {
   assert.match(source, /\.rmw-context-meta\s*\{[^}]*font-size:17px;[^}]*line-height:1\.75;/s);
   assert.match(source, /makeElement\(doc, 'span', 'rmw-context-label', '评价内容'\)/);
   assert.match(source, /makeElement\(doc, 'span', 'rmw-context-label rmw-context-meta-label', '购买信息'\)/);
+});
+
+test('预览图片与文字之间提供可拖动并可双击复位的分隔条', () => {
+  assert.match(source, /rmw-context-resizer/);
+  assert.match(source, /\.rmw-context\s*\{[^}]*box-sizing:border-box;/s);
+  assert.match(source, /setPointerCapture\(event\.pointerId\)/);
+  assert.match(source, /session\.setContextWidth\(width\)/);
+  assert.match(source, /session\.resetContextWidth\(\)/);
+  assert.match(source, /resizer\.addEventListener\('dblclick'/);
 });
 
 test('淘宝天猫评价内容使用同一套预览阅读排版', () => {
@@ -429,7 +467,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.4\.4/);
+  assert.match(source, /@version\s+0\.4\.5/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
