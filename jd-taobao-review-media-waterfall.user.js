@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.4.5
+// @version      0.4.6
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -69,7 +69,9 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
+  const WHEEL_SHIFT_COOLDOWN = 320;
   const preloadedPreviewMedia = new Set();
+  let lastPreviewWheelShift = 0;
 
   function clampContextWidth(value) {
     return Math.max(MIN_CONTEXT_WIDTH, Math.min(MAX_CONTEXT_WIDTH, Math.round(Number(value) || DEFAULT_CONTEXT_WIDTH)));
@@ -717,6 +719,17 @@
       session.rememberView({ previewKey: state.snapshot().preview?.src || '' });
       renderPreview(doc, modal, state, session, onReturn);
     }
+    mediaBox.addEventListener('wheel', (event) => {
+      if (Math.abs(event.deltaY) < 8) return;
+      event.preventDefault();
+      const now = Date.now();
+      if (now - lastPreviewWheelShift < WHEEL_SHIFT_COOLDOWN) return;
+      const delta = event.deltaY > 0 ? 1 : -1;
+      const current = state.snapshot();
+      if ((delta < 0 && !current.canPrevious) || (delta > 0 && !current.canNext)) return;
+      lastPreviewWheelShift = now;
+      shift(delta);
+    }, { passive: false });
     if (snapshot.canPrevious) {
       const previousButton = makeElement(doc, 'button', 'rmw-preview-nav rmw-preview-prev', '‹');
       previousButton.type = 'button';

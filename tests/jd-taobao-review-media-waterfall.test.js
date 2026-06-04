@@ -405,6 +405,14 @@ test('预览图片与文字之间提供可拖动并可双击复位的分隔条',
   assert.match(source, /resizer\.addEventListener\('dblclick'/);
 });
 
+test('预览图片区域支持滚轮切换上一张和下一张并防止连续跳图', () => {
+  assert.match(source, /mediaBox\.addEventListener\('wheel'/);
+  assert.match(source, /\{ passive: false \}/);
+  assert.match(source, /event\.deltaY > 0 \? 1 : -1/);
+  assert.match(source, /WHEEL_SHIFT_COOLDOWN/);
+  assert.match(source, /event\.preventDefault\(\)/);
+});
+
 test('淘宝天猫评价内容使用同一套预览阅读排版', () => {
   assert.match(source, /function appendTaobaoReviewMedia/);
   assert.match(source, /items\.push\(\{ type: 'image', src: absoluteMediaUrl\(src\), poster: '', text, meta \}\)/);
@@ -467,7 +475,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.4\.5/);
+  assert.match(source, /@version\s+0\.4\.6/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
