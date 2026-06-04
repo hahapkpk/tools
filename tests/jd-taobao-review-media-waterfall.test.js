@@ -475,7 +475,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.4\.9/);
+  assert.match(source, /@version\s+0\.4\.10/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
@@ -527,6 +527,26 @@ test('京东当前商品筛选复用原生当前商品开关', () => {
     }
   };
   assert.equal(api.adapters.jd.openCurrentProductFilter(root), 'immediate');
+  assert.equal(clicked, 1);
+});
+
+test('京东全部评价筛选点击全部评价标签恢复全部商品', () => {
+  let clicked = 0;
+  const allReviews = {
+    className: 'imprItem',
+    textContent: '全部评价',
+    innerText: '全部评价',
+    children: [],
+    click() {
+      clicked += 1;
+    }
+  };
+  const root = {
+    querySelectorAll() {
+      return [allReviews];
+    }
+  };
+  assert.equal(api.adapters.jd.openAllReviewsFilter(root), true);
   assert.equal(clicked, 1);
 });
 

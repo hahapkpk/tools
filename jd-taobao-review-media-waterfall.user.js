@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.4.9
+// @version      0.4.10
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。当前商品筛选支持点击两次回到全部。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -444,6 +444,9 @@
       openCurrentProductFilter(nativeRoot) {
         return toggleText(nativeRoot, '当前商品') ? 'immediate' : false;
       },
+      openAllReviewsFilter(nativeRoot) {
+        return clickText(nativeRoot, '全部评价') || clickText(nativeRoot, '全部');
+      },
       collectMedia: collectJdMedia
     },
     taobao: {
@@ -470,6 +473,9 @@
         if (!trigger) return false;
         trigger.click();
         return 'interactive';
+      },
+      openAllReviewsFilter(_nativeRoot) {
+        return true;
       },
       isCurrentProductFilterOpen(doc) {
         return Array.from(doc.querySelectorAll('[class*="dialogWrap--"]'))
@@ -1049,13 +1055,18 @@
       nativeRoot = adapter.findNativeRoot(doc);
       currentProductActive = !currentProductActive;
       currentProduct.classList.toggle('is-active', currentProductActive);
-      const behavior = adapter.openCurrentProductFilter(nativeRoot);
-      if (behavior === 'interactive') {
-        backdrop.style.display = 'none';
-        waitForCurrentProductFilter();
-        return;
+      if (currentProductActive) {
+        const behavior = adapter.openCurrentProductFilter(nativeRoot);
+        if (behavior === 'interactive') {
+          backdrop.style.display = 'none';
+          waitForCurrentProductFilter();
+          return;
+        }
+        if (behavior === 'immediate') root.setTimeout(() => syncMedia(true), 180);
+      } else {
+        adapter.openAllReviewsFilter?.(nativeRoot);
+        root.setTimeout(() => syncMedia(true), 180);
       }
-      if (behavior === 'immediate') root.setTimeout(() => syncMedia(true), 180);
     });
     sync.addEventListener('click', () => {
       wallSession.retryLoad();
