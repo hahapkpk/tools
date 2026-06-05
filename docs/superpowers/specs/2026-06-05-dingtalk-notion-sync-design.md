@@ -126,7 +126,7 @@ NOTION_VERSION=2022-06-28
 
 ## Scheduling
 
-Add a GitHub Actions workflow under `dingtalk-notion-sync/.github/workflows/dingtalk-notion-sync.yml` or document how to move it to the repository-level `.github/workflows` directory if GitHub does not discover nested workflows. The intended schedule mirrors `get-notion-sync`:
+Add a GitHub Actions workflow under the repository-level `.github/workflows/dingtalk-notion-sync.yml` path so GitHub can discover it. The intended schedule mirrors `get-notion-sync`:
 
 ```text
 09:00 Asia/Shanghai
@@ -170,5 +170,5 @@ Network calls should be mocked. Tests should not require real DingTalk or Notion
 - `dingtalk-notion-sync/requirements.txt`
 - `dingtalk-notion-sync/pyproject.toml`
 - `dingtalk-notion-sync/README.md`
-- `dingtalk-notion-sync/.github/workflows/dingtalk-notion-sync.yml`
+- `.github/workflows/dingtalk-notion-sync.yml`
 

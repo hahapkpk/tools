@@ -1,0 +1,63 @@
+name: Sync DingTalk Activities to Notion
+
+on:
+  schedule:
+    # UTC time. This runs at 09:00 and 21:00 Asia/Shanghai.
+    - cron: "0 1,13 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Preview only"
+        type: boolean
+        default: false
+      limit:
+        description: "Maximum filtered records to process"
+        type: string
+        required: false
+      force_rewrite:
+        description: "Rewrite existing Notion pages"
+        type: boolean
+        default: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: dingtalk-notion-sync
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .[test]
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Sync
+        env:
+          DINGTALK_APP_KEY: ${{ secrets.DINGTALK_APP_KEY }}
+          DINGTALK_APP_SECRET: ${{ secrets.DINGTALK_APP_SECRET }}
+          DINGTALK_BASE_ID: ${{ secrets.DINGTALK_BASE_ID }}
+          DINGTALK_SHEET_ID: ${{ secrets.DINGTALK_SHEET_ID }}
+          DINGTALK_OPERATOR_ID: ${{ secrets.DINGTALK_OPERATOR_ID }}
+          DINGTALK_SOURCE_URL: ${{ secrets.DINGTALK_SOURCE_URL }}
+          DINGTALK_FILTER_FIELD: 所属
+          DINGTALK_FILTER_VALUE: 活动
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          NOTION_SUMMARY_PAGE_ID: ${{ secrets.NOTION_SUMMARY_PAGE_ID }}
+          SYNC_DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          SYNC_LIMIT: ${{ inputs.limit }}
+          SYNC_FORCE_REWRITE: ${{ inputs.force_rewrite || 'false' }}
+        run: python -u sync.py
+
