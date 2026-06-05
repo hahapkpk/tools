@@ -376,7 +376,7 @@ test('预览提供计数评价折叠与单项原图操作', () => {
 test('评价信息收起后操作按钮仍保留在媒体区域以便重新展开', () => {
   assert.match(source, /rmw-preview-tools/);
   assert.match(source, /mediaBox\.appendChild\(tools\)/);
-  assert.match(source, /tools\.append\(toggle, original, download\)/);
+  assert.match(source, /tools\.append\(toggle, original, download, slideshow\)/);
 });
 
 test('退出预览返回图片墙时使用即时定位避免点击外部区域迟钝', () => {
@@ -475,7 +475,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.4\.10/);
+  assert.match(source, /@version\s+0\.5\.0/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });

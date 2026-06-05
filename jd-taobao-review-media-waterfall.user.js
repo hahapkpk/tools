@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.4.10
-// @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。当前商品筛选支持点击两次回到全部。
+// @version      0.5.0
+// @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
 // @match        https://item.taobao.com/*
@@ -642,6 +642,9 @@
 .rmw-context-meta { margin:22px 0 0; padding-top:18px; border-top:1px solid #edf0f3; font-size:17px; line-height:1.75; color:#5f6368; overflow-wrap:anywhere; }
 .rmw-context-toggle, .rmw-media-action { display:inline-flex; align-items:center; height:32px; margin:0 8px 12px 0; padding:0 12px; border:1px solid #ddd; border-radius:17px; background:#fff; color:#333; cursor:pointer; text-decoration:none; font-size:13px; }
 .rmw-preview-tools .rmw-context-toggle, .rmw-preview-tools .rmw-media-action { margin:0; }
+.rmw-slideshow { display:inline-flex; align-items:center; justify-content:center; height:32px; width:32px; margin:0; padding:0; border:1px solid #ddd; border-radius:17px; background:#fff; color:#333; cursor:pointer; font-size:15px; transition:border-color .15s ease, background .15s ease, color .15s ease; }
+.rmw-slideshow:hover { border-color:#1a73e8; color:#1a73e8; background:#e8f0fe; }
+.rmw-slideshow.is-active { border-color:#1a73e8; color:#fff; background:#1a73e8; }
 @media (max-width:1100px) { #${IDS.grid} { grid-template-columns:repeat(4,minmax(0,1fr)); } }
 @media (max-width:900px) { #${IDS.grid} { grid-template-columns:repeat(3,minmax(0,1fr)); } }
 @media (max-width:760px) { #${IDS.grid} { grid-template-columns:repeat(2,minmax(0,1fr)); } .rmw-preview-content { flex-direction:column; } .rmw-context-resizer { display:none; } .rmw-context { width:auto !important; min-width:0; max-width:none; } }
@@ -703,7 +706,17 @@
     const download = makeElement(doc, 'a', 'rmw-media-action', '下载原图');
     download.href = item.src;
     download.download = '';
-    tools.append(toggle, original, download);
+    const slideshow = makeElement(doc, 'button', 'rmw-slideshow', slideshowActive ? '⏸' : '▶');
+    slideshow.type = 'button';
+    slideshow.title = slideshowActive ? '暂停自动播放' : '自动播放幻灯片';
+    if (slideshowActive) slideshow.classList.add('is-active');
+    slideshow.addEventListener('click', () => {
+      slideshowActive = !slideshowActive;
+      if (slideshowTimer) { clearTimeout(slideshowTimer); slideshowTimer = null; }
+      if (slideshowActive && snapshot.canNext) slideshowTimer = root.setTimeout(() => shift(1), 2800);
+      renderPreview(doc, modal, state, session, onReturn);
+    });
+    tools.append(toggle, original, download, slideshow);
     mediaBox.appendChild(tools);
     context.appendChild(makeElement(doc, 'p', 'rmw-context-text', item.text || '该媒体暂无可见评价文字。'));
     if (item.meta) {
@@ -748,8 +761,15 @@
     content.append(mediaBox, resizer, context);
     overlay.appendChild(content);
     function shift(delta) {
+      if (slideshowTimer) { clearTimeout(slideshowTimer); slideshowTimer = null; }
       state.shiftPreview(delta);
       session.rememberView({ previewKey: state.snapshot().preview?.src || '' });
+      const nextSnapshot = state.snapshot();
+      if (slideshowActive && nextSnapshot.canNext) {
+        slideshowTimer = root.setTimeout(() => shift(1), 2800);
+      } else if (slideshowActive && !nextSnapshot.canNext) {
+        slideshowActive = false;
+      }
       renderPreview(doc, modal, state, session, onReturn);
     }
     mediaBox.addEventListener('wheel', (event) => {
@@ -780,6 +800,8 @@
     overlay.addEventListener('pointerdown', (event) => {
       if (event.target !== overlay) return;
       event.preventDefault();
+      if (slideshowTimer) { clearTimeout(slideshowTimer); slideshowTimer = null; }
+      slideshowActive = false;
       state.onBackdrop();
       renderPreview(doc, modal, state, session, onReturn);
       onReturn();
@@ -788,6 +810,8 @@
       if (event.key === 'ArrowLeft' && state.snapshot().canPrevious) shift(-1);
       if (event.key === 'ArrowRight' && state.snapshot().canNext) shift(1);
       if (event.key === 'Escape') {
+        if (slideshowTimer) { clearTimeout(slideshowTimer); slideshowTimer = null; }
+        slideshowActive = false;
         state.onBackdrop();
         renderPreview(doc, modal, state, session, onReturn);
         onReturn();
@@ -927,6 +951,8 @@
     let restoredScroll = false;
     let highlightKey = '';
     let currentProductActive = false;
+    let slideshowTimer = null;
+    let slideshowActive = false;
     function revealCurrentCard() {
       modal.focus();
       const key = wallSession.snapshot().previewKey;
@@ -1073,6 +1099,8 @@
       syncMedia(true);
     });
     function dismissWall() {
+      if (slideshowTimer) { clearTimeout(slideshowTimer); slideshowTimer = null; }
+      slideshowActive = false;
       disconnect?.();
       disconnectResize?.();
       stopCapture?.();
