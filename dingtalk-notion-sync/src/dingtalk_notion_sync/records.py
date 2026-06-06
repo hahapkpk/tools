@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
@@ -17,6 +17,9 @@ FIELD_NAMES = {
     "attachments": ["图片", "附件"],
     "created_time": ["创建时间"],
 }
+
+ACTIVITY_CATEGORIES = {"演播室活动", "广播电台", "外出活动"}
+SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 
 def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -51,7 +54,15 @@ def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
 
 def filter_records(records: list[dict[str, Any]], field_name: str = "所属", expected: str = "活动") -> list[dict[str, Any]]:
     key = "group" if field_name == "所属" else field_name
-    return [record for record in records if str(record.get(key) or "") == expected]
+    filtered = []
+    for record in records:
+        if str(record.get(key) or "") == expected:
+            filtered.append(record)
+            continue
+        if field_name == "所属" and expected == "活动" and not record.get("group"):
+            if str(record.get("category") or "") in ACTIVITY_CATEGORIES:
+                filtered.append(record)
+    return filtered
 
 
 def sort_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -102,7 +113,7 @@ def _to_date(value: Any) -> str:
     if timestamp > 0:
         if timestamp > 10_000_000_000:
             timestamp /= 1000
-        return datetime.fromtimestamp(timestamp, tz=timezone.utc).date().isoformat()
+        return datetime.fromtimestamp(timestamp, tz=SHANGHAI_TZ).date().isoformat()
     try:
         return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
     except ValueError:
