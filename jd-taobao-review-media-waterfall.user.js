@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.0
+// @version      0.5.1
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -72,6 +72,8 @@
   const WHEEL_SHIFT_COOLDOWN = 320;
   const preloadedPreviewMedia = new Set();
   let lastPreviewWheelShift = 0;
+  let slideshowTimer = null;
+  let slideshowActive = false;
 
   function clampContextWidth(value) {
     return Math.max(MIN_CONTEXT_WIDTH, Math.min(MAX_CONTEXT_WIDTH, Math.round(Number(value) || DEFAULT_CONTEXT_WIDTH)));
@@ -445,6 +447,14 @@
         return toggleText(nativeRoot, '当前商品') ? 'immediate' : false;
       },
       openAllReviewsFilter(nativeRoot) {
+        const currentProduct = Array.from(nativeRoot?.querySelectorAll('*') || []).find((element) => {
+          const value = (element.textContent || element.innerText || '').trim();
+          return value === '当前商品';
+        });
+        if (/(?:active|selected)/i.test(String(currentProduct?.className || currentProduct?.parentElement?.className || ''))) {
+          currentProduct.click();
+          return true;
+        }
         return clickText(nativeRoot, '全部评价') || clickText(nativeRoot, '全部');
       },
       collectMedia: collectJdMedia
@@ -951,8 +961,7 @@
     let restoredScroll = false;
     let highlightKey = '';
     let currentProductActive = false;
-    let slideshowTimer = null;
-    let slideshowActive = false;
+    let allProductItems = [];
     function revealCurrentCard() {
       modal.focus();
       const key = wallSession.snapshot().previewKey;
@@ -1082,6 +1091,7 @@
       currentProductActive = !currentProductActive;
       currentProduct.classList.toggle('is-active', currentProductActive);
       if (currentProductActive) {
+        allProductItems = controller.items();
         const behavior = adapter.openCurrentProductFilter(nativeRoot);
         if (behavior === 'interactive') {
           backdrop.style.display = 'none';
@@ -1091,7 +1101,11 @@
         if (behavior === 'immediate') root.setTimeout(() => syncMedia(true), 180);
       } else {
         adapter.openAllReviewsFilter?.(nativeRoot);
-        root.setTimeout(() => syncMedia(true), 180);
+        if (allProductItems.length) {
+          controller.replace(allProductItems);
+          renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
+        }
+        root.setTimeout(() => syncMedia(false), 450);
       }
     });
     sync.addEventListener('click', () => {

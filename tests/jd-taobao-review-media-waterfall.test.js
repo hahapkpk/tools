@@ -379,6 +379,11 @@ test('评价信息收起后操作按钮仍保留在媒体区域以便重新展�
   assert.match(source, /tools\.append\(toggle, original, download, slideshow\)/);
 });
 
+test('预览幻灯片状态在 renderPreview 可访问以避免打开图片时报错', () => {
+  assert.match(source, /let slideshowTimer = null;[\s\S]*let slideshowActive = false;[\s\S]*function renderPreview/);
+  assert.doesNotMatch(source, /function openWall[\s\S]*let slideshowTimer = null;[\s\S]*function revealCurrentCard/);
+});
+
 test('退出预览返回图片墙时使用即时定位避免点击外部区域迟钝', () => {
   assert.match(source, /card\.scrollIntoView\(\{ block: 'center', behavior: 'auto' \}\)/);
   assert.doesNotMatch(source, /scrollIntoView\(\{ block: 'center', behavior: 'smooth' \}\)/);
@@ -475,7 +480,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.0/);
+  assert.match(source, /@version\s+0\.5\.1/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
@@ -530,20 +535,29 @@ test('京东当前商品筛选复用原生当前商品开关', () => {
   assert.equal(clicked, 1);
 });
 
-test('京东全部评价筛选点击全部评价标签恢复全部商品', () => {
+test('京东全部评价筛选优先点击已激活的当前商品开关恢复全部商品', () => {
   let clicked = 0;
+  const current = {
+    className: '_skuSelect_19gj1_28 _active_19gj1_25',
+    textContent: '当前商品',
+    innerText: '当前商品',
+    children: [],
+    click() {
+      clicked += 1;
+    }
+  };
   const allReviews = {
     className: 'imprItem',
     textContent: '全部评价',
     innerText: '全部评价',
     children: [],
     click() {
-      clicked += 1;
+      clicked += 10;
     }
   };
   const root = {
     querySelectorAll() {
-      return [allReviews];
+      return [allReviews, current];
     }
   };
   assert.equal(api.adapters.jd.openAllReviewsFilter(root), true);
@@ -586,6 +600,13 @@ test('图片墙工具栏提供当前商品筛选并在淘宝交互筛选后恢�
   assert.match(source, /backdrop\.style\.display = 'none'/);
   assert.match(source, /waitForCurrentProductFilter/);
   assert.match(source, /syncMedia\(true\)/);
+});
+
+test('京东取消当前商品筛选时先恢复全部商品媒体缓存避免清空图片墙', () => {
+  assert.match(source, /let allProductItems = \[\]/);
+  assert.match(source, /allProductItems = controller\.items\(\)/);
+  assert.match(source, /controller\.replace\(allProductItems\)/);
+  assert.match(source, /syncMedia\(false\)/);
 });
 
 test('淘宝图视频筛选项含数量子节点时点击真实筛选容器', () => {
