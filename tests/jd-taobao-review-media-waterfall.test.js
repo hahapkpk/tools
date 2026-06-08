@@ -530,7 +530,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.4/);
+  assert.match(source, /@version\s+0\.5\.5/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
@@ -659,18 +659,28 @@ test('京东取消当前商品筛选时先恢复全部商品媒体缓存避免�
   assert.match(source, /syncMedia\(false\)/);
 });
 
-test('图片墙打开和同步后会自动懒加载原生评价列表补齐更多图片', () => {
+test('图片墙滚动接近底部时按需懒加载原生评价列表补齐更多图片', () => {
   assert.match(source, /AUTO_LOAD_MAX_ROUNDS/);
   assert.match(source, /AUTO_LOAD_SETTLE_DELAY/);
   assert.match(source, /AUTO_LOAD_SCROLL_PULSES/);
+  assert.match(source, /AUTO_LOAD_NEAR_BOTTOM/);
   assert.match(source, /function scheduleAutoLoad/);
   assert.match(source, /function runAutoLoad/);
+  assert.match(source, /function isGridNearBottom/);
   assert.match(source, /scrollNativeReviews\(\)/);
   assert.match(source, /findScrollableCandidates\(nativeRoot\)/);
   assert.match(source, /looksScrollable/);
   assert.match(source, /new root\.WheelEvent\('wheel'/);
   assert.match(source, /syncMedia\(false\)/);
-  assert.match(source, /sync\.addEventListener\('click'[\s\S]*scheduleAutoLoad\(true\)/);
+  assert.match(source, /grid\.addEventListener\('scroll'[\s\S]*if \(isGridNearBottom\(\)\) requestMore\(\)/);
+  assert.doesNotMatch(source, /waitForNative[\s\S]{0,260}scheduleAutoLoad\(true\)/);
+});
+
+test('按需懒加载新增内容后只有仍接近图片墙底部才继续下一批', () => {
+  assert.match(source, /let userRequestedMore = false/);
+  assert.match(source, /userRequestedMore = true/);
+  assert.match(source, /if \(\(moved \|\| added\) && userRequestedMore && isGridNearBottom\(\) && autoLoadRounds < AUTO_LOAD_MAX_ROUNDS/);
+  assert.match(source, /controller\.items\(\)\.length > before && userRequestedMore && isGridNearBottom\(\)/);
 });
 
 test('京东自动加载会复用最近一次评论接口请求体拉取下一页', () => {

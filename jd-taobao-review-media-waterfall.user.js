@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.4
+// @version      0.5.5
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -69,11 +69,12 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.4';
+  const SCRIPT_VERSION = '0.5.5';
   const WHEEL_SHIFT_COOLDOWN = 320;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;
   const AUTO_LOAD_SCROLL_PULSES = 4;
+  const AUTO_LOAD_NEAR_BOTTOM = 900;
   const AUTO_LOAD_MAX_ROUNDS = 80;
   const AUTO_LOAD_IDLE_LIMIT = 5;
   const preloadedPreviewMedia = new Set();
@@ -1080,6 +1081,7 @@
     let autoLoadTimer = null;
     let autoLoadRounds = 0;
     let autoLoadIdleRounds = 0;
+    let userRequestedMore = false;
     function revealCurrentCard() {
       modal.focus();
       const key = wallSession.snapshot().previewKey;
@@ -1126,7 +1128,7 @@
         controller.append(items);
         wallSession.finishLoad(controller.items().length > before);
         renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
-        if (controller.items().length > before) scheduleAutoLoad(false);
+        if (controller.items().length > before && userRequestedMore && isGridNearBottom()) scheduleAutoLoad(false);
       });
     }
     adapter.openNativeReviews(doc);
@@ -1182,6 +1184,9 @@
       root.clearTimeout(autoLoadTimer);
       autoLoadTimer = null;
     }
+    function isGridNearBottom() {
+      return grid.scrollTop + grid.clientHeight >= grid.scrollHeight - AUTO_LOAD_NEAR_BOTTOM;
+    }
     function scheduleAutoLoad(reset = false) {
       if (reset) {
         autoLoadRounds = 0;
@@ -1213,7 +1218,7 @@
         syncMedia(false);
         const added = controller.items().length > before;
         autoLoadIdleRounds = added ? 0 : autoLoadIdleRounds + 1;
-        if ((moved || added) && autoLoadRounds < AUTO_LOAD_MAX_ROUNDS && autoLoadIdleRounds < AUTO_LOAD_IDLE_LIMIT) {
+        if ((moved || added) && userRequestedMore && isGridNearBottom() && autoLoadRounds < AUTO_LOAD_MAX_ROUNDS && autoLoadIdleRounds < AUTO_LOAD_IDLE_LIMIT) {
           scheduleAutoLoad(false);
         }
       }, AUTO_LOAD_SETTLE_DELAY));
@@ -1224,7 +1229,6 @@
         root.setTimeout(waitForNative, 250);
         return;
       }
-      scheduleAutoLoad(true);
     }
     waitForNative();
 
@@ -1248,11 +1252,12 @@
 
     function requestMore() {
       if (!nativeRoot) return;
+      userRequestedMore = true;
       scheduleAutoLoad(false);
     }
     grid.addEventListener('scroll', () => {
       wallSession.rememberView({ scrollTop: grid.scrollTop, previewKey: wallSession.snapshot().previewKey });
-      if (grid.scrollTop + grid.clientHeight >= grid.scrollHeight - 180) requestMore();
+      if (isGridNearBottom()) requestMore();
     });
     filterGroup.addEventListener('click', (event) => {
       const button = event.target.closest?.('.rmw-filter');
@@ -1278,20 +1283,19 @@
           waitForCurrentProductFilter();
           return;
         }
-        if (behavior === 'immediate') root.setTimeout(() => { syncMedia(true); scheduleAutoLoad(true); }, 180);
+        if (behavior === 'immediate') root.setTimeout(() => syncMedia(true), 180);
       } else {
         adapter.openAllReviewsFilter?.(nativeRoot);
         if (allProductItems.length) {
           controller.replace(allProductItems);
           renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
         }
-        root.setTimeout(() => { syncMedia(false); scheduleAutoLoad(true); }, 450);
+        root.setTimeout(() => syncMedia(false), 450);
       }
     });
     sync.addEventListener('click', () => {
       wallSession.retryLoad();
       syncMedia(true);
-      scheduleAutoLoad(true);
     });
     function dismissWall() {
       stopAutoLoad();
