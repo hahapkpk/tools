@@ -375,6 +375,31 @@ test('图片墙按实际列宽设置卡片高度以避免天猫网格行重叠',
   assert.match(source, /renderCards\([\s\S]*sizeGridCards\(grid\);/);
 });
 
+test('图片墙大量媒体采用前后三屏缓冲虚拟化渲染', () => {
+  assert.match(source, /const VIRTUALIZE_THRESHOLD = 120/);
+  assert.match(source, /const VIRTUAL_BUFFER_SCREENS = 3/);
+  assert.match(source, /function getVirtualWindow/);
+  assert.match(source, /gridTemplateColumns/);
+  assert.match(source, /topSpacer\.style\.height/);
+  assert.match(source, /bottomSpacer\.style\.height/);
+});
+
+test('虚拟化窗口会跟随图片墙滚动节流刷新', () => {
+  assert.match(source, /let virtualRenderFrame = null/);
+  assert.match(source, /function scheduleVirtualRender/);
+  assert.match(source, /requestAnimationFrame/);
+  assert.match(source, /grid\.addEventListener\('scroll'[\s\S]*scheduleVirtualRender\(\)/);
+  assert.match(source, /if \(virtualRenderFrame\) root\.cancelAnimationFrame\?\.|\|\| root\.clearTimeout/);
+});
+
+test('图片墙只预热视口附近缩略图并在预览时预热前后两张', () => {
+  assert.match(source, /const THUMB_PRELOAD_AHEAD = 18/);
+  assert.match(source, /function preloadVisibleThumbs/);
+  assert.match(source, /preloadVisibleThumbs\(items, windowInfo\.start, windowInfo\.end\)/);
+  assert.match(source, /\[index, index \+ 1, index - 1, index \+ 2, index - 2\]/);
+  assert.doesNotMatch(source, /items\.forEach[\s\S]{0,400}preloadPreviewMedia\(item\)/);
+});
+
 test('图片墙包含类型尺寸控制与键盘可达的卡片', () => {
   assert.match(source, /rmw-filter/);
   assert.match(source, /rmw-size/);
@@ -530,7 +555,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.5/);
+  assert.match(source, /@version\s+0\.5\.6/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
