@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.1
+// @version      0.5.4
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -69,7 +69,13 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
+  const SCRIPT_VERSION = '0.5.4';
   const WHEEL_SHIFT_COOLDOWN = 320;
+  const AUTO_LOAD_DELAY = 650;
+  const AUTO_LOAD_SETTLE_DELAY = 950;
+  const AUTO_LOAD_SCROLL_PULSES = 4;
+  const AUTO_LOAD_MAX_ROUNDS = 80;
+  const AUTO_LOAD_IDLE_LIMIT = 5;
   const preloadedPreviewMedia = new Set();
   let lastPreviewWheelShift = 0;
   let slideshowTimer = null;
@@ -165,7 +171,7 @@
           return;
         }
         saved.stagnantLoads += 1;
-        saved.loadingState = saved.stagnantLoads >= 2 ? 'exhausted' : 'idle';
+        saved.loadingState = saved.stagnantLoads >= AUTO_LOAD_IDLE_LIMIT ? 'exhausted' : 'idle';
       },
       failLoad() {
         saved.loadingState = 'error';
@@ -320,53 +326,144 @@
     return items;
   }
 
+  function extractJdPageInfo(payload) {
+    const comments = [];
+    const visited = new Set();
+    function visit(value) {
+      if (!value || typeof value !== 'object' || visited.has(value)) return;
+      visited.add(value);
+      if (value.commentInfo?.pageIndex || value.pageIndex) comments.push(value.commentInfo || value);
+      if (Array.isArray(value)) value.forEach(visit);
+      else Object.values(value).forEach(visit);
+    }
+    visit(payload);
+    const pageIndex = comments.reduce((max, item) => Math.max(max, Number(item.pageIndex) || 0), 0);
+    const data = payload?.result?.pageInfo?.data || {};
+    return {
+      pageIndex,
+      hasNextPage: data.hasNextPage !== false,
+      maxPage: Number(data.maxPage) || 0
+    };
+  }
+
+  function replacePageFields(value, nextPage) {
+    let replaced = false;
+    function visit(item) {
+      if (!item || typeof item !== 'object') return;
+      Object.keys(item).forEach((key) => {
+        if (/^(?:page|pageNum|pageNo|pageIndex|currentPage)$/.test(key)) {
+          item[key] = String(nextPage);
+          replaced = true;
+        } else {
+          visit(item[key]);
+        }
+      });
+    }
+    visit(value);
+    if (!replaced && value && typeof value === 'object') value.page = String(nextPage);
+    return replaced || Boolean(value);
+  }
+
+  function buildNextJdBody(body, nextPage) {
+    if (!body || typeof body !== 'string') return '';
+    const params = new URLSearchParams(body);
+    if (params.has('body')) {
+      try {
+        const parsed = JSON.parse(params.get('body'));
+        replacePageFields(parsed, nextPage);
+        params.set('body', JSON.stringify(parsed));
+        return params.toString();
+      } catch (error) {
+        return '';
+      }
+    }
+    if (params.has('page')) {
+      params.set('page', String(nextPage));
+      return params.toString();
+    }
+    return '';
+  }
+
   function installJdResponseCapture(host, onMedia) {
     if (!host || !onMedia) return () => {};
     const captureKey = '__reviewMediaWallJdResponseCapture';
     let capture = host[captureKey];
     if (!capture) {
-      capture = { listeners: new Set() };
-      capture.emit = (payload) => {
-        const items = collectJdPayloadMedia(payload);
-        if (items.length) capture.listeners.forEach((listener) => listener(items));
-      };
+      capture = {};
       host[captureKey] = capture;
+    }
+    if (!capture.listeners) capture.listeners = new Set();
+    if (!('pageInfo' in capture)) capture.pageInfo = null;
+    if (!('lastRequest' in capture)) capture.lastRequest = null;
+    capture.emit = (payload) => {
+      const items = collectJdPayloadMedia(payload);
+      capture.pageInfo = extractJdPageInfo(payload);
+      if (items.length) capture.listeners.forEach((listener) => listener(items));
+    };
+    capture.requestNextPage = () => {
+      const pageInfo = capture.pageInfo || {};
+      const nextPage = (Number(pageInfo.pageIndex) || 0) + 1;
+      if (!capture.lastRequest || pageInfo.hasNextPage === false || (pageInfo.maxPage && nextPage > pageInfo.maxPage)) {
+        return Promise.resolve(false);
+      }
+      const body = buildNextJdBody(capture.lastRequest.body, nextPage);
+      if (!body) return Promise.resolve(false);
+      return host.fetch(capture.lastRequest.url, {
+        method: 'POST',
+        body,
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+      }).then((response) => {
+        if (!response.ok) return false;
+        return response.clone().json().then((payload) => {
+          const items = collectJdPayloadMedia(payload);
+          capture.emit(payload);
+          return items.length > 0;
+        }).catch(() => false);
+      }).catch(() => false);
+    };
 
-      const XHR = host.XMLHttpRequest;
-      if (XHR?.prototype) {
-        const originalOpen = XHR.prototype.open;
-        const originalSend = XHR.prototype.send;
-        XHR.prototype.open = function open(method, url, ...args) {
-          this.__rmwJdResponseUrl = String(url || '');
-          return originalOpen.call(this, method, url, ...args);
-        };
-        XHR.prototype.send = function send(...args) {
-          if (/api\.m\.jd\.com\/client\.action/.test(this.__rmwJdResponseUrl || '')) {
-            this.addEventListener('load', () => {
-              try {
-                capture.emit(JSON.parse(this.responseText));
-              } catch (error) {
-                return undefined;
-              }
+    const XHR = host.XMLHttpRequest;
+    if (XHR?.prototype && !capture.xhrWrapped) {
+      capture.xhrWrapped = true;
+      const originalOpen = XHR.prototype.open;
+      const originalSend = XHR.prototype.send;
+      XHR.prototype.open = function open(method, url, ...args) {
+        this.__rmwJdResponseUrl = String(url || '');
+        return originalOpen.call(this, method, url, ...args);
+      };
+      XHR.prototype.send = function send(...args) {
+        if (/api\.m\.jd\.com\/client\.action/.test(this.__rmwJdResponseUrl || '')) {
+          capture.lastRequest = { url: this.__rmwJdResponseUrl, body: typeof args[0] === 'string' ? args[0] : '' };
+          this.addEventListener('load', () => {
+            try {
+              capture.emit(JSON.parse(this.responseText));
+            } catch (error) {
               return undefined;
-            }, { once: true });
-          }
-          return originalSend.apply(this, args);
-        };
-      }
-
-      if (typeof host.fetch === 'function') {
-        const originalFetch = host.fetch;
-        host.fetch = function fetch(input, ...args) {
-          const url = String(typeof input === 'string' ? input : input?.url || '');
-          return originalFetch.call(this, input, ...args).then((response) => {
-            if (/api\.m\.jd\.com\/client\.action/.test(url)) {
-              response.clone().json().then((payload) => capture.emit(payload)).catch(() => {});
             }
-            return response;
-          });
-        };
-      }
+            return undefined;
+          }, { once: true });
+        }
+        return originalSend.apply(this, args);
+      };
+    }
+
+    if (typeof host.fetch === 'function' && !capture.fetchWrapped) {
+      capture.fetchWrapped = true;
+      const originalFetch = host.fetch;
+      host.fetch = function fetch(input, ...args) {
+        const url = String(typeof input === 'string' ? input : input?.url || '');
+        const body = args[0]?.body || input?.body || '';
+        if (/api\.m\.jd\.com\/client\.action/.test(url)) {
+          capture.lastRequest = { url, body: typeof body === 'string' ? body : '' };
+        }
+        return originalFetch.call(this, input, ...args).then((response) => {
+          if (/api\.m\.jd\.com\/client\.action/.test(url)) {
+            response.clone().json().then((payload) => capture.emit(payload)).catch(() => {});
+          }
+          return response;
+        });
+      };
     }
     capture.listeners.add(onMedia);
     return () => capture.listeners.delete(onMedia);
@@ -456,6 +553,9 @@
           return true;
         }
         return clickText(nativeRoot, '全部评价') || clickText(nativeRoot, '全部');
+      },
+      requestNextPage() {
+        return root.__reviewMediaWallJdResponseCapture?.requestNextPage?.() || Promise.resolve(false);
       },
       collectMedia: collectJdMedia
     },
@@ -561,14 +661,16 @@
   function ensureLauncher(mount, onOpen) {
     if (!mount) return null;
     const existing = mount.querySelector(`#${IDS.launcher}`);
-    if (existing) return existing;
+    if (existing?.dataset.rmwVersion === SCRIPT_VERSION) return existing;
     const launcher = mount.ownerDocument.createElement('button');
     launcher.id = IDS.launcher;
     launcher.className = 'review-media-wall-launcher';
     launcher.type = 'button';
+    launcher.dataset.rmwVersion = SCRIPT_VERSION;
     launcher.textContent = '图片墙';
     launcher.addEventListener('click', onOpen);
-    mount.appendChild(launcher);
+    if (existing) existing.replaceWith(launcher);
+    else mount.appendChild(launcher);
     return launcher;
   }
 
@@ -840,7 +942,7 @@
 
   function statusMessage(session, total) {
     const status = session.snapshot().loadingState;
-    if (status === 'loading') return `已加载 ${total} 项，正在加载更多...`;
+    if (status === 'loading') return `已加载 ${total} 项，正在自动加载更多...`;
     if (status === 'exhausted') return `已加载 ${total} 项，没有更多内容`;
     if (status === 'error') return `已加载 ${total} 项，加载失败`;
     return `已加载 ${total} 项，继续向下滚动以加载更多`;
@@ -894,20 +996,33 @@
   }
 
   function findScrollable(element) {
-    const nested = element?.querySelectorAll
-      ? Array.from(element.querySelectorAll('*')).filter((node) => node.scrollHeight > node.clientHeight + 10)
-      : [];
-    if (nested.length) {
-      return nested.reduce((selected, node) => (
-        node.scrollHeight - node.clientHeight > selected.scrollHeight - selected.clientHeight ? node : selected
-      ));
+    const candidates = findScrollableCandidates(element);
+    if (candidates.length) return candidates[0];
+    return element;
+  }
+
+  function findScrollableCandidates(element) {
+    const seen = new Set();
+    const candidates = [];
+    function add(node) {
+      if (!node || seen.has(node)) return;
+      seen.add(node);
+      const style = root.getComputedStyle ? root.getComputedStyle(node) : null;
+      const className = String(node.className || '');
+      const canScroll = node.scrollHeight > node.clientHeight + 10;
+      const looksScrollable = /auto|scroll/i.test(style?.overflowY || '') || /(?:list|container|scroll|drawer|rate)/i.test(className);
+      if (canScroll || looksScrollable) candidates.push(node);
     }
+    const nested = element?.querySelectorAll
+      ? Array.from(element.querySelectorAll('*'))
+      : [];
+    nested.forEach(add);
     let current = element;
     while (current && current.parentElement) {
-      if (current.scrollHeight > current.clientHeight + 10) return current;
+      add(current);
       current = current.parentElement;
     }
-    return element;
+    return candidates.sort((a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight));
   }
 
   function openWall(doc, adapter, wallSession = createWallSession(), wallController = createWallController(adapter)) {
@@ -962,6 +1077,9 @@
     let highlightKey = '';
     let currentProductActive = false;
     let allProductItems = [];
+    let autoLoadTimer = null;
+    let autoLoadRounds = 0;
+    let autoLoadIdleRounds = 0;
     function revealCurrentCard() {
       modal.focus();
       const key = wallSession.snapshot().previewKey;
@@ -1008,6 +1126,7 @@
         controller.append(items);
         wallSession.finishLoad(controller.items().length > before);
         renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
+        if (controller.items().length > before) scheduleAutoLoad(false);
       });
     }
     adapter.openNativeReviews(doc);
@@ -1033,9 +1152,79 @@
       }
       return true;
     }
+    function emitScrollEvents(scroller, distance) {
+      try {
+        scroller.dispatchEvent(new root.WheelEvent('wheel', { deltaY: distance, bubbles: true, cancelable: true }));
+      } catch (error) {
+        scroller.dispatchEvent(new root.Event('wheel', { bubbles: true }));
+      }
+      scroller.dispatchEvent(new root.Event('scroll', { bubbles: true }));
+    }
+    function scrollOneNativeContainer(scroller) {
+      let moved = false;
+      for (let i = 0; i < AUTO_LOAD_SCROLL_PULSES; i += 1) {
+        const before = scroller.scrollTop;
+        const distance = Math.max(scroller.clientHeight * 1.4, 720);
+        const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+        scroller.scrollTop = Math.min(maxTop, scroller.scrollTop + distance);
+        emitScrollEvents(scroller, distance);
+        moved ||= scroller.scrollTop > before + 1;
+      }
+      return moved;
+    }
+    function scrollNativeReviews() {
+      const candidates = findScrollableCandidates(nativeRoot);
+      if (!candidates.length) return false;
+      return candidates.reduce((moved, scroller) => scrollOneNativeContainer(scroller) || moved, false);
+    }
+    function stopAutoLoad() {
+      if (!autoLoadTimer) return;
+      root.clearTimeout(autoLoadTimer);
+      autoLoadTimer = null;
+    }
+    function scheduleAutoLoad(reset = false) {
+      if (reset) {
+        autoLoadRounds = 0;
+        autoLoadIdleRounds = 0;
+        wallSession.retryLoad();
+      }
+      stopAutoLoad();
+      autoLoadTimer = root.setTimeout(runAutoLoad, AUTO_LOAD_DELAY);
+    }
+    function runAutoLoad() {
+      autoLoadTimer = null;
+      if (!nativeRoot || autoLoadRounds >= AUTO_LOAD_MAX_ROUNDS || autoLoadIdleRounds >= AUTO_LOAD_IDLE_LIMIT) return;
+      if (!wallSession.beginLoad()) return;
+      autoLoadRounds += 1;
+      renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
+      let moved = false;
+      try {
+        moved = scrollNativeReviews();
+      } catch (error) {
+        wallSession.failLoad();
+        renderWall('评价加载失败，请重试。');
+        return;
+      }
+      const pageRequest = adapter.requestNextPage?.() || Promise.resolve(false);
+      root.Promise.resolve(pageRequest).then((requested) => {
+        if (requested) moved = true;
+      }).finally(() => root.setTimeout(() => {
+        const before = controller.items().length;
+        syncMedia(false);
+        const added = controller.items().length > before;
+        autoLoadIdleRounds = added ? 0 : autoLoadIdleRounds + 1;
+        if ((moved || added) && autoLoadRounds < AUTO_LOAD_MAX_ROUNDS && autoLoadIdleRounds < AUTO_LOAD_IDLE_LIMIT) {
+          scheduleAutoLoad(false);
+        }
+      }, AUTO_LOAD_SETTLE_DELAY));
+    }
     function waitForNative() {
       attempts += 1;
-      if (!syncMedia(attempts === 1 && !controller.items().length) && attempts < 12) root.setTimeout(waitForNative, 250);
+      if (!syncMedia(attempts === 1 && !controller.items().length) && attempts < 12) {
+        root.setTimeout(waitForNative, 250);
+        return;
+      }
+      scheduleAutoLoad(true);
     }
     waitForNative();
 
@@ -1058,17 +1247,8 @@
     }
 
     function requestMore() {
-      if (!nativeRoot || !wallSession.beginLoad()) return;
-      renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
-      try {
-        const scroller = findScrollable(nativeRoot);
-        scroller.scrollTop = Math.min(scroller.scrollHeight, scroller.scrollTop + Math.max(scroller.clientHeight, 200));
-        scroller.dispatchEvent(new root.Event('scroll', { bubbles: true }));
-        root.setTimeout(() => syncMedia(false), 300);
-      } catch (error) {
-        wallSession.failLoad();
-        renderWall('评价加载失败，请重试。');
-      }
+      if (!nativeRoot) return;
+      scheduleAutoLoad(false);
     }
     grid.addEventListener('scroll', () => {
       wallSession.rememberView({ scrollTop: grid.scrollTop, previewKey: wallSession.snapshot().previewKey });
@@ -1098,21 +1278,23 @@
           waitForCurrentProductFilter();
           return;
         }
-        if (behavior === 'immediate') root.setTimeout(() => syncMedia(true), 180);
+        if (behavior === 'immediate') root.setTimeout(() => { syncMedia(true); scheduleAutoLoad(true); }, 180);
       } else {
         adapter.openAllReviewsFilter?.(nativeRoot);
         if (allProductItems.length) {
           controller.replace(allProductItems);
           renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
         }
-        root.setTimeout(() => syncMedia(false), 450);
+        root.setTimeout(() => { syncMedia(false); scheduleAutoLoad(true); }, 450);
       }
     });
     sync.addEventListener('click', () => {
       wallSession.retryLoad();
       syncMedia(true);
+      scheduleAutoLoad(true);
     });
     function dismissWall() {
+      stopAutoLoad();
       if (slideshowTimer) { clearTimeout(slideshowTimer); slideshowTimer = null; }
       slideshowActive = false;
       disconnect?.();

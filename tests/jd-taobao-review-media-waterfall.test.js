@@ -294,7 +294,18 @@ test('重复初始化仅生成一个图片墙入口且显示新名称', () => {
   const mount = {
     ownerDocument: {
       createElement() {
-        return { id: '', className: '', textContent: '', listeners: {}, addEventListener(name, fn) { this.listeners[name] = fn; } };
+        return {
+          id: '',
+          className: '',
+          textContent: '',
+          dataset: {},
+          listeners: {},
+          addEventListener(name, fn) { this.listeners[name] = fn; },
+          replaceWith(node) {
+            const index = children.indexOf(this);
+            if (index >= 0) children.splice(index, 1, node);
+          }
+        };
       }
     },
     appendChild(child) {
@@ -311,6 +322,45 @@ test('重复初始化仅生成一个图片墙入口且显示新名称', () => {
   api.ensureLauncher(mount, () => {});
   assert.equal(children.filter(child => child.id === 'review-media-wall-launcher').length, 1);
   assert.equal(children[0].textContent, '图片墙');
+});
+
+test('热更新时会替换旧版本图片墙入口以移除旧监听器', () => {
+  const children = [];
+  const mount = {
+    ownerDocument: {
+      createElement() {
+        return {
+          id: '',
+          className: '',
+          textContent: '',
+          dataset: {},
+          listeners: {},
+          addEventListener(name, fn) { this.listeners[name] = fn; },
+          replaceWith(node) {
+            const index = children.indexOf(this);
+            if (index >= 0) children.splice(index, 1, node);
+          }
+        };
+      }
+    },
+    appendChild(child) {
+      children.push(child);
+    },
+    querySelector(selector) {
+      return selector === '#review-media-wall-launcher'
+        ? children.find(child => child.id === 'review-media-wall-launcher') || null
+        : null;
+    }
+  };
+  let oldClicks = 0;
+  let newClicks = 0;
+  const old = api.ensureLauncher(mount, () => { oldClicks += 1; });
+  old.dataset.rmwVersion = '0.5.1';
+  const fresh = api.ensureLauncher(mount, () => { newClicks += 1; });
+  assert.notEqual(fresh, old);
+  fresh.listeners.click();
+  assert.equal(oldClicks, 0);
+  assert.equal(newClicks, 1);
 });
 
 test('图片墙采用规则方形图集并仅在内容区纵向滚动', () => {
@@ -338,10 +388,10 @@ test('加载状态防止重复请求并在连续无新增后结束', () => {
   const session = api.createWallSession();
   assert.equal(session.beginLoad(), true);
   assert.equal(session.beginLoad(), false);
-  session.finishLoad(false);
-  assert.equal(session.snapshot().loadingState, 'idle');
-  session.beginLoad();
-  session.finishLoad(false);
+  for (let i = 0; i < 5; i += 1) {
+    session.finishLoad(false);
+    if (i < 4) session.beginLoad();
+  }
   assert.equal(session.snapshot().loadingState, 'exhausted');
   session.retryLoad();
   assert.equal(session.snapshot().loadingState, 'idle');
@@ -480,7 +530,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.1/);
+  assert.match(source, /@version\s+0\.5\.4/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
@@ -607,6 +657,28 @@ test('京东取消当前商品筛选时先恢复全部商品媒体缓存避免�
   assert.match(source, /allProductItems = controller\.items\(\)/);
   assert.match(source, /controller\.replace\(allProductItems\)/);
   assert.match(source, /syncMedia\(false\)/);
+});
+
+test('图片墙打开和同步后会自动懒加载原生评价列表补齐更多图片', () => {
+  assert.match(source, /AUTO_LOAD_MAX_ROUNDS/);
+  assert.match(source, /AUTO_LOAD_SETTLE_DELAY/);
+  assert.match(source, /AUTO_LOAD_SCROLL_PULSES/);
+  assert.match(source, /function scheduleAutoLoad/);
+  assert.match(source, /function runAutoLoad/);
+  assert.match(source, /scrollNativeReviews\(\)/);
+  assert.match(source, /findScrollableCandidates\(nativeRoot\)/);
+  assert.match(source, /looksScrollable/);
+  assert.match(source, /new root\.WheelEvent\('wheel'/);
+  assert.match(source, /syncMedia\(false\)/);
+  assert.match(source, /sync\.addEventListener\('click'[\s\S]*scheduleAutoLoad\(true\)/);
+});
+
+test('京东自动加载会复用最近一次评论接口请求体拉取下一页', () => {
+  assert.match(source, /function buildNextJdBody/);
+  assert.match(source, /capture\.lastRequest = \{ url: this\.__rmwJdResponseUrl/);
+  assert.match(source, /capture\.requestNextPage/);
+  assert.match(source, /if \(!response\.ok\) return false/);
+  assert.match(source, /adapter\.requestNextPage/);
 });
 
 test('淘宝图视频筛选项含数量子节点时点击真实筛选容器', () => {
