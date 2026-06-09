@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.19
+// @version      0.5.20
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube with local translation and optional Chinese dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -286,6 +286,7 @@
     rafId: 0,
     routeTimer: 0,
     spokenCueIndex: -1,
+    seekVoiceSuppressUntil: -1,
     originalVolumeBeforeVoice: null,
     videoHooked: null,
     remoteAudio: null,
@@ -2488,8 +2489,11 @@
   }
 
   function handleVideoSeeking() {
+    const activeVoiceIndex = Number.isInteger(state.remoteVoiceCurrent?.index) ? state.remoteVoiceCurrent.index : state.spokenCueIndex;
     cancelSpeech();
-    state.spokenCueIndex = -1;
+    const targetVoiceIndex = findVoiceCueIndex(getVideoEl()?.currentTime || 0);
+    state.seekVoiceSuppressUntil = targetVoiceIndex >= 0 && targetVoiceIndex === activeVoiceIndex ? targetVoiceIndex : -1;
+    state.spokenCueIndex = state.seekVoiceSuppressUntil;
   }
 
   function syncVoice(cue, index, video) {
@@ -2497,6 +2501,7 @@
     if (isRemoteVoiceEngine()) {
       const voiceIndex = findVoiceCueIndex(video.currentTime);
       const voiceCue = voiceIndex >= 0 ? state.voiceCues[voiceIndex] : null;
+      if (shouldSuppressVoiceAfterSeek(voiceIndex, video)) return;
       if (!voiceCue || voiceIndex === state.spokenCueIndex) return;
       state.spokenCueIndex = voiceIndex;
       enqueueVolcCue(voiceCue, voiceIndex);
@@ -2510,6 +2515,18 @@
       return;
     }
     speakCue(cue);
+  }
+
+  function shouldSuppressVoiceAfterSeek(voiceIndex, video) {
+    if (state.seekVoiceSuppressUntil < 0) return false;
+    if (voiceIndex < 0) return true;
+    if (voiceIndex <= state.seekVoiceSuppressUntil) {
+      const cue = state.voiceCues[voiceIndex];
+      const remaining = cue ? Number(cue.end || 0) - video.currentTime : 0;
+      if (remaining > 0.25) return true;
+    }
+    state.seekVoiceSuppressUntil = -1;
+    return false;
   }
 
   function findVoiceCueIndex(time) {
@@ -3136,6 +3153,7 @@
   function catchUpVolcNarration() {
     cancelSpeech();
     state.spokenCueIndex = -1;
+    state.seekVoiceSuppressUntil = -1;
     updateVoiceProgressStatus('已追上当前字幕', 1500);
     renderCurrentCue();
   }
@@ -3164,6 +3182,7 @@
     state.rawSourceCues = [];
     state.cueIndex = -1;
     state.spokenCueIndex = -1;
+    state.seekVoiceSuppressUntil = -1;
     cancelSpeech();
     state.loadToken += 1;
     setCaption(null);
