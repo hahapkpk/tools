@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.12
+// @version      0.5.13
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube with local translation and optional Chinese dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -1973,27 +1973,22 @@
     }
 
     if (source.translationMode === 'local') {
-      await getLocalTranslator(source.sourceLanguage);
-      showStatus('正在读取原始字幕，准备本地翻译...');
-      let sourceRaw;
-      try {
-        const sourceJson = await fetchCaptionJsonWithFallback(videoId, source.sourceTrack, { translate: false });
-        sourceRaw = normalizeRawCues(sourceJson);
-      } catch (error) {
-        if (!error.rateLimited) throw error;
-        sourceRaw = await fetchTranscriptCuesFromPanel(source.sourceTrack, source.sourceLanguage);
-      }
-      const translated = await translateCuesLocally(sourceRaw, source.sourceLanguage);
-      if (!translated.length) throw new Error('字幕接口返回了空字幕。');
-      const data = { cues: translated, rawTargetCues: translated, rawSourceCues: sourceRaw, sourceKind: source.kind };
-      writeCachedCues(cacheKey, data);
-      applyCues(videoId, data, token, `本地中文字幕已加载：${translated.length} 句`);
+      await loadChromeLocalCaptions(videoId, source, token, force);
       return;
     }
 
     const isYouTubeTranslation = source.translationMode === 'youtube';
     showStatus(isYouTubeTranslation ? '正在读取 YouTube 自动翻译字幕（可能被限流）...' : '正在读取 YouTube 中文字幕...');
-    const targetJson = await fetchCaptionJsonWithFallback(videoId, source.targetTrack, { translate: isYouTubeTranslation });
+    let targetJson;
+    try {
+      targetJson = await fetchCaptionJsonWithFallback(videoId, source.targetTrack, { translate: isYouTubeTranslation });
+    } catch (error) {
+      if (isYouTubeTranslation && error.rateLimited) {
+        await switchToLocalTranslationAfterYouTubeRateLimit(videoId, source, token, force);
+        return;
+      }
+      throw error;
+    }
     const targetRaw = normalizeRawCues(targetJson);
     let sourceRaw = [];
     if (source.sourceTrack?.baseUrl) {
@@ -2010,6 +2005,48 @@
     const data = { cues: mergedTarget, rawTargetCues: targetRaw, rawSourceCues: sourceRaw, sourceKind: source.kind };
     writeCachedCues(cacheKey, data);
     applyCues(videoId, data, token, `中文字幕已加载：${mergedTarget.length} 句`);
+  }
+
+  async function loadChromeLocalCaptions(videoId, source, token, force = false) {
+    const cacheKey = getCacheKey(videoId, source);
+    if (!force) {
+      const cached = readCachedCues(cacheKey);
+      if (cached) {
+        applyCues(videoId, cached, token, '已从缓存加载本地翻译字幕');
+        return;
+      }
+    }
+    await getLocalTranslator(source.sourceLanguage, true);
+    showStatus('正在读取原始字幕，准备本地翻译...', 120000);
+    let sourceRaw;
+    try {
+      const sourceJson = await fetchCaptionJsonWithFallback(videoId, source.sourceTrack, { translate: false });
+      sourceRaw = normalizeRawCues(sourceJson);
+    } catch (error) {
+      if (!error.rateLimited) throw error;
+      sourceRaw = await fetchTranscriptCuesFromPanel(source.sourceTrack, source.sourceLanguage);
+    }
+    const translated = await translateCuesLocally(sourceRaw, source.sourceLanguage);
+    if (!translated.length) throw new Error('字幕接口返回了空字幕。');
+    const data = { cues: translated, rawTargetCues: translated, rawSourceCues: sourceRaw, sourceKind: source.kind };
+    writeCachedCues(cacheKey, data);
+    applyCues(videoId, data, token, `本地中文字幕已加载：${translated.length} 句`);
+  }
+
+  async function switchToLocalTranslationAfterYouTubeRateLimit(videoId, source, token, force) {
+    state.settings.translationEngine = 'local';
+    saveSettings();
+    syncControlValues();
+    syncTranslationEngineRows();
+    showStatus('YouTube 自动翻译已限流，正在切换到 Chrome 本地翻译...', 120000);
+    const localSource = {
+      ...source,
+      kind: 'chrome-local-zh',
+      targetTrack: source.sourceTrack || source.targetTrack,
+      sourceTrack: source.sourceTrack || source.targetTrack,
+      translationMode: 'local'
+    };
+    await loadChromeLocalCaptions(videoId, localSource, token, force);
   }
 
   function applyCues(videoId, data, token, statusText) {
@@ -2391,8 +2428,19 @@
       const audio = new Audio(url);
       state.remoteAudio = audio;
       if (showPlayingStatus) showStatus('正在播放火山自然语音测试');
+      audio.addEventListener('ended', () => {
+        if (token !== state.remoteVoiceToken) return;
+        state.remoteAudio = null;
+        playNextVolcCue();
+      }, { once: true });
+      audio.addEventListener('error', () => {
+        if (token !== state.remoteVoiceToken) return;
+        state.remoteAudio = null;
+        playNextVolcCue();
+      }, { once: true });
       await audio.play();
     } catch (error) {
+      if (token === state.remoteVoiceToken) state.remoteAudio = null;
       showStatus(error.message || '火山语音播放失败', 5000);
     }
   }
