@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.13
+// @version      0.5.14
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube with local translation and optional Chinese dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -1655,10 +1655,28 @@
 
   function readTranscriptCuesFromPanel() {
     const nodes = Array.from(document.querySelectorAll('ytd-transcript-segment-renderer'));
-    return nodes.map((node, index) => {
+    const legacyCues = nodes.map((node, index) => {
       const start = parseTranscriptTimestamp(node.querySelector('.segment-timestamp')?.textContent);
       const nextStart = parseTranscriptTimestamp(nodes[index + 1]?.querySelector('.segment-timestamp')?.textContent);
       const text = cleanCaptionText(node.querySelector('.segment-text')?.textContent || '');
+      return {
+        start,
+        end: Number.isFinite(nextStart) && nextStart > start ? nextStart : start + 2.5,
+        text
+      };
+    }).filter(cue => Number.isFinite(cue.start) && cue.text && !isErrorCaptionText(cue.text));
+    return legacyCues.length ? legacyCues : readModernTranscriptCuesFromPanel();
+  }
+
+  function readModernTranscriptCuesFromPanel() {
+    const panel = Array.from(document.querySelectorAll('ytd-engagement-panel-section-list-renderer'))
+      .find(node => node.offsetParent && /转写文稿|Transcript|搜索转写内容|Search transcript/i.test(node.textContent || ''));
+    if (!panel) return [];
+    const nodes = Array.from(panel.querySelectorAll('transcript-segment-view-model, TRANSCRIPT-SEGMENT-VIEW-MODEL'));
+    return nodes.map((node, index) => {
+      const start = parseTranscriptTimestamp(node.querySelector('.ytwTranscriptSegmentViewModelTimestamp')?.textContent);
+      const nextStart = parseTranscriptTimestamp(nodes[index + 1]?.querySelector('.ytwTranscriptSegmentViewModelTimestamp')?.textContent);
+      const text = cleanCaptionText(node.querySelector('span[role="text"]')?.textContent || '');
       return {
         start,
         end: Number.isFinite(nextStart) && nextStart > start ? nextStart : start + 2.5,
@@ -1695,6 +1713,7 @@
   }
 
   async function selectTranscriptSourceLanguage(sourceTrack, sourceLanguage) {
+    if (readTranscriptCuesFromPanel().length) return;
     const option = findTranscriptLanguageOption(sourceTrack, sourceLanguage);
     if (!option) throw new Error('转写文稿中没有找到原始字幕语言，请换一个字幕来源。');
     option.click();
