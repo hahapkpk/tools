@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.17
+// @version      0.5.18
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube with local translation and optional Chinese dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -795,32 +795,85 @@
     return row;
   }
 
-  function createTencentVoiceSelect() {
-    const select = document.createElement('select');
-    select.dataset.role = 'tencentVoiceType';
-    const current = String(state.settings.tencentVoiceType || '');
-    let hasCurrent = false;
+  function createTencentVoicePicker() {
+    const picker = document.createElement('span');
+    picker.className = `${SCRIPT_ID}-voice-picker`;
+
+    const hidden = document.createElement('input');
+    hidden.type = 'hidden';
+    hidden.dataset.role = 'tencentVoiceType';
+    hidden.value = String(state.settings.tencentVoiceType || '');
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `${SCRIPT_ID}-voice-button`;
+    button.dataset.role = 'tencentVoiceButton';
+    button.title = '选择腾讯音色';
+
+    const menu = document.createElement('div');
+    menu.className = `${SCRIPT_ID}-voice-menu`;
+    menu.dataset.role = 'tencentVoiceMenu';
+    button.addEventListener('click', event => {
+      event.stopPropagation();
+      menu.classList.toggle(`${SCRIPT_ID}-visible`);
+    });
+    document.addEventListener('click', () => menu.classList.remove(`${SCRIPT_ID}-visible`), { capture: true });
+
+    picker.append(hidden, button, menu);
+    populateTencentVoiceOptions(picker);
+    return picker;
+  }
+
+  function findTencentVoice(value) {
     for (const group of TENCENT_VOICE_GROUPS) {
-      const optgroup = document.createElement('optgroup');
-      optgroup.label = group.label;
+      const found = group.voices.find(([voiceValue]) => voiceValue === value);
+      if (found) return { value: found[0], label: found[1], group: group.label };
+    }
+    return null;
+  }
+
+  function populateTencentVoiceOptions(picker) {
+    const hidden = picker.querySelector('[data-role="tencentVoiceType"]');
+    const button = picker.querySelector('[data-role="tencentVoiceButton"]');
+    const menu = picker.querySelector('[data-role="tencentVoiceMenu"]');
+    if (!hidden || !button || !menu) return;
+    const current = String(state.settings.tencentVoiceType || '101030');
+    hidden.value = current;
+    const currentVoice = findTencentVoice(current);
+    button.textContent = currentVoice ? `${currentVoice.label} (${current})` : `自定义音色 (${current})`;
+    menu.textContent = '';
+    let hasCurrent = Boolean(currentVoice);
+    for (const group of TENCENT_VOICE_GROUPS) {
+      const heading = document.createElement('div');
+      heading.className = `${SCRIPT_ID}-voice-group-label ${SCRIPT_ID}-tencent-voice-group`;
+      heading.textContent = group.label;
+      menu.appendChild(heading);
       for (const [value, text] of group.voices) {
-        const option = document.createElement('option');
-        option.value = value;
+        const option = document.createElement('button');
+        option.type = 'button';
+        option.className = `${SCRIPT_ID}-voice-option`;
         option.textContent = `${text} (${value})`;
-        optgroup.appendChild(option);
+        option.classList.toggle(`${SCRIPT_ID}-active`, value === current);
+        option.addEventListener('click', event => {
+          event.stopPropagation();
+          updateSetting('tencentVoiceType', value);
+          menu.classList.remove(`${SCRIPT_ID}-visible`);
+        });
+        menu.appendChild(option);
         if (value === current) hasCurrent = true;
       }
-      select.appendChild(optgroup);
     }
     if (current && !hasCurrent) {
-      const option = document.createElement('option');
-      option.value = current;
+      const option = document.createElement('button');
+      option.type = 'button';
+      option.className = `${SCRIPT_ID}-voice-option ${SCRIPT_ID}-active`;
       option.textContent = `自定义音色 (${current})`;
-      select.insertBefore(option, select.firstChild);
+      option.addEventListener('click', event => {
+        event.stopPropagation();
+        menu.classList.remove(`${SCRIPT_ID}-visible`);
+      });
+      menu.insertBefore(option, menu.firstChild);
     }
-    select.value = current || '101030';
-    select.addEventListener('change', () => updateSetting('tencentVoiceType', select.value));
-    return select;
   }
 
   function syncTranslationEngineRows() {
@@ -1379,7 +1432,7 @@
     tencentRegion.value = state.settings.tencentRegion || 'ap-beijing';
     tencentRegion.addEventListener('change', () => updateSetting('tencentRegion', tencentRegion.value.trim() || 'ap-beijing'));
 
-    const tencentVoiceType = createTencentVoiceSelect();
+    const tencentVoiceType = createTencentVoicePicker();
 
     const tencentSampleRate = document.createElement('select');
     tencentSampleRate.dataset.role = 'tencentSampleRate';
@@ -1563,7 +1616,11 @@
       }
       if (input.dataset.role === 'tencentProxyUrl') input.value = state.settings.tencentProxyUrl || '';
       if (input.dataset.role === 'tencentRegion') input.value = state.settings.tencentRegion || 'ap-beijing';
-      if (input.dataset.role === 'tencentVoiceType') input.value = state.settings.tencentVoiceType || '';
+      if (input.dataset.role === 'tencentVoiceType') {
+        input.value = state.settings.tencentVoiceType || '';
+        const picker = input.closest(`.${SCRIPT_ID}-voice-picker`);
+        if (picker) populateTencentVoiceOptions(picker);
+      }
       if (input.dataset.role === 'tencentSampleRate') input.value = String(state.settings.tencentSampleRate || 16000);
       if (input.dataset.role === 'originalVolume') {
         input.value = String(Math.round(Number(state.settings.originalVolume) * 100));
