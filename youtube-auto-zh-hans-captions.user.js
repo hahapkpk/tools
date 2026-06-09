@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.16
+// @version      0.5.17
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube with local translation and optional Chinese dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -14,6 +14,7 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @connect      openspeech.bytedance.com
+// @connect      tts.tencentcloudapi.com
 // @connect      127.0.0.1
 // @connect      localhost
 // @connect      *
@@ -34,8 +35,14 @@
   const VOLC_API_KEY_STORAGE_KEY = `${SCRIPT_ID}:volc-api-key`;
   const VOLC_APP_ID_STORAGE_KEY = `${SCRIPT_ID}:volc-app-id`;
   const VOLC_ACCESS_TOKEN_STORAGE_KEY = `${SCRIPT_ID}:volc-access-token`;
+  const TENCENT_SECRET_ID_STORAGE_KEY = `${SCRIPT_ID}:tencent-secret-id`;
+  const TENCENT_SECRET_KEY_STORAGE_KEY = `${SCRIPT_ID}:tencent-secret-key`;
   const VOLC_TTS_URL = 'https://openspeech.bytedance.com/api/v3/tts/unidirectional';
   const VOLC_RESOURCE_ID = 'seed-tts-2.0';
+  const TENCENT_TTS_URL = 'https://tts.tencentcloudapi.com';
+  const TENCENT_TTS_HOST = 'tts.tencentcloudapi.com';
+  const TENCENT_TTS_SERVICE = 'tts';
+  const TENCENT_TTS_VERSION = '2019-08-23';
   const DEBUG = false;
   const CHECK_INTERVAL_MS = 120;
   const ROUTE_INTERVAL_MS = 800;
@@ -252,6 +259,7 @@
     volcMaleQuickVoice: '',
     volcFemaleQuickVoice: '',
     tencentProxyUrl: 'http://127.0.0.1:8788/tts',
+    tencentRegion: 'ap-beijing',
     tencentVoiceType: '101030',
     tencentSampleRate: 16000,
     voiceRate: 1.08,
@@ -331,6 +339,23 @@
     if (typeof GM_setValue !== 'function') return;
     GM_setValue(VOLC_APP_ID_STORAGE_KEY, String(appId || '').trim());
     GM_setValue(VOLC_ACCESS_TOKEN_STORAGE_KEY, String(accessToken || '').trim());
+  }
+
+  function getTencentCredentials() {
+    try {
+      return {
+        secretId: typeof GM_getValue === 'function' ? String(GM_getValue(TENCENT_SECRET_ID_STORAGE_KEY, '') || '') : '',
+        secretKey: typeof GM_getValue === 'function' ? String(GM_getValue(TENCENT_SECRET_KEY_STORAGE_KEY, '') || '') : ''
+      };
+    } catch {
+      return { secretId: '', secretKey: '' };
+    }
+  }
+
+  function saveTencentCredentials(secretId, secretKey) {
+    if (typeof GM_setValue !== 'function') return;
+    GM_setValue(TENCENT_SECRET_ID_STORAGE_KEY, String(secretId || '').trim());
+    GM_setValue(TENCENT_SECRET_KEY_STORAGE_KEY, String(secretKey || '').trim());
   }
 
   function injectStyle() {
@@ -746,6 +771,18 @@
     return row;
   }
 
+  function makeTencentProxyRow(labelText, control) {
+    const row = makeRow(labelText, control);
+    row.dataset.role = 'tencentProxyRow';
+    return row;
+  }
+
+  function makeTencentDirectRow(labelText, control) {
+    const row = makeRow(labelText, control);
+    row.dataset.role = 'tencentDirectRow';
+    return row;
+  }
+
   function makeRemoteVoiceRow(labelText, control) {
     const row = makeRow(labelText, control);
     row.dataset.role = 'remoteVoiceRow';
@@ -794,7 +831,7 @@
   }
 
   function isRemoteVoiceEngine() {
-    return state.settings.voiceEngine === 'volc' || state.settings.voiceEngine === 'tencent';
+    return state.settings.voiceEngine === 'volc' || state.settings.voiceEngine === 'tencent' || state.settings.voiceEngine === 'tencentDirect';
   }
 
   function syncVoiceEngineRows() {
@@ -802,13 +839,20 @@
     if (!panel) return;
     const isVolc = state.settings.voiceEngine === 'volc';
     const isTencent = state.settings.voiceEngine === 'tencent';
+    const isTencentDirect = state.settings.voiceEngine === 'tencentDirect';
     const isRemote = isRemoteVoiceEngine();
     for (const row of panel.querySelectorAll('[data-role="volcRow"]')) {
       const authVisible = !row.dataset.authMode || row.dataset.authMode === state.settings.volcAuthMode;
       row.classList.toggle(`${SCRIPT_ID}-volc-hidden`, !isVolc || !authVisible);
     }
     for (const row of panel.querySelectorAll('[data-role="tencentRow"]')) {
+      row.classList.toggle(`${SCRIPT_ID}-volc-hidden`, !isTencent && !isTencentDirect);
+    }
+    for (const row of panel.querySelectorAll('[data-role="tencentProxyRow"]')) {
       row.classList.toggle(`${SCRIPT_ID}-volc-hidden`, !isTencent);
+    }
+    for (const row of panel.querySelectorAll('[data-role="tencentDirectRow"]')) {
+      row.classList.toggle(`${SCRIPT_ID}-volc-hidden`, !isTencentDirect);
     }
     for (const row of panel.querySelectorAll('[data-role="remoteVoiceRow"]')) {
       row.classList.toggle(`${SCRIPT_ID}-volc-hidden`, !isRemote);
@@ -1210,7 +1254,7 @@
 
     const voiceEngine = document.createElement('select');
     voiceEngine.dataset.role = 'voiceEngine';
-    for (const [value, text] of [['browser', '浏览器本地语音'], ['volc', '火山自然语音'], ['tencent', '腾讯 TextToVoice（代理）']]) {
+    for (const [value, text] of [['browser', '浏览器本地语音'], ['volc', '火山自然语音'], ['tencent', '腾讯 TextToVoice（代理）'], ['tencentDirect', '腾讯 TextToVoice（直连）']]) {
       const option = document.createElement('option');
       option.value = value;
       option.textContent = text;
@@ -1305,6 +1349,35 @@
     tencentProxyUrl.placeholder = 'http://127.0.0.1:8788/tts';
     tencentProxyUrl.value = state.settings.tencentProxyUrl || '';
     tencentProxyUrl.addEventListener('change', () => updateSetting('tencentProxyUrl', tencentProxyUrl.value.trim()));
+
+    const tencentCredentials = getTencentCredentials();
+    const tencentSecretId = document.createElement('input');
+    tencentSecretId.type = 'text';
+    tencentSecretId.dataset.role = 'tencentSecretId';
+    tencentSecretId.placeholder = 'SecretId';
+    tencentSecretId.autocomplete = 'off';
+    tencentSecretId.value = tencentCredentials.secretId;
+
+    const tencentSecretKeyWrap = document.createElement('span');
+    tencentSecretKeyWrap.className = `${SCRIPT_ID}-api-key`;
+    const tencentSecretKey = document.createElement('input');
+    tencentSecretKey.type = 'password';
+    tencentSecretKey.dataset.role = 'tencentSecretKey';
+    tencentSecretKey.placeholder = 'SecretKey';
+    tencentSecretKey.autocomplete = 'off';
+    tencentSecretKey.value = tencentCredentials.secretKey;
+    const saveTencentKey = makeButton('保存', '仅保存到本机 Tampermonkey 存储', () => {
+      saveTencentCredentials(tencentSecretId.value, tencentSecretKey.value);
+      showStatus(tencentSecretId.value.trim() && tencentSecretKey.value.trim() ? '腾讯 SecretId 与 SecretKey 已保存到本机' : '腾讯直连密钥已清除');
+    });
+    tencentSecretKeyWrap.append(tencentSecretKey, saveTencentKey);
+
+    const tencentRegion = document.createElement('input');
+    tencentRegion.type = 'text';
+    tencentRegion.dataset.role = 'tencentRegion';
+    tencentRegion.placeholder = 'ap-beijing';
+    tencentRegion.value = state.settings.tencentRegion || 'ap-beijing';
+    tencentRegion.addEventListener('change', () => updateSetting('tencentRegion', tencentRegion.value.trim() || 'ap-beijing'));
 
     const tencentVoiceType = createTencentVoiceSelect();
 
@@ -1413,7 +1486,10 @@
       makeVolcRow('男声快捷', volcMaleQuickVoice),
       makeVolcRow('女声快捷', volcFemaleQuickVoice),
       makeVolcRow('快捷切换', quickButtons),
-      makeTencentRow('腾讯代理', tencentProxyUrl),
+      makeTencentProxyRow('腾讯代理', tencentProxyUrl),
+      makeTencentDirectRow('腾讯 SecretId', tencentSecretId),
+      makeTencentDirectRow('腾讯 SecretKey', tencentSecretKeyWrap),
+      makeTencentDirectRow('腾讯 Region', tencentRegion),
       makeTencentRow('腾讯音色', tencentVoiceType),
       makeTencentRow('采样率', tencentSampleRate),
       makeRow('测试语音', testVoiceButton),
@@ -1433,7 +1509,7 @@
   }
 
   function updateSetting(key, value) {
-    if (key === 'voiceEngine' || key === 'volcAuthMode' || key === 'voiceName' || key === 'volcVoice' || key === 'tencentProxyUrl' || key === 'tencentVoiceType' || key === 'tencentSampleRate' || key === 'voiceRate' || key === 'voiceSyncMode' || key === 'terminologyMap') {
+    if (key === 'voiceEngine' || key === 'volcAuthMode' || key === 'voiceName' || key === 'volcVoice' || key === 'tencentProxyUrl' || key === 'tencentRegion' || key === 'tencentVoiceType' || key === 'tencentSampleRate' || key === 'voiceRate' || key === 'voiceSyncMode' || key === 'terminologyMap') {
       cancelSpeech();
       state.spokenCueIndex = -1;
     }
@@ -1486,6 +1562,7 @@
         if (picker) populateVolcVoiceOptions(picker);
       }
       if (input.dataset.role === 'tencentProxyUrl') input.value = state.settings.tencentProxyUrl || '';
+      if (input.dataset.role === 'tencentRegion') input.value = state.settings.tencentRegion || 'ap-beijing';
       if (input.dataset.role === 'tencentVoiceType') input.value = state.settings.tencentVoiceType || '';
       if (input.dataset.role === 'tencentSampleRate') input.value = String(state.settings.tencentSampleRate || 16000);
       if (input.dataset.role === 'originalVolume') {
@@ -2465,6 +2542,9 @@
     if (state.settings.voiceEngine === 'tencent') {
       return `tencent|${state.settings.tencentProxyUrl}|${state.settings.tencentVoiceType}|${state.settings.tencentSampleRate}|${state.settings.voiceRate}|${text}`;
     }
+    if (state.settings.voiceEngine === 'tencentDirect') {
+      return `tencentDirect|${state.settings.tencentRegion}|${state.settings.tencentVoiceType}|${state.settings.tencentSampleRate}|${state.settings.voiceRate}|${text}`;
+    }
     return `volc|${state.settings.volcVoice}|${state.settings.voiceRate}|${text}`;
   }
 
@@ -2582,6 +2662,111 @@
     });
   }
 
+  async function requestTencentDirectAudio(text) {
+    const credentials = getTencentCredentials();
+    if (!credentials.secretId || !credentials.secretKey) return Promise.reject(new Error('请填写并保存腾讯 SecretId 与 SecretKey'));
+    if (typeof GM_xmlhttpRequest !== 'function') return Promise.reject(new Error('当前脚本未获得跨域请求权限'));
+    const region = String(state.settings.tencentRegion || 'ap-beijing').trim() || 'ap-beijing';
+    const payload = {
+      Text: text,
+      SessionId: makeRequestId(),
+      Volume: 0,
+      Speed: tencentSpeedFromRate(Number(state.settings.voiceRate)),
+      ProjectId: 0,
+      ModelType: 1,
+      VoiceType: Number(state.settings.tencentVoiceType) || 101030,
+      PrimaryLanguage: 1,
+      SampleRate: Number(state.settings.tencentSampleRate) || 16000,
+      Codec: 'mp3',
+      EnableSubtitle: false
+    };
+    const body = JSON.stringify(payload);
+    const timestamp = Math.floor(Date.now() / 1000);
+    const authorization = await createTencentAuthorization({
+      secretId: credentials.secretId,
+      secretKey: credentials.secretKey,
+      timestamp,
+      payload: body
+    });
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: 'POST',
+        url: TENCENT_TTS_URL,
+        headers: {
+          Authorization: authorization,
+          'Content-Type': 'application/json; charset=utf-8',
+          Host: TENCENT_TTS_HOST,
+          'X-TC-Action': 'TextToVoice',
+          'X-TC-Version': TENCENT_TTS_VERSION,
+          'X-TC-Region': region,
+          'X-TC-Timestamp': String(timestamp)
+        },
+        data: body,
+        responseType: 'text',
+        timeout: 30000,
+        onload: response => {
+          if (response.status < 200 || response.status >= 300) {
+            reject(makeVolcRequestError(`腾讯语音直连请求失败：HTTP ${response.status}`, response.status >= 500 && response.status <= 599));
+            return;
+          }
+          try {
+            resolve(parseTencentTextToVoiceResponse(response.responseText || response.response || ''));
+          } catch (error) {
+            reject(error);
+          }
+        },
+        ontimeout: () => reject(makeVolcRequestError('腾讯语音直连请求超时', true)),
+        onerror: () => reject(makeVolcRequestError('腾讯语音直连网络请求失败', true))
+      });
+    });
+  }
+
+  async function createTencentAuthorization({ secretId, secretKey, timestamp, payload }) {
+    const algorithm = 'TC3-HMAC-SHA256';
+    const date = new Date(timestamp * 1000).toISOString().slice(0, 10);
+    const hashedPayload = await sha256Hex(payload);
+    const canonicalHeaders = `content-type:application/json; charset=utf-8\nhost:${TENCENT_TTS_HOST}\nx-tc-action:texttovoice\n`;
+    const signedHeaders = 'content-type;host;x-tc-action';
+    const canonicalRequest = `POST\n/\n\n${canonicalHeaders}\n${signedHeaders}\n${hashedPayload}`;
+    const credentialScope = `${date}/${TENCENT_TTS_SERVICE}/tc3_request`;
+    const stringToSign = `${algorithm}\n${timestamp}\n${credentialScope}\n${await sha256Hex(canonicalRequest)}`;
+    const secretDate = await hmacSha256Bytes(utf8Bytes(`TC3${secretKey}`), date);
+    const secretService = await hmacSha256Bytes(secretDate, TENCENT_TTS_SERVICE);
+    const secretSigning = await hmacSha256Bytes(secretService, 'tc3_request');
+    const signature = bytesToHex(await hmacSha256Bytes(secretSigning, stringToSign));
+    return `${algorithm} Credential=${secretId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+  }
+
+  function parseTencentTextToVoiceResponse(raw) {
+    const data = JSON.parse(raw || '{}');
+    const response = data.Response || {};
+    if (response.Error) {
+      throw new Error(`腾讯语音合成失败：${response.Error.Message || response.Error.Code || '未知错误'}`);
+    }
+    const audio = response.Audio;
+    if (!audio) throw new Error('腾讯语音未返回可播放音频');
+    return URL.createObjectURL(new Blob([base64ToBytes(audio)], { type: 'audio/mpeg' }));
+  }
+
+  function utf8Bytes(value) {
+    return new TextEncoder().encode(String(value));
+  }
+
+  async function sha256Hex(value) {
+    const digest = await crypto.subtle.digest('SHA-256', utf8Bytes(value));
+    return bytesToHex(new Uint8Array(digest));
+  }
+
+  async function hmacSha256Bytes(key, value) {
+    const cryptoKey = await crypto.subtle.importKey('raw', key instanceof Uint8Array ? key : utf8Bytes(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const signature = await crypto.subtle.sign('HMAC', cryptoKey, utf8Bytes(value));
+    return new Uint8Array(signature);
+  }
+
+  function bytesToHex(bytes) {
+    return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+  }
+
   function tencentSpeedFromRate(rate) {
     const normalized = clamp(Number(rate), 0.6, 2.5);
     if (normalized <= 0.6) return -2;
@@ -2594,12 +2779,18 @@
 
   async function requestRemoteAudioWithRetry(text, reportStatus = true) {
     try {
-      return await (state.settings.voiceEngine === 'tencent' ? requestTencentProxyAudio(text) : requestVolcAudio(text));
+      return await requestRemoteAudio(text);
     } catch (error) {
       if (!isRetryableVolcError(error)) throw error;
       if (reportStatus) updateVoiceProgressStatus('语音请求失败，正在重试...', 1800);
-      return state.settings.voiceEngine === 'tencent' ? requestTencentProxyAudio(text) : requestVolcAudio(text);
+      return requestRemoteAudio(text);
     }
+  }
+
+  function requestRemoteAudio(text) {
+    if (state.settings.voiceEngine === 'tencent') return requestTencentProxyAudio(text);
+    if (state.settings.voiceEngine === 'tencentDirect') return requestTencentDirectAudio(text);
+    return requestVolcAudio(text);
   }
 
   function parseVolcAudioStream(raw) {
@@ -2677,7 +2868,8 @@
   }
 
   function getRemoteVoiceProviderLabel() {
-    return state.settings.voiceEngine === 'tencent' ? '腾讯 TextToVoice 语音' : '火山自然语音';
+    if (state.settings.voiceEngine === 'tencent' || state.settings.voiceEngine === 'tencentDirect') return '腾讯 TextToVoice 语音';
+    return '火山自然语音';
   }
 
   function speakVolcCue(cue, index) {
@@ -2784,6 +2976,8 @@
     let hasCredentials = false;
     if (state.settings.voiceEngine === 'tencent') {
       hasCredentials = Boolean(String(state.settings.tencentProxyUrl || '').trim());
+    } else if (state.settings.voiceEngine === 'tencentDirect') {
+      hasCredentials = Object.values(getTencentCredentials()).every(Boolean);
     } else if (state.settings.volcAuthMode === 'legacy') {
       hasCredentials = Object.values(getVolcLegacyCredentials()).every(Boolean);
     } else {
