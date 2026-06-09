@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.21
+// @version      0.5.22
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube with local translation and optional Chinese dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -285,6 +285,7 @@
     pendingStatus: '',
     rafId: 0,
     routeTimer: 0,
+    routeCheckTimer: 0,
     spokenCueIndex: -1,
     seekVoiceSuppressUntil: -1,
     originalVolumeBeforeVoice: null,
@@ -3326,17 +3327,33 @@
   function checkRoute() {
     ensureOverlay();
     const videoId = getVideoId();
-    const routeKey = `${location.href}::${videoId}`;
-    if (videoId && routeKey !== state.lastUrl) {
+    if (!videoId) return;
+    const routeKey = `${location.pathname}${location.search}::${videoId}`;
+    if (videoId !== state.videoId || routeKey !== state.lastUrl) {
       state.lastUrl = routeKey;
       reloadCurrentVideo(false);
+      scheduleRouteCheck(1200);
+      return;
     }
+    if (!state.rafId && state.cues.length) startSyncLoop();
+  }
+
+  function scheduleRouteCheck(delay = 0) {
+    state.routeCheckTimer = window.setTimeout(checkRoute, delay);
+  }
+
+  function handleYouTubeNavigation() {
+    scheduleRouteCheck(0);
+    scheduleRouteCheck(350);
+    scheduleRouteCheck(1200);
   }
 
   function hookYouTubeNavigation() {
-    window.addEventListener('yt-navigate-finish', checkRoute, true);
-    window.addEventListener('yt-page-data-updated', checkRoute, true);
-    window.addEventListener('popstate', checkRoute, true);
+    window.addEventListener('yt-navigate-start', handleYouTubeNavigation, true);
+    window.addEventListener('yt-navigate-finish', handleYouTubeNavigation, true);
+    window.addEventListener('yt-page-data-updated', handleYouTubeNavigation, true);
+    window.addEventListener('yt-player-updated', handleYouTubeNavigation, true);
+    window.addEventListener('popstate', handleYouTubeNavigation, true);
     state.routeTimer = window.setInterval(checkRoute, ROUTE_INTERVAL_MS);
   }
 
