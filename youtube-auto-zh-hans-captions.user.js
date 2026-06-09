@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.14
+// @version      0.5.15
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube with local translation and optional Chinese dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -14,6 +14,9 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @connect      openspeech.bytedance.com
+// @connect      127.0.0.1
+// @connect      localhost
+// @connect      *
 // ==/UserScript==
 
 (function () {
@@ -189,6 +192,9 @@
     volcFavorites: [],
     volcMaleQuickVoice: '',
     volcFemaleQuickVoice: '',
+    tencentProxyUrl: 'http://127.0.0.1:8788/tts',
+    tencentVoiceType: '1001',
+    tencentSampleRate: 16000,
     voiceRate: 1.08,
     voiceSyncMode: 'natural',
     terminologyMap: '',
@@ -675,6 +681,18 @@
     return row;
   }
 
+  function makeTencentRow(labelText, control) {
+    const row = makeRow(labelText, control);
+    row.dataset.role = 'tencentRow';
+    return row;
+  }
+
+  function makeRemoteVoiceRow(labelText, control) {
+    const row = makeRow(labelText, control);
+    row.dataset.role = 'remoteVoiceRow';
+    return row;
+  }
+
   function makeAuthRow(labelText, control, mode) {
     const row = makeVolcRow(labelText, control);
     row.dataset.authMode = mode;
@@ -688,16 +706,28 @@
     if (localRow) localRow.classList.toggle(`${SCRIPT_ID}-volc-hidden`, state.settings.translationEngine !== 'local');
   }
 
+  function isRemoteVoiceEngine() {
+    return state.settings.voiceEngine === 'volc' || state.settings.voiceEngine === 'tencent';
+  }
+
   function syncVoiceEngineRows() {
     const panel = document.getElementById(CONTROL_ID);
     if (!panel) return;
     const isVolc = state.settings.voiceEngine === 'volc';
+    const isTencent = state.settings.voiceEngine === 'tencent';
+    const isRemote = isRemoteVoiceEngine();
     for (const row of panel.querySelectorAll('[data-role="volcRow"]')) {
       const authVisible = !row.dataset.authMode || row.dataset.authMode === state.settings.volcAuthMode;
       row.classList.toggle(`${SCRIPT_ID}-volc-hidden`, !isVolc || !authVisible);
     }
+    for (const row of panel.querySelectorAll('[data-role="tencentRow"]')) {
+      row.classList.toggle(`${SCRIPT_ID}-volc-hidden`, !isTencent);
+    }
+    for (const row of panel.querySelectorAll('[data-role="remoteVoiceRow"]')) {
+      row.classList.toggle(`${SCRIPT_ID}-volc-hidden`, !isRemote);
+    }
     const browserRow = panel.querySelector('[data-role="browserVoiceRow"]');
-    if (browserRow) browserRow.classList.toggle(`${SCRIPT_ID}-volc-hidden`, isVolc);
+    if (browserRow) browserRow.classList.toggle(`${SCRIPT_ID}-volc-hidden`, isRemote);
   }
 
   function createVoicePicker() {
@@ -1006,7 +1036,7 @@
   function ensureControls(player) {
     let panel = document.getElementById(CONTROL_ID);
     if (panel) {
-      if (!panel.querySelector('[data-role="translationEngine"]') || !panel.querySelector('[data-role="voiceEngine"]') || !panel.querySelector('[data-role="volcAuthMode"]') || !panel.querySelector('[data-role="volcVoice"]') || !panel.querySelector('[data-role="volcFavoritesBar"]') || !panel.querySelector('[data-role="voiceSyncMode"]') || !panel.querySelector('[data-role="voiceProgressStatus"]') || !panel.querySelector('[data-role="originalVolume"]') || !panel.querySelector('[data-role="testVolcCredentials"]') || !panel.querySelector('[data-role="terminologyMap"]')) {
+      if (!panel.querySelector('[data-role="translationEngine"]') || !panel.querySelector('[data-role="voiceEngine"]') || !panel.querySelector('[data-role="volcAuthMode"]') || !panel.querySelector('[data-role="volcVoice"]') || !panel.querySelector('[data-role="volcFavoritesBar"]') || !panel.querySelector('[data-role="voiceSyncMode"]') || !panel.querySelector('[data-role="voiceProgressStatus"]') || !panel.querySelector('[data-role="originalVolume"]') || !panel.querySelector('[data-role="testVolcCredentials"]') || !panel.querySelector('[data-role="terminologyMap"]') || !panel.querySelector('[data-role="tencentProxyUrl"]')) {
         panel.remove();
         panel = null;
       }
@@ -1093,7 +1123,7 @@
 
     const voiceEngine = document.createElement('select');
     voiceEngine.dataset.role = 'voiceEngine';
-    for (const [value, text] of [['browser', '浏览器本地语音'], ['volc', '火山自然语音']]) {
+    for (const [value, text] of [['browser', '浏览器本地语音'], ['volc', '火山自然语音'], ['tencent', '腾讯 TextToVoice（代理）']]) {
       const option = document.createElement('option');
       option.value = value;
       option.textContent = text;
@@ -1181,6 +1211,31 @@
     const switchFemaleVoice = makeButton('切女声', '切换到已设置的女声音色', () => applyVolcQuickVoice('volcFemaleQuickVoice', '女声'));
     switchFemaleVoice.dataset.role = 'applyVolcFemaleQuickVoice';
     quickButtons.append(switchMaleVoice, switchFemaleVoice);
+
+    const tencentProxyUrl = document.createElement('input');
+    tencentProxyUrl.type = 'text';
+    tencentProxyUrl.dataset.role = 'tencentProxyUrl';
+    tencentProxyUrl.placeholder = 'http://127.0.0.1:8788/tts';
+    tencentProxyUrl.value = state.settings.tencentProxyUrl || '';
+    tencentProxyUrl.addEventListener('change', () => updateSetting('tencentProxyUrl', tencentProxyUrl.value.trim()));
+
+    const tencentVoiceType = document.createElement('input');
+    tencentVoiceType.type = 'text';
+    tencentVoiceType.dataset.role = 'tencentVoiceType';
+    tencentVoiceType.placeholder = '1001';
+    tencentVoiceType.value = state.settings.tencentVoiceType || '';
+    tencentVoiceType.addEventListener('change', () => updateSetting('tencentVoiceType', tencentVoiceType.value.trim()));
+
+    const tencentSampleRate = document.createElement('select');
+    tencentSampleRate.dataset.role = 'tencentSampleRate';
+    for (const value of [16000, 24000, 8000]) {
+      const option = document.createElement('option');
+      option.value = String(value);
+      option.textContent = `${value} Hz`;
+      tencentSampleRate.appendChild(option);
+    }
+    tencentSampleRate.value = String(state.settings.tencentSampleRate || 16000);
+    tencentSampleRate.addEventListener('change', () => updateSetting('tencentSampleRate', Number(tencentSampleRate.value)));
 
     const voiceRate = document.createElement('select');
     voiceRate.dataset.role = 'voiceRate';
@@ -1276,11 +1331,14 @@
       makeVolcRow('男声快捷', volcMaleQuickVoice),
       makeVolcRow('女声快捷', volcFemaleQuickVoice),
       makeVolcRow('快捷切换', quickButtons),
+      makeTencentRow('腾讯代理', tencentProxyUrl),
+      makeTencentRow('腾讯音色', tencentVoiceType),
+      makeTencentRow('采样率', tencentSampleRate),
       makeRow('测试语音', testVoiceButton),
       makeRow('配音语速', voiceRate),
-      makeVolcRow('配音同步', voiceSyncMode),
-      makeVolcRow('专有名词修正表', terminologyMap),
-      makeVolcRow('配音状态', voiceProgressWrap),
+      makeRemoteVoiceRow('配音同步', voiceSyncMode),
+      makeRemoteVoiceRow('专有名词修正表', terminologyMap),
+      makeRemoteVoiceRow('配音状态', voiceProgressWrap),
       makeRow('原声音量', originalVolumeWrap),
       buttons
     );
@@ -1293,7 +1351,7 @@
   }
 
   function updateSetting(key, value) {
-    if (key === 'voiceEngine' || key === 'volcAuthMode' || key === 'voiceName' || key === 'volcVoice' || key === 'voiceRate' || key === 'voiceSyncMode' || key === 'terminologyMap') {
+    if (key === 'voiceEngine' || key === 'volcAuthMode' || key === 'voiceName' || key === 'volcVoice' || key === 'tencentProxyUrl' || key === 'tencentVoiceType' || key === 'tencentSampleRate' || key === 'voiceRate' || key === 'voiceSyncMode' || key === 'terminologyMap') {
       cancelSpeech();
       state.spokenCueIndex = -1;
     }
@@ -1345,6 +1403,9 @@
         const picker = input.closest(`.${SCRIPT_ID}-voice-picker`);
         if (picker) populateVolcVoiceOptions(picker);
       }
+      if (input.dataset.role === 'tencentProxyUrl') input.value = state.settings.tencentProxyUrl || '';
+      if (input.dataset.role === 'tencentVoiceType') input.value = state.settings.tencentVoiceType || '';
+      if (input.dataset.role === 'tencentSampleRate') input.value = String(state.settings.tencentSampleRate || 16000);
       if (input.dataset.role === 'originalVolume') {
         input.value = String(Math.round(Number(state.settings.originalVolume) * 100));
         const valueLabel = panel.querySelector('[data-role="originalVolumeValue"]');
@@ -2150,9 +2211,9 @@
   }
 
   function handleVideoPlay() {
-    if (state.settings.voiceEnabled && state.remoteAudio?.paused && state.settings.voiceEngine === 'volc') {
+    if (state.settings.voiceEnabled && state.remoteAudio?.paused && isRemoteVoiceEngine()) {
       state.remoteAudio.play().catch(() => {});
-    } else if (state.settings.voiceEnabled && state.settings.voiceEngine === 'volc') {
+    } else if (state.settings.voiceEnabled && isRemoteVoiceEngine()) {
       playNextVolcCue();
     } else if (state.settings.voiceEnabled && window.speechSynthesis?.paused) {
       window.speechSynthesis.resume();
@@ -2166,7 +2227,7 @@
 
   function syncVoice(cue, index, video) {
     if (!state.settings.voiceEnabled || !cue || index < 0 || video.paused) return;
-    if (state.settings.voiceEngine === 'volc') {
+    if (isRemoteVoiceEngine()) {
       const voiceIndex = findVoiceCueIndex(video.currentTime);
       const voiceCue = voiceIndex >= 0 ? state.voiceCues[voiceIndex] : null;
       if (!voiceCue || voiceIndex === state.spokenCueIndex) return;
@@ -2205,8 +2266,8 @@
   }
 
   function testSelectedVoice() {
-    if (state.settings.voiceEngine === 'volc') {
-      speakVolcText('这是一段火山自然语音测试，用来确认当前选择的配音人物。', true);
+    if (isRemoteVoiceEngine()) {
+      speakVolcText('这是一段中文远程语音测试，用来确认当前选择的配音服务商和音色。', true);
       return;
     }
     if (state.settings.voiceName === AUTO_MALE_VOICE && !findMaleChineseVoice()) {
@@ -2315,7 +2376,14 @@
   }
 
   function getVolcAudioCacheKey(text) {
-    return `${state.settings.volcVoice}|${state.settings.voiceRate}|${text}`;
+    return getRemoteAudioCacheKey(text);
+  }
+
+  function getRemoteAudioCacheKey(text) {
+    if (state.settings.voiceEngine === 'tencent') {
+      return `tencent|${state.settings.tencentProxyUrl}|${state.settings.tencentVoiceType}|${state.settings.tencentSampleRate}|${state.settings.voiceRate}|${text}`;
+    }
+    return `volc|${state.settings.volcVoice}|${state.settings.voiceRate}|${text}`;
   }
 
   function makeRequestId() {
@@ -2394,6 +2462,64 @@
     }
   }
 
+  function requestTencentProxyAudio(text) {
+    const proxyUrl = String(state.settings.tencentProxyUrl || '').trim();
+    if (!proxyUrl) return Promise.reject(new Error('请填写腾讯 TextToVoice 代理地址'));
+    if (typeof GM_xmlhttpRequest !== 'function') return Promise.reject(new Error('当前脚本未获得跨域请求权限'));
+    const payload = {
+      action: 'TextToVoice',
+      text,
+      voiceType: Number(state.settings.tencentVoiceType) || state.settings.tencentVoiceType || 1001,
+      sampleRate: Number(state.settings.tencentSampleRate) || 16000,
+      codec: 'mp3',
+      speed: tencentSpeedFromRate(Number(state.settings.voiceRate))
+    };
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: 'POST',
+        url: proxyUrl,
+        headers: { 'Content-Type': 'application/json' },
+        data: JSON.stringify(payload),
+        responseType: 'arraybuffer',
+        timeout: 30000,
+        onload: response => {
+          if (response.status < 200 || response.status >= 300) {
+            reject(makeVolcRequestError(`腾讯语音代理请求失败：HTTP ${response.status}`, response.status >= 500 && response.status <= 599));
+            return;
+          }
+          const buffer = response.response;
+          if (!buffer || !buffer.byteLength) {
+            reject(new Error('腾讯语音代理未返回可播放音频'));
+            return;
+          }
+          resolve(URL.createObjectURL(new Blob([buffer], { type: 'audio/mpeg' })));
+        },
+        ontimeout: () => reject(makeVolcRequestError('腾讯语音代理请求超时', true)),
+        onerror: () => reject(makeVolcRequestError('腾讯语音代理网络请求失败', true))
+      });
+    });
+  }
+
+  function tencentSpeedFromRate(rate) {
+    const normalized = clamp(Number(rate), 0.6, 2.5);
+    if (normalized <= 0.6) return -2;
+    if (normalized <= 0.8) return -1;
+    if (normalized <= 1) return 0;
+    if (normalized <= 1.2) return 1;
+    if (normalized <= 1.5) return 2;
+    return Math.min(6, Number(((normalized - 1.5) / 0.25 + 2).toFixed(2)));
+  }
+
+  async function requestRemoteAudioWithRetry(text, reportStatus = true) {
+    try {
+      return await (state.settings.voiceEngine === 'tencent' ? requestTencentProxyAudio(text) : requestVolcAudio(text));
+    } catch (error) {
+      if (!isRetryableVolcError(error)) throw error;
+      if (reportStatus) updateVoiceProgressStatus('语音请求失败，正在重试...', 1800);
+      return state.settings.voiceEngine === 'tencent' ? requestTencentProxyAudio(text) : requestVolcAudio(text);
+    }
+  }
+
   function parseVolcAudioStream(raw) {
     const chunks = [];
     let position = 0;
@@ -2420,11 +2546,11 @@
     return bytes;
   }
 
-  function getVolcAudioUrl(text, reportStatus = true) {
-    const key = getVolcAudioCacheKey(text);
+  function getRemoteAudioUrl(text, reportStatus = true) {
+    const key = getRemoteAudioCacheKey(text);
     if (volcAudioCache.has(key)) return Promise.resolve(volcAudioCache.get(key));
     if (volcPendingCache.has(key)) return volcPendingCache.get(key);
-    const pending = requestVolcAudioWithRetry(text, reportStatus).then(url => {
+    const pending = requestRemoteAudioWithRetry(text, reportStatus).then(url => {
       if (volcAudioCache.size >= 80) {
         const oldestKey = volcAudioCache.keys().next().value;
         URL.revokeObjectURL(volcAudioCache.get(oldestKey));
@@ -2437,6 +2563,10 @@
     return pending;
   }
 
+  function getVolcAudioUrl(text, reportStatus = true) {
+    return getRemoteAudioUrl(text, reportStatus);
+  }
+
   async function speakVolcText(text, showPlayingStatus = false) {
     const token = state.remoteVoiceToken + 1;
     cancelSpeech();
@@ -2446,7 +2576,7 @@
       if (token !== state.remoteVoiceToken) return;
       const audio = new Audio(url);
       state.remoteAudio = audio;
-      if (showPlayingStatus) showStatus('正在播放火山自然语音测试');
+      if (showPlayingStatus) showStatus(`正在播放${getRemoteVoiceProviderLabel()}测试`);
       audio.addEventListener('ended', () => {
         if (token !== state.remoteVoiceToken) return;
         state.remoteAudio = null;
@@ -2460,8 +2590,12 @@
       await audio.play();
     } catch (error) {
       if (token === state.remoteVoiceToken) state.remoteAudio = null;
-      showStatus(error.message || '火山语音播放失败', 5000);
+      showStatus(error.message || `${getRemoteVoiceProviderLabel()}播放失败`, 5000);
     }
+  }
+
+  function getRemoteVoiceProviderLabel() {
+    return state.settings.voiceEngine === 'tencent' ? '腾讯 TextToVoice 语音' : '火山自然语音';
   }
 
   function speakVolcCue(cue, index) {
@@ -2506,7 +2640,7 @@
 
   async function playNextVolcCue() {
     const video = getVideoEl();
-    if (!state.settings.voiceEnabled || state.settings.voiceEngine !== 'volc' || !video || video.paused) return;
+    if (!state.settings.voiceEnabled || !isRemoteVoiceEngine() || !video || video.paused) return;
     if (state.remoteAudio || state.remoteVoiceStarting) return;
     let item = null;
     while (state.remoteVoiceQueue.length && !item) {
@@ -2565,10 +2699,15 @@
   }
 
   function prefetchVolcCues(startIndex, count) {
-    const hasCredentials = state.settings.volcAuthMode === 'legacy'
-      ? Object.values(getVolcLegacyCredentials()).every(Boolean)
-      : Boolean(getVolcApiKey());
-    if (state.settings.voiceEngine !== 'volc' || !hasCredentials) return;
+    let hasCredentials = false;
+    if (state.settings.voiceEngine === 'tencent') {
+      hasCredentials = Boolean(String(state.settings.tencentProxyUrl || '').trim());
+    } else if (state.settings.volcAuthMode === 'legacy') {
+      hasCredentials = Object.values(getVolcLegacyCredentials()).every(Boolean);
+    } else {
+      hasCredentials = Boolean(getVolcApiKey());
+    }
+    if (!isRemoteVoiceEngine() || !hasCredentials) return;
     for (const cue of state.voiceCues.slice(startIndex, startIndex + count)) {
       const text = applyVoiceTerminology(cue.text).replace(/\[[^\]]+\]/g, '').replace(/\s+/g, ' ').trim();
       if (text.length >= 2) getVolcAudioUrl(text, false).catch(() => {});
@@ -2590,7 +2729,7 @@
     }
     state.voiceProgressNotice = '';
     state.voiceProgressNoticeUntil = 0;
-    if (!state.settings.voiceEnabled || state.settings.voiceEngine !== 'volc') {
+    if (!state.settings.voiceEnabled || !isRemoteVoiceEngine()) {
       label.textContent = '同步正常';
       return;
     }
