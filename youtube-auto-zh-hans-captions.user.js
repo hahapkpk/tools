@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.20
+// @version      0.5.21
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube with local translation and optional Chinese dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -756,6 +756,79 @@
     return button;
   }
 
+  function createDarkSelect(role, options, value, onChange, title = '') {
+    const picker = document.createElement('span');
+    picker.className = `${SCRIPT_ID}-voice-picker`;
+    picker.dataset.darkSelect = '1';
+    picker._darkSelectOptions = options;
+    picker._darkSelectOnChange = onChange;
+
+    const hidden = document.createElement('input');
+    hidden.type = 'hidden';
+    hidden.dataset.role = role;
+    hidden.value = String(value ?? '');
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `${SCRIPT_ID}-voice-button`;
+    button.dataset.role = `${role}DarkSelectButton`;
+    button.dataset.kind = 'darkSelectButton';
+    button.title = title || '选择';
+
+    const menu = document.createElement('div');
+    menu.className = `${SCRIPT_ID}-voice-menu`;
+    menu.dataset.role = `${role}DarkSelectMenu`;
+    menu.dataset.kind = 'darkSelectMenu';
+    button.addEventListener('click', event => {
+      event.stopPropagation();
+      closeAllDarkMenus(menu);
+      menu.classList.toggle(`${SCRIPT_ID}-visible`);
+    });
+
+    picker.append(hidden, button, menu);
+    refreshDarkSelect(picker);
+    return picker;
+  }
+
+  function closeAllDarkMenus(except = null) {
+    for (const menu of document.querySelectorAll(`#${CONTROL_ID} [data-kind="darkSelectMenu"], #${CONTROL_ID} .${SCRIPT_ID}-voice-menu`)) {
+      if (menu !== except) menu.classList.remove(`${SCRIPT_ID}-visible`);
+    }
+  }
+
+  function refreshDarkSelect(picker) {
+    const hidden = picker.querySelector('input[type="hidden"][data-role]');
+    const button = picker.querySelector('[data-kind="darkSelectButton"]');
+    const menu = picker.querySelector('[data-kind="darkSelectMenu"]');
+    if (!hidden || !button || !menu) return;
+    const options = picker._darkSelectOptions || [];
+    const value = String(hidden.value ?? '');
+    const selected = options.find(option => String(option.value) === value) || options[0];
+    button.textContent = selected ? selected.label : '选择';
+    menu.textContent = '';
+    for (const option of options) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = `${SCRIPT_ID}-voice-option`;
+      item.textContent = option.label;
+      item.classList.toggle(`${SCRIPT_ID}-active`, String(option.value) === value);
+      item.addEventListener('click', event => {
+        event.stopPropagation();
+        hidden.value = String(option.value);
+        picker._darkSelectOnChange?.(option.value);
+        menu.classList.remove(`${SCRIPT_ID}-visible`);
+        refreshDarkSelect(picker);
+      });
+      menu.appendChild(item);
+    }
+  }
+
+  function setDarkSelectValue(input, value) {
+    input.value = String(value ?? '');
+    const picker = input.closest(`.${SCRIPT_ID}-voice-picker`);
+    if (picker?.dataset.darkSelect) refreshDarkSelect(picker);
+  }
+
   function makeRow(labelText, control) {
     const row = document.createElement('div');
     row.className = `${SCRIPT_ID}-row`;
@@ -802,17 +875,8 @@
   }
 
   function createTencentPackageSelect() {
-    const select = document.createElement('select');
-    select.dataset.role = 'tencentVoicePackage';
-    for (const group of TENCENT_VOICE_GROUPS) {
-      const option = document.createElement('option');
-      option.value = group.id;
-      option.textContent = group.label;
-      select.appendChild(option);
-    }
-    select.value = getTencentSelectedPackage().id;
-    select.addEventListener('change', () => {
-      const group = getTencentVoiceGroup(select.value);
+    return createDarkSelect('tencentVoicePackage', TENCENT_VOICE_GROUPS.map(group => ({ value: group.id, label: group.label })), getTencentSelectedPackage().id, value => {
+      const group = getTencentVoiceGroup(value);
       const current = findTencentVoice(state.settings.tencentVoiceType);
       state.settings.tencentVoicePackage = group.id;
       if (!current || current.groupId !== group.id) {
@@ -823,8 +887,7 @@
       saveSettings();
       syncControlValues();
       syncVoiceEngineRows();
-    });
-    return select;
+    }, '选择腾讯资源包');
   }
 
   function getTencentVoiceGroup(id) {
@@ -1178,30 +1241,29 @@
     }
   }
 
-  function populateVolcQuickVoiceSelect(select, role) {
+  function getVolcQuickVoiceOptions(role) {
     const gender = role === 'volcMaleQuickVoice' ? 'male' : 'female';
-    const currentValue = state.settings[role] || '';
     const favorites = getVolcFavorites(gender);
-    select.textContent = '';
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.textContent = gender === 'male' ? '选择收藏男声' : '选择收藏女声';
-    select.appendChild(placeholder);
-    for (const voice of favorites) {
-      const option = document.createElement('option');
-      option.value = voice.value;
-      option.textContent = voice.label;
-      select.appendChild(option);
-    }
-    select.value = favorites.some(voice => voice.value === currentValue) ? currentValue : '';
+    return [
+      { value: '', label: gender === 'male' ? '选择收藏男声' : '选择收藏女声' },
+      ...favorites.map(voice => ({ value: voice.value, label: voice.label }))
+    ];
+  }
+
+  function populateVolcQuickVoiceSelect(picker, role) {
+    const hidden = picker.querySelector(`[data-role="${role}"]`);
+    if (!hidden) return;
+    const options = getVolcQuickVoiceOptions(role);
+    const currentValue = state.settings[role] || '';
+    picker._darkSelectOptions = options;
+    hidden.value = options.some(option => option.value === currentValue) ? currentValue : '';
+    refreshDarkSelect(picker);
   }
 
   function createVolcQuickVoiceSelect(role) {
-    const select = document.createElement('select');
-    select.dataset.role = role;
-    select.addEventListener('change', () => updateSetting(role, select.value));
-    populateVolcQuickVoiceSelect(select, role);
-    return select;
+    const picker = createDarkSelect(role, getVolcQuickVoiceOptions(role), state.settings[role] || '', value => updateSetting(role, value), '选择收藏快捷音色');
+    populateVolcQuickVoiceSelect(picker, role);
+    return picker;
   }
 
   function applyVolcQuickVoice(role, label) {
@@ -1221,8 +1283,9 @@
     const favorites = panel.querySelector('[data-role="volcFavoritesBar"]');
     if (favorites) renderVolcFavorites(favorites);
     for (const role of ['volcMaleQuickVoice', 'volcFemaleQuickVoice']) {
-      const select = panel.querySelector(`[data-role="${role}"]`);
-      if (select) populateVolcQuickVoiceSelect(select, role);
+      const input = panel.querySelector(`[data-role="${role}"]`);
+      const picker = input?.closest(`.${SCRIPT_ID}-voice-picker`);
+      if (picker) populateVolcQuickVoiceSelect(picker, role);
     }
     const maleButton = panel.querySelector('[data-role="applyVolcMaleQuickVoice"]');
     const femaleButton = panel.querySelector('[data-role="applyVolcFemaleQuickVoice"]');
@@ -1285,26 +1348,12 @@
     enabled.checked = state.settings.enabled;
     enabled.addEventListener('change', () => updateSetting('enabled', enabled.checked));
 
-    const mode = document.createElement('select');
-    for (const [value, text] of [['zh', '中文'], ['bilingual', '双语']]) {
-      const option = document.createElement('option');
-      option.value = value;
-      option.textContent = text;
-      mode.appendChild(option);
-    }
-    mode.value = state.settings.mode;
-    mode.addEventListener('change', () => updateSetting('mode', mode.value));
+    const mode = createDarkSelect('mode', [{ value: 'zh', label: '中文' }, { value: 'bilingual', label: '双语' }], state.settings.mode, value => updateSetting('mode', value), '选择字幕模式');
 
-    const translationEngine = document.createElement('select');
-    translationEngine.dataset.role = 'translationEngine';
-    for (const [value, text] of [['local', 'Chrome 本地翻译（推荐）'], ['youtube', 'YouTube 自动翻译（备用，可能限流）']]) {
-      const option = document.createElement('option');
-      option.value = value;
-      option.textContent = text;
-      translationEngine.appendChild(option);
-    }
-    translationEngine.value = state.settings.translationEngine;
-    translationEngine.addEventListener('change', () => updateSetting('translationEngine', translationEngine.value));
+    const translationEngine = createDarkSelect('translationEngine', [
+      { value: 'local', label: 'Chrome 本地翻译（推荐）' },
+      { value: 'youtube', label: 'YouTube 自动翻译（备用，可能限流）' }
+    ], state.settings.translationEngine, value => updateSetting('translationEngine', value), '选择字幕翻译方式');
 
     const localTranslationWrap = document.createElement('span');
     localTranslationWrap.className = `${SCRIPT_ID}-local-translation`;
@@ -1332,15 +1381,7 @@
     position.value = String(state.settings.position);
     position.addEventListener('input', () => updateSetting('position', Number(position.value)));
 
-    const offset = document.createElement('select');
-    for (const value of [-800, -500, -300, 0, 300, 500, 800]) {
-      const option = document.createElement('option');
-      option.value = String(value);
-      option.textContent = `${value > 0 ? '+' : ''}${value}ms`;
-      offset.appendChild(option);
-    }
-    offset.value = String(state.settings.offsetMs);
-    offset.addEventListener('change', () => updateSetting('offsetMs', Number(offset.value)));
+    const offset = createDarkSelect('offsetMs', [-800, -500, -300, 0, 300, 500, 800].map(value => ({ value, label: `${value > 0 ? '+' : ''}${value}ms` })), state.settings.offsetMs, value => updateSetting('offsetMs', Number(value)), '选择字幕延迟');
 
     const hideNative = document.createElement('input');
     hideNative.type = 'checkbox';
@@ -1352,27 +1393,17 @@
     voiceEnabled.checked = state.settings.voiceEnabled;
     voiceEnabled.addEventListener('change', () => updateSetting('voiceEnabled', voiceEnabled.checked));
 
-    const voiceEngine = document.createElement('select');
-    voiceEngine.dataset.role = 'voiceEngine';
-    for (const [value, text] of [['browser', '浏览器本地语音'], ['volc', '火山自然语音'], ['tencent', '腾讯 TextToVoice（代理）'], ['tencentDirect', '腾讯 TextToVoice（直连）']]) {
-      const option = document.createElement('option');
-      option.value = value;
-      option.textContent = text;
-      voiceEngine.appendChild(option);
-    }
-    voiceEngine.value = state.settings.voiceEngine;
-    voiceEngine.addEventListener('change', () => updateSetting('voiceEngine', voiceEngine.value));
+    const voiceEngine = createDarkSelect('voiceEngine', [
+      { value: 'browser', label: '浏览器本地语音' },
+      { value: 'volc', label: '火山自然语音' },
+      { value: 'tencent', label: '腾讯 TextToVoice（代理）' },
+      { value: 'tencentDirect', label: '腾讯 TextToVoice（直连）' }
+    ], state.settings.voiceEngine, value => updateSetting('voiceEngine', value), '选择配音引擎');
 
-    const volcAuthMode = document.createElement('select');
-    volcAuthMode.dataset.role = 'volcAuthMode';
-    for (const [value, text] of [['apiKey', '新版 API Key'], ['legacy', '旧版 APP ID + Access Token']]) {
-      const option = document.createElement('option');
-      option.value = value;
-      option.textContent = text;
-      volcAuthMode.appendChild(option);
-    }
-    volcAuthMode.value = state.settings.volcAuthMode;
-    volcAuthMode.addEventListener('change', () => updateSetting('volcAuthMode', volcAuthMode.value));
+    const volcAuthMode = createDarkSelect('volcAuthMode', [
+      { value: 'apiKey', label: '新版 API Key' },
+      { value: 'legacy', label: '旧版 APP ID + Access Token' }
+    ], state.settings.volcAuthMode, value => updateSetting('volcAuthMode', value), '选择火山鉴权方式');
 
     const voicePicker = createVoicePicker();
     if (window.speechSynthesis) {
@@ -1483,38 +1514,15 @@
     const tencentVoiceType = createTencentVoicePicker();
     const tencentUsageButton = makeButton('查看用量', '打开腾讯云语音合成资源包管理页', () => openTencentResourceUsage());
 
-    const tencentSampleRate = document.createElement('select');
-    tencentSampleRate.dataset.role = 'tencentSampleRate';
-    for (const value of [16000, 24000, 8000]) {
-      const option = document.createElement('option');
-      option.value = String(value);
-      option.textContent = `${value} Hz`;
-      tencentSampleRate.appendChild(option);
-    }
-    tencentSampleRate.value = String(state.settings.tencentSampleRate || 16000);
-    tencentSampleRate.addEventListener('change', () => updateSetting('tencentSampleRate', Number(tencentSampleRate.value)));
+    const tencentSampleRate = createDarkSelect('tencentSampleRate', [16000, 24000, 8000].map(value => ({ value, label: `${value} Hz` })), state.settings.tencentSampleRate || 16000, value => updateSetting('tencentSampleRate', Number(value)), '选择腾讯采样率');
 
-    const voiceRate = document.createElement('select');
-    voiceRate.dataset.role = 'voiceRate';
-    for (const value of [0.85, 1, 1.08, 1.18, 1.3]) {
-      const option = document.createElement('option');
-      option.value = String(value);
-      option.textContent = `${value}x`;
-      voiceRate.appendChild(option);
-    }
-    voiceRate.value = String(state.settings.voiceRate);
-    voiceRate.addEventListener('change', () => updateSetting('voiceRate', Number(voiceRate.value)));
+    const voiceRate = createDarkSelect('voiceRate', [0.85, 1, 1.08, 1.18, 1.3].map(value => ({ value, label: `${value}x` })), state.settings.voiceRate, value => updateSetting('voiceRate', Number(value)), '选择配音语速');
 
-    const voiceSyncMode = document.createElement('select');
-    voiceSyncMode.dataset.role = 'voiceSyncMode';
-    for (const [value, text] of [['natural', '自然流畅'], ['smart', '智能语速追赶'], ['sync', '紧跟画面']]) {
-      const option = document.createElement('option');
-      option.value = value;
-      option.textContent = text;
-      voiceSyncMode.appendChild(option);
-    }
-    voiceSyncMode.value = state.settings.voiceSyncMode;
-    voiceSyncMode.addEventListener('change', () => updateSetting('voiceSyncMode', voiceSyncMode.value));
+    const voiceSyncMode = createDarkSelect('voiceSyncMode', [
+      { value: 'natural', label: '自然流畅' },
+      { value: 'smart', label: '智能语速追赶' },
+      { value: 'sync', label: '紧跟画面' }
+    ], state.settings.voiceSyncMode, value => updateSetting('voiceSyncMode', value), '选择配音同步模式');
 
     const terminologyMap = document.createElement('textarea');
     terminologyMap.dataset.role = 'terminologyMap';
@@ -1560,7 +1568,7 @@
       makeButton('VTT', '导出 .vtt 字幕', () => downloadSubtitle('vtt')),
       makeButton('TXT', '导出 .txt 文本', () => downloadSubtitle('txt')),
       makeButton('清缓存', '清除当前视频字幕缓存', () => clearCurrentCache()),
-      makeButton('关闭', '关闭面板', () => panel.classList.remove(`${SCRIPT_ID}-visible`))
+      makeButton('关闭', '关闭面板', () => closeControlsPanel())
     );
 
     const browserVoiceRow = makeRow('语音人物', voicePicker);
@@ -1654,12 +1662,14 @@
         const picker = input.closest(`.${SCRIPT_ID}-voice-picker`);
         if (picker) populateVoiceOptions(picker);
       }
-      if (input.dataset.role === 'voiceRate') input.value = String(state.settings.voiceRate);
-      if (input.dataset.role === 'voiceSyncMode') input.value = state.settings.voiceSyncMode;
+      if (input.dataset.role === 'mode') setDarkSelectValue(input, state.settings.mode);
+      if (input.dataset.role === 'offsetMs') setDarkSelectValue(input, state.settings.offsetMs);
+      if (input.dataset.role === 'voiceRate') setDarkSelectValue(input, state.settings.voiceRate);
+      if (input.dataset.role === 'voiceSyncMode') setDarkSelectValue(input, state.settings.voiceSyncMode);
       if (input.dataset.role === 'terminologyMap') input.value = state.settings.terminologyMap || '';
-      if (input.dataset.role === 'translationEngine') input.value = state.settings.translationEngine;
-      if (input.dataset.role === 'voiceEngine') input.value = state.settings.voiceEngine;
-      if (input.dataset.role === 'volcAuthMode') input.value = state.settings.volcAuthMode;
+      if (input.dataset.role === 'translationEngine') setDarkSelectValue(input, state.settings.translationEngine);
+      if (input.dataset.role === 'voiceEngine') setDarkSelectValue(input, state.settings.voiceEngine);
+      if (input.dataset.role === 'volcAuthMode') setDarkSelectValue(input, state.settings.volcAuthMode);
       if (input.dataset.role === 'volcVoice') {
         input.value = state.settings.volcVoice;
         const picker = input.closest(`.${SCRIPT_ID}-voice-picker`);
@@ -1667,13 +1677,13 @@
       }
       if (input.dataset.role === 'tencentProxyUrl') input.value = state.settings.tencentProxyUrl || '';
       if (input.dataset.role === 'tencentRegion') input.value = state.settings.tencentRegion || 'ap-beijing';
-      if (input.dataset.role === 'tencentVoicePackage') input.value = getTencentSelectedPackage().id;
+      if (input.dataset.role === 'tencentVoicePackage') setDarkSelectValue(input, getTencentSelectedPackage().id);
       if (input.dataset.role === 'tencentVoiceType') {
         input.value = state.settings.tencentVoiceType || '';
         const picker = input.closest(`.${SCRIPT_ID}-voice-picker`);
         if (picker) populateTencentVoiceOptions(picker);
       }
-      if (input.dataset.role === 'tencentSampleRate') input.value = String(state.settings.tencentSampleRate || 16000);
+      if (input.dataset.role === 'tencentSampleRate') setDarkSelectValue(input, state.settings.tencentSampleRate || 16000);
       if (input.dataset.role === 'originalVolume') {
         input.value = String(Math.round(Number(state.settings.originalVolume) * 100));
         const valueLabel = panel.querySelector('[data-role="originalVolumeValue"]');
@@ -3270,11 +3280,32 @@
     ensureOverlay();
     const panel = document.getElementById(CONTROL_ID);
     if (!panel) return;
-    panel.classList.toggle(`${SCRIPT_ID}-visible`);
+    if (panel.classList.contains(`${SCRIPT_ID}-visible`)) {
+      closeControlsPanel();
+      return;
+    }
+    panel.classList.add(`${SCRIPT_ID}-visible`);
     syncToggleButtonState();
     if (!existingPanel && panel.classList.contains(`${SCRIPT_ID}-visible`)) {
       showStatus('字幕面板已打开');
     }
+  }
+
+  function closeControlsPanel() {
+    const panel = document.getElementById(CONTROL_ID);
+    if (!panel) return;
+    closeAllDarkMenus();
+    panel.classList.remove(`${SCRIPT_ID}-visible`);
+    saveSettings();
+    syncToggleButtonState();
+  }
+
+  function handleDocumentClickForControls(event) {
+    const panel = document.getElementById(CONTROL_ID);
+    if (!panel?.classList.contains(`${SCRIPT_ID}-visible`)) return;
+    const target = event.target;
+    if (panel.contains(target) || document.getElementById(TOGGLE_ID)?.contains(target)) return;
+    closeControlsPanel();
   }
 
   function syncToggleButtonState() {
@@ -3314,6 +3345,7 @@
     document.documentElement.dataset[SCRIPT_DATA_KEY] = '1';
     injectStyle();
     hookKeyboard();
+    document.addEventListener('click', handleDocumentClickForControls, true);
     registerTampermonkeyMenu();
     hookYouTubeNavigation();
     checkRoute();
