@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.15
+// @version      0.5.16
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube with local translation and optional Chinese dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -176,6 +176,65 @@
     }
   ];
 
+  const TENCENT_VOICE_GROUPS = [
+    {
+      label: '基础/精品音色（800万字符）',
+      voices: [
+        ['101030', '智柯 - 通用男声'],
+        ['101054', '智友 - 通用男声'],
+        ['101004', '智云 - 通用男声'],
+        ['101013', '智辉 - 新闻男声'],
+        ['101021', '智瑞 - 新闻男声'],
+        ['101055', '智付 - 通用女声'],
+        ['101027', '智梅 - 通用女声'],
+        ['101026', '智希 - 通用女声'],
+        ['101011', '智燕 - 新闻女声'],
+        ['101001', '智瑜 - 情感女声'],
+        ['101015', '智萌 - 男童声'],
+        ['101016', '智甜 - 女童声']
+      ]
+    },
+    {
+      label: '大模型音色（10万字符）',
+      voices: [
+        ['501000', '智斌 - 阅读男声'],
+        ['501003', '智宇 - 阅读男声'],
+        ['501005', '飞镜 - 聊天男声'],
+        ['501006', '千嶂 - 聊天男声'],
+        ['501007', '浅草 - 聊天男声'],
+        ['501001', '智兰 - 资讯女声'],
+        ['501002', '智菊 - 阅读女声'],
+        ['501004', '月华 - 聊天女声'],
+        ['601008', '爱小豪 - 聊天男声'],
+        ['601011', '爱小川 - 聊天男声'],
+        ['601014', '爱小简 - 聊天男声'],
+        ['601009', '爱小芊 - 聊天女声'],
+        ['601010', '爱小娇 - 聊天女声'],
+        ['601012', '爱小璟 - 特色女声'],
+        ['601013', '爱小伊 - 阅读女声']
+      ]
+    },
+    {
+      label: '超自然大模型音色（2万字符）',
+      voices: [
+        ['502006', '智小悟 - 聊天男声'],
+        ['502005', '智小解 - 解说男声'],
+        ['602004', '暖心阿灿 - 聊天男声'],
+        ['603000', '懂事少年 - 特色男声'],
+        ['603003', '随和老李 - 聊天男声'],
+        ['603005', '知心大林 - 聊天男声'],
+        ['603006', '沉稳青叔 - 聊天男声'],
+        ['502001', '智小柔 - 聊天女声'],
+        ['502003', '智小敏 - 聊天女声'],
+        ['502004', '智小满 - 营销女声'],
+        ['602005', '专业梓欣 - 聊天女声'],
+        ['603001', '潇湘妹妹 - 特色女声'],
+        ['603004', '温柔小柠 - 聊天女声'],
+        ['603007', '邻家女孩 - 聊天女声']
+      ]
+    }
+  ];
+
   const defaultSettings = {
     enabled: true,
     mode: 'zh',
@@ -193,7 +252,7 @@
     volcMaleQuickVoice: '',
     volcFemaleQuickVoice: '',
     tencentProxyUrl: 'http://127.0.0.1:8788/tts',
-    tencentVoiceType: '1001',
+    tencentVoiceType: '101030',
     tencentSampleRate: 16000,
     voiceRate: 1.08,
     voiceSyncMode: 'natural',
@@ -697,6 +756,34 @@
     const row = makeVolcRow(labelText, control);
     row.dataset.authMode = mode;
     return row;
+  }
+
+  function createTencentVoiceSelect() {
+    const select = document.createElement('select');
+    select.dataset.role = 'tencentVoiceType';
+    const current = String(state.settings.tencentVoiceType || '');
+    let hasCurrent = false;
+    for (const group of TENCENT_VOICE_GROUPS) {
+      const optgroup = document.createElement('optgroup');
+      optgroup.label = group.label;
+      for (const [value, text] of group.voices) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = `${text} (${value})`;
+        optgroup.appendChild(option);
+        if (value === current) hasCurrent = true;
+      }
+      select.appendChild(optgroup);
+    }
+    if (current && !hasCurrent) {
+      const option = document.createElement('option');
+      option.value = current;
+      option.textContent = `自定义音色 (${current})`;
+      select.insertBefore(option, select.firstChild);
+    }
+    select.value = current || '101030';
+    select.addEventListener('change', () => updateSetting('tencentVoiceType', select.value));
+    return select;
   }
 
   function syncTranslationEngineRows() {
@@ -1219,12 +1306,7 @@
     tencentProxyUrl.value = state.settings.tencentProxyUrl || '';
     tencentProxyUrl.addEventListener('change', () => updateSetting('tencentProxyUrl', tencentProxyUrl.value.trim()));
 
-    const tencentVoiceType = document.createElement('input');
-    tencentVoiceType.type = 'text';
-    tencentVoiceType.dataset.role = 'tencentVoiceType';
-    tencentVoiceType.placeholder = '1001';
-    tencentVoiceType.value = state.settings.tencentVoiceType || '';
-    tencentVoiceType.addEventListener('change', () => updateSetting('tencentVoiceType', tencentVoiceType.value.trim()));
+    const tencentVoiceType = createTencentVoiceSelect();
 
     const tencentSampleRate = document.createElement('select');
     tencentSampleRate.dataset.role = 'tencentSampleRate';
