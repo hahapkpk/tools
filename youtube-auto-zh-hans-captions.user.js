@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube English Auto Captions to Simplified Chinese
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.18
+// @version      0.5.19
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube with local translation and optional Chinese dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -43,6 +43,7 @@
   const TENCENT_TTS_HOST = 'tts.tencentcloudapi.com';
   const TENCENT_TTS_SERVICE = 'tts';
   const TENCENT_TTS_VERSION = '2019-08-23';
+  const TENCENT_RESOURCE_PACKAGE_URL = 'https://console.cloud.tencent.com/tts/resource';
   const DEBUG = false;
   const CHECK_INTERVAL_MS = 120;
   const ROUTE_INTERVAL_MS = 800;
@@ -185,6 +186,7 @@
 
   const TENCENT_VOICE_GROUPS = [
     {
+      id: 'basic',
       label: '基础/精品音色（800万字符）',
       voices: [
         ['101030', '智柯 - 通用男声'],
@@ -202,6 +204,7 @@
       ]
     },
     {
+      id: 'large',
       label: '大模型音色（10万字符）',
       voices: [
         ['501000', '智斌 - 阅读男声'],
@@ -222,6 +225,7 @@
       ]
     },
     {
+      id: 'ultra',
       label: '超自然大模型音色（2万字符）',
       voices: [
         ['502006', '智小悟 - 聊天男声'],
@@ -260,6 +264,7 @@
     volcFemaleQuickVoice: '',
     tencentProxyUrl: 'http://127.0.0.1:8788/tts',
     tencentRegion: 'ap-beijing',
+    tencentVoicePackage: 'basic',
     tencentVoiceType: '101030',
     tencentSampleRate: 16000,
     voiceRate: 1.08,
@@ -795,6 +800,47 @@
     return row;
   }
 
+  function createTencentPackageSelect() {
+    const select = document.createElement('select');
+    select.dataset.role = 'tencentVoicePackage';
+    for (const group of TENCENT_VOICE_GROUPS) {
+      const option = document.createElement('option');
+      option.value = group.id;
+      option.textContent = group.label;
+      select.appendChild(option);
+    }
+    select.value = getTencentSelectedPackage().id;
+    select.addEventListener('change', () => {
+      const group = getTencentVoiceGroup(select.value);
+      const current = findTencentVoice(state.settings.tencentVoiceType);
+      state.settings.tencentVoicePackage = group.id;
+      if (!current || current.groupId !== group.id) {
+        state.settings.tencentVoiceType = group.voices[0]?.[0] || '101030';
+      }
+      cancelSpeech();
+      state.spokenCueIndex = -1;
+      saveSettings();
+      syncControlValues();
+      syncVoiceEngineRows();
+    });
+    return select;
+  }
+
+  function getTencentVoiceGroup(id) {
+    return TENCENT_VOICE_GROUPS.find(group => group.id === id) || TENCENT_VOICE_GROUPS[0];
+  }
+
+  function getTencentSelectedPackage() {
+    const currentVoice = findTencentVoice(state.settings.tencentVoiceType);
+    if (currentVoice) return getTencentVoiceGroup(currentVoice.groupId);
+    return getTencentVoiceGroup(state.settings.tencentVoicePackage);
+  }
+
+  function openTencentResourceUsage() {
+    window.open(TENCENT_RESOURCE_PACKAGE_URL, '_blank', 'noopener,noreferrer');
+    showStatus('已打开腾讯云语音合成资源包管理页，可查看剩余用量。', 5000);
+  }
+
   function createTencentVoicePicker() {
     const picker = document.createElement('span');
     picker.className = `${SCRIPT_ID}-voice-picker`;
@@ -827,7 +873,7 @@
   function findTencentVoice(value) {
     for (const group of TENCENT_VOICE_GROUPS) {
       const found = group.voices.find(([voiceValue]) => voiceValue === value);
-      if (found) return { value: found[0], label: found[1], group: group.label };
+      if (found) return { value: found[0], label: found[1], group: group.label, groupId: group.id };
     }
     return null;
   }
@@ -843,7 +889,7 @@
     button.textContent = currentVoice ? `${currentVoice.label} (${current})` : `自定义音色 (${current})`;
     menu.textContent = '';
     let hasCurrent = Boolean(currentVoice);
-    for (const group of TENCENT_VOICE_GROUPS) {
+    for (const group of [getTencentSelectedPackage()]) {
       const heading = document.createElement('div');
       heading.className = `${SCRIPT_ID}-voice-group-label ${SCRIPT_ID}-tencent-voice-group`;
       heading.textContent = group.label;
@@ -1432,7 +1478,9 @@
     tencentRegion.value = state.settings.tencentRegion || 'ap-beijing';
     tencentRegion.addEventListener('change', () => updateSetting('tencentRegion', tencentRegion.value.trim() || 'ap-beijing'));
 
+    const tencentVoicePackage = createTencentPackageSelect();
     const tencentVoiceType = createTencentVoicePicker();
+    const tencentUsageButton = makeButton('查看用量', '打开腾讯云语音合成资源包管理页', () => openTencentResourceUsage());
 
     const tencentSampleRate = document.createElement('select');
     tencentSampleRate.dataset.role = 'tencentSampleRate';
@@ -1521,8 +1569,8 @@
       makeRow('模式', mode),
       makeRow('字幕翻译', translationEngine),
       localTranslationRow,
-      makeRow('字号', fontSize),
-      makeRow('位置', position),
+      makeRow('字幕字号', fontSize),
+      makeRow('字幕位置', position),
       makeRow('字幕延迟', offset),
       makeRow('隐藏原生字幕', hideNative),
       makeRow('中文配音', voiceEnabled),
@@ -1543,7 +1591,9 @@
       makeTencentDirectRow('腾讯 SecretId', tencentSecretId),
       makeTencentDirectRow('腾讯 SecretKey', tencentSecretKeyWrap),
       makeTencentDirectRow('腾讯 Region', tencentRegion),
+      makeTencentRow('腾讯资源包', tencentVoicePackage),
       makeTencentRow('腾讯音色', tencentVoiceType),
+      makeTencentRow('资源包管理', tencentUsageButton),
       makeTencentRow('采样率', tencentSampleRate),
       makeRow('测试语音', testVoiceButton),
       makeRow('配音语速', voiceRate),
@@ -1562,7 +1612,7 @@
   }
 
   function updateSetting(key, value) {
-    if (key === 'voiceEngine' || key === 'volcAuthMode' || key === 'voiceName' || key === 'volcVoice' || key === 'tencentProxyUrl' || key === 'tencentRegion' || key === 'tencentVoiceType' || key === 'tencentSampleRate' || key === 'voiceRate' || key === 'voiceSyncMode' || key === 'terminologyMap') {
+    if (key === 'voiceEngine' || key === 'volcAuthMode' || key === 'voiceName' || key === 'volcVoice' || key === 'tencentProxyUrl' || key === 'tencentRegion' || key === 'tencentVoicePackage' || key === 'tencentVoiceType' || key === 'tencentSampleRate' || key === 'voiceRate' || key === 'voiceSyncMode' || key === 'terminologyMap') {
       cancelSpeech();
       state.spokenCueIndex = -1;
     }
@@ -1616,6 +1666,7 @@
       }
       if (input.dataset.role === 'tencentProxyUrl') input.value = state.settings.tencentProxyUrl || '';
       if (input.dataset.role === 'tencentRegion') input.value = state.settings.tencentRegion || 'ap-beijing';
+      if (input.dataset.role === 'tencentVoicePackage') input.value = getTencentSelectedPackage().id;
       if (input.dataset.role === 'tencentVoiceType') {
         input.value = state.settings.tencentVoiceType || '';
         const picker = input.closest(`.${SCRIPT_ID}-voice-picker`);
