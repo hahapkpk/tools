@@ -380,8 +380,11 @@ test('图片墙大量媒体采用前后三屏缓冲虚拟化渲染', () => {
   assert.match(source, /const VIRTUAL_BUFFER_SCREENS = 3/);
   assert.match(source, /function getVirtualWindow/);
   assert.match(source, /gridTemplateColumns/);
-  assert.match(source, /topSpacer\.style\.height/);
-  assert.match(source, /bottomSpacer\.style\.height/);
+  assert.match(source, /function setVirtualPadding/);
+  assert.match(source, /--rmw-virtual-top/);
+  assert.match(source, /--rmw-virtual-bottom/);
+  assert.match(source, /const shouldShowStatus = !windowInfo\.virtualized \|\| windowInfo\.end >= items\.length \|\| loadingState === 'error'/);
+  assert.doesNotMatch(source, /rmw-virtual-spacer/);
 });
 
 test('虚拟化窗口会跟随图片墙滚动节流刷新', () => {
@@ -555,7 +558,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.6/);
+  assert.match(source, /@version\s+0\.5\.7/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });

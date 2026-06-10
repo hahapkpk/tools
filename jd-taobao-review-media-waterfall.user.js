@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.6
+// @version      0.5.7
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -69,7 +69,7 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.6';
+  const SCRIPT_VERSION = '0.5.7';
   const WHEEL_SHIFT_COOLDOWN = 320;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;
@@ -724,7 +724,7 @@
 .rmw-loaded { margin-left:auto; color:#5f6368; font-size:13px; white-space:nowrap; }
 .rmw-sync { color:#1a73e8; }
 .rmw-close { width:36px; padding:0; border-color:transparent; color:#5f6368; font-size:24px; line-height:30px; }
-#${IDS.grid} { flex:1; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); align-content:start; gap:14px; overflow-y:auto; overflow-x:hidden; padding:18px 20px 30px; background:#fff; }
+#${IDS.grid} { flex:1; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); align-content:start; gap:14px; overflow-y:auto; overflow-x:hidden; padding:calc(18px + var(--rmw-virtual-top, 0px)) 20px calc(30px + var(--rmw-virtual-bottom, 0px)); background:#fff; }
 .rmw-size-small { grid-template-columns:repeat(6,minmax(0,1fr)) !important; }
 .rmw-size-medium { grid-template-columns:repeat(5,minmax(0,1fr)) !important; }
 .rmw-size-large { grid-template-columns:repeat(4,minmax(0,1fr)) !important; }
@@ -735,7 +735,6 @@
 .rmw-card img, .rmw-card video { position:absolute; inset:0; display:block; width:100%; height:100%; object-fit:cover; }
 .rmw-play { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); border-radius:50%; width:50px; height:50px; display:grid; place-items:center; background:rgba(0,0,0,.58); color:white; font-size:23px; }
 .rmw-status { grid-column:1 / -1; padding:26px 16px; text-align:center; color:#777; font-size:14px; }
-.rmw-virtual-spacer { grid-column:1 / -1; pointer-events:none; }
 .rmw-retry { margin-left:12px; height:32px; padding:0 15px; border:1px solid #e1251b; border-radius:16px; background:#fff; color:#e1251b; cursor:pointer; }
 #${IDS.preview} { position:absolute; inset:0; z-index:2; display:flex; align-items:center; justify-content:center; padding:34px; background:rgba(0,0,0,.82); }
 .rmw-preview-content { display:flex; max-width:min(1280px,90vw); max-height:86vh; border-radius:12px; overflow:hidden; background:#111; }
@@ -986,6 +985,14 @@
     }
   }
 
+  function setVirtualPadding(grid, windowInfo) {
+    const rowHeight = Math.max(0, windowInfo.rowHeight || 0);
+    const top = windowInfo.virtualized ? Math.round((windowInfo.topRows || 0) * rowHeight) : 0;
+    const bottom = windowInfo.virtualized ? Math.round((windowInfo.bottomRows || 0) * rowHeight) : 0;
+    grid.style.setProperty('--rmw-virtual-top', `${top}px`);
+    grid.style.setProperty('--rmw-virtual-bottom', `${bottom}px`);
+  }
+
   function statusMessage(session, total) {
     const status = session.snapshot().loadingState;
     if (status === 'loading') return `已加载 ${total} 项，正在自动加载更多...`;
@@ -996,13 +1003,13 @@
 
   function renderCards(doc, grid, state, modal, items, emptyMessage, session, onReturn, onRetry, highlightKey, onDeselect) {
     grid.textContent = '';
+    let windowInfo = { start: 0, end: items.length, virtualized: false };
     if (!items.length) {
+      setVirtualPadding(grid, { virtualized: false });
       grid.appendChild(makeElement(doc, 'div', 'rmw-status', emptyMessage));
     } else {
-      const windowInfo = getVirtualWindow(grid, items.length);
-      const topSpacer = makeElement(doc, 'div', 'rmw-virtual-spacer', '');
-      topSpacer.style.height = `${Math.max(0, Math.round((windowInfo.topRows || 0) * (windowInfo.rowHeight || 0)))}px`;
-      if (windowInfo.virtualized && windowInfo.topRows) grid.appendChild(topSpacer);
+      windowInfo = getVirtualWindow(grid, items.length);
+      setVirtualPadding(grid, windowInfo);
       preloadVisibleThumbs(items, windowInfo.start, windowInfo.end);
       items.slice(windowInfo.start, windowInfo.end).forEach((item, offset) => {
       const index = windowInfo.start + offset;
@@ -1036,18 +1043,19 @@
       });
       grid.appendChild(card);
     });
-      const bottomSpacer = makeElement(doc, 'div', 'rmw-virtual-spacer', '');
-      bottomSpacer.style.height = `${Math.max(0, Math.round((windowInfo.bottomRows || 0) * (windowInfo.rowHeight || 0)))}px`;
-      if (windowInfo.virtualized && windowInfo.bottomRows) grid.appendChild(bottomSpacer);
     }
-    const status = makeElement(doc, 'div', 'rmw-status', statusMessage(session, items.length));
-    if (session.snapshot().loadingState === 'error') {
-      const retry = makeElement(doc, 'button', 'rmw-retry', '重试');
-      retry.type = 'button';
-      retry.addEventListener('click', onRetry);
-      status.appendChild(retry);
+    const loadingState = session.snapshot().loadingState;
+    const shouldShowStatus = !windowInfo.virtualized || windowInfo.end >= items.length || loadingState === 'error';
+    if (shouldShowStatus) {
+      const status = makeElement(doc, 'div', 'rmw-status', statusMessage(session, items.length));
+      if (loadingState === 'error') {
+        const retry = makeElement(doc, 'button', 'rmw-retry', '重试');
+        retry.type = 'button';
+        retry.addEventListener('click', onRetry);
+        status.appendChild(retry);
+      }
+      grid.appendChild(status);
     }
-    grid.appendChild(status);
     sizeGridCards(grid);
   }
 
