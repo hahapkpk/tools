@@ -364,15 +364,17 @@ test('热更新时会替换旧版本图片墙入口以移除旧监听器', () =>
 });
 
 test('图片墙采用规则方形图集并仅在内容区纵向滚动', () => {
-  assert.match(source, /#\$\{IDS\.grid\}\s*\{[^}]*display:grid;[^}]*grid-template-columns:repeat\(5,minmax\(0,1fr\)\);[^}]*overflow-y:auto;/s);
-  assert.match(source, /\.rmw-card::before\s*\{[^}]*content:'';[^}]*display:block;[^}]*padding-top:100%;/s);
+  assert.match(source, /#\$\{IDS\.grid\}\s*\{[^}]*display:grid;[^}]*grid-template-columns:repeat\(5,minmax\(0,1fr\)\);[^}]*overflow-y:auto;[^}]*overflow-anchor:none;/s);
+  assert.match(source, /\.rmw-card\s*\{[^}]*aspect-ratio:1 \/ 1;[^}]*contain:layout paint;/s);
   assert.match(source, /\.rmw-card img,\s*\.rmw-card video\s*\{[^}]*position:absolute;[^}]*inset:0;[^}]*height:100%;[^}]*object-fit:cover;/s);
+  assert.doesNotMatch(source, /\.rmw-card::before/);
   assert.doesNotMatch(source, /column-count:/);
 });
 
-test('图片墙按实际列宽设置卡片高度以避免天猫网格行重叠', () => {
-  assert.match(source, /function sizeGridCards\(grid\)\s*\{[\s\S]*card\.style\.height\s*=\s*`\$\{Math\.round\(width\)\}px`;/);
-  assert.match(source, /renderCards\([\s\S]*sizeGridCards\(grid\);/);
+test('图片墙依赖 CSS 方形比例而非滚动中逐卡片测量高度', () => {
+  assert.doesNotMatch(source, /function sizeGridCards/);
+  assert.doesNotMatch(source, /getBoundingClientRect\(\)\.width[\s\S]{0,120}card\.style\.height/);
+  assert.doesNotMatch(source, /ResizeObserver[\s\S]{0,160}sizeGridCards/);
 });
 
 test('图片墙大量媒体采用前后三屏缓冲虚拟化渲染', () => {
@@ -386,6 +388,8 @@ test('图片墙大量媒体采用前后三屏缓冲虚拟化渲染', () => {
   assert.match(source, /const shouldShowStatus = !windowInfo\.virtualized \|\| windowInfo\.end >= items\.length \|\| loadingState === 'error'/);
   assert.match(source, /const chunkRows = Math\.max\(1, Math\.floor\(visibleRows \/ 2\)\)/);
   assert.match(source, /const bufferRows = visibleRows \* VIRTUAL_BUFFER_SCREENS/);
+  assert.match(source, /const previousStartRow = Number\(grid\.dataset\.virtualStartRow\)/);
+  assert.match(source, /currentRow >= previousStartRow \+ guardRows/);
   assert.doesNotMatch(source, /rmw-virtual-spacer/);
 });
 
@@ -400,6 +404,7 @@ test('虚拟化窗口会跟随图片墙滚动节流刷新', () => {
 test('图片墙滚动在虚拟窗口未变化时不清空重建卡片以避免闪烁', () => {
   assert.match(source, /function virtualRenderSignature/);
   assert.match(source, /grid\.dataset\.renderSignature === signature/);
+  assert.match(source, /setVirtualPadding\(grid, windowInfo\);[\s\S]*if \(grid\.dataset\.renderSignature === signature\) return;/);
   assert.match(source, /if \(grid\.dataset\.renderSignature === signature\) return;/);
   assert.match(source, /grid\.dataset\.renderSignature = signature;[\s\S]*grid\.textContent = '';/);
 });
@@ -447,8 +452,8 @@ test('重新打开图片墙时不会清空本页已经加载的媒体', () => {
 });
 
 test('媒体同步重新渲染不会覆盖恢复后的滚动位置', () => {
-  assert.match(source, /const desiredScroll = restoredScroll \? grid\.scrollTop : sessionSnapshot\.scrollTop/);
-  assert.match(source, /grid\.scrollTop = desiredScroll/);
+  assert.match(source, /if \(!restoredScroll\) \{[\s\S]*grid\.scrollTop = sessionSnapshot\.scrollTop;[\s\S]*restoredScroll = true;[\s\S]*\}/);
+  assert.doesNotMatch(source, /const desiredScroll = restoredScroll \? grid\.scrollTop : sessionSnapshot\.scrollTop/);
 });
 
 test('预览提供计数评价折叠与单项原图操作', () => {
@@ -568,7 +573,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.8/);
+  assert.match(source, /@version\s+0\.5\.9/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });

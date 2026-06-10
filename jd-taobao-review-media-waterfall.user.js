@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.8
+// @version      0.5.9
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -69,7 +69,7 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.8';
+  const SCRIPT_VERSION = '0.5.9';
   const WHEEL_SHIFT_COOLDOWN = 320;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;
@@ -724,14 +724,13 @@
 .rmw-loaded { margin-left:auto; color:#5f6368; font-size:13px; white-space:nowrap; }
 .rmw-sync { color:#1a73e8; }
 .rmw-close { width:36px; padding:0; border-color:transparent; color:#5f6368; font-size:24px; line-height:30px; }
-#${IDS.grid} { flex:1; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); align-content:start; gap:14px; overflow-y:auto; overflow-x:hidden; padding:calc(18px + var(--rmw-virtual-top, 0px)) 20px calc(30px + var(--rmw-virtual-bottom, 0px)); background:#fff; }
+#${IDS.grid} { flex:1; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); align-content:start; gap:14px; overflow-y:auto; overflow-x:hidden; overflow-anchor:none; padding:calc(18px + var(--rmw-virtual-top, 0px)) 20px calc(30px + var(--rmw-virtual-bottom, 0px)); background:#fff; }
 .rmw-size-small { grid-template-columns:repeat(6,minmax(0,1fr)) !important; }
 .rmw-size-medium { grid-template-columns:repeat(5,minmax(0,1fr)) !important; }
 .rmw-size-large { grid-template-columns:repeat(4,minmax(0,1fr)) !important; }
-.rmw-card { position:relative; border-radius:18px; overflow:hidden; background:#f1f3f4; cursor:zoom-in; outline:none; transition:box-shadow .16s ease, transform .16s ease; }
+.rmw-card { position:relative; aspect-ratio:1 / 1; contain:layout paint; border-radius:18px; overflow:hidden; background:#f1f3f4; cursor:zoom-in; outline:none; transition:box-shadow .16s ease, transform .16s ease; }
 .rmw-card:focus-visible { box-shadow:0 0 0 3px #1a73e8; }
 .rmw-card.rmw-current { box-shadow:0 0 0 4px #1a73e8; transform:scale(.985); }
-.rmw-card::before { content:''; display:block; padding-top:100%; }
 .rmw-card img, .rmw-card video { position:absolute; inset:0; display:block; width:100%; height:100%; object-fit:cover; }
 .rmw-play { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); border-radius:50%; width:50px; height:50px; display:grid; place-items:center; background:rgba(0,0,0,.58); color:white; font-size:23px; }
 .rmw-status { grid-column:1 / -1; padding:26px 16px; text-align:center; color:#777; font-size:14px; }
@@ -937,13 +936,6 @@
     overlay.focus();
   }
 
-  function sizeGridCards(grid) {
-    grid.querySelectorAll('.rmw-card').forEach((card) => {
-      const width = card.getBoundingClientRect().width;
-      if (width > 0) card.style.height = `${Math.round(width)}px`;
-    });
-  }
-
   function getGridMetrics(grid) {
     const width = grid.clientWidth || grid.getBoundingClientRect?.().width || 0;
     const style = root.getComputedStyle?.(grid);
@@ -965,10 +957,33 @@
     const currentRow = Math.floor(grid.scrollTop / Math.max(metrics.rowHeight, 1));
     const visibleRows = Math.ceil((grid.clientHeight || 1) / Math.max(metrics.rowHeight, 1));
     const chunkRows = Math.max(1, Math.floor(visibleRows / 2));
-    const anchorRow = Math.floor(currentRow / chunkRows) * chunkRows;
     const bufferRows = visibleRows * VIRTUAL_BUFFER_SCREENS;
-    const firstRow = Math.max(0, anchorRow - bufferRows);
     const lastRow = Math.ceil(total / metrics.columns);
+    const previousStartRow = Number(grid.dataset.virtualStartRow);
+    const previousEndRow = Number(grid.dataset.virtualEndRow);
+    const previousColumns = Number(grid.dataset.virtualColumns);
+    const guardRows = Math.max(1, visibleRows);
+    if (
+      Number.isFinite(previousStartRow) &&
+      Number.isFinite(previousEndRow) &&
+      previousColumns === metrics.columns &&
+      currentRow >= previousStartRow + guardRows &&
+      currentRow + visibleRows <= previousEndRow - guardRows
+    ) {
+      return {
+        start: Math.min(total, previousStartRow * metrics.columns),
+        end: Math.min(total, previousEndRow * metrics.columns),
+        topRows: previousStartRow,
+        bottomRows: Math.max(0, lastRow - previousEndRow),
+        rowHeight: metrics.rowHeight,
+        columns: metrics.columns,
+        startRow: previousStartRow,
+        endRow: previousEndRow,
+        virtualized: true
+      };
+    }
+    const anchorRow = Math.floor(currentRow / chunkRows) * chunkRows;
+    const firstRow = Math.max(0, anchorRow - bufferRows);
     const endRow = Math.min(lastRow, anchorRow + visibleRows + bufferRows + chunkRows + 1);
     const start = Math.min(total, firstRow * metrics.columns);
     const end = Math.min(total, endRow * metrics.columns);
@@ -978,6 +993,9 @@
       topRows: firstRow,
       bottomRows: Math.max(0, lastRow - endRow),
       rowHeight: metrics.rowHeight,
+      columns: metrics.columns,
+      startRow: firstRow,
+      endRow,
       virtualized: true
     };
   }
@@ -995,6 +1013,15 @@
     const bottom = windowInfo.virtualized ? Math.round((windowInfo.bottomRows || 0) * rowHeight) : 0;
     grid.style.setProperty('--rmw-virtual-top', `${top}px`);
     grid.style.setProperty('--rmw-virtual-bottom', `${bottom}px`);
+    if (windowInfo.virtualized) {
+      grid.dataset.virtualStartRow = String(windowInfo.startRow || 0);
+      grid.dataset.virtualEndRow = String(windowInfo.endRow || 0);
+      grid.dataset.virtualColumns = String(windowInfo.columns || 0);
+    } else {
+      delete grid.dataset.virtualStartRow;
+      delete grid.dataset.virtualEndRow;
+      delete grid.dataset.virtualColumns;
+    }
   }
 
   function statusMessage(session, total) {
@@ -1010,7 +1037,6 @@
     const last = items[Math.max(windowInfo.start, windowInfo.end - 1)]?.src || '';
     return [
       grid.className,
-      items.length,
       windowInfo.start,
       windowInfo.end,
       loadingState,
@@ -1024,15 +1050,14 @@
   function renderCards(doc, grid, state, modal, items, emptyMessage, session, onReturn, onRetry, highlightKey, onDeselect) {
     let windowInfo = items.length ? getVirtualWindow(grid, items.length) : { start: 0, end: items.length, virtualized: false };
     const loadingState = session.snapshot().loadingState;
+    setVirtualPadding(grid, windowInfo);
     const signature = virtualRenderSignature(grid, items, windowInfo, loadingState, highlightKey, emptyMessage);
     if (grid.dataset.renderSignature === signature) return;
     grid.dataset.renderSignature = signature;
     grid.textContent = '';
     if (!items.length) {
-      setVirtualPadding(grid, { virtualized: false });
       grid.appendChild(makeElement(doc, 'div', 'rmw-status', emptyMessage));
     } else {
-      setVirtualPadding(grid, windowInfo);
       preloadVisibleThumbs(items, windowInfo.start, windowInfo.end);
       items.slice(windowInfo.start, windowInfo.end).forEach((item, offset) => {
       const index = windowInfo.start + offset;
@@ -1078,7 +1103,6 @@
       }
       grid.appendChild(status);
     }
-    sizeGridCards(grid);
   }
 
   function findScrollable(element) {
@@ -1157,7 +1181,6 @@
 
     let nativeRoot = null;
     let disconnect = null;
-    let disconnectResize = null;
     let attempts = 0;
     let restoredScroll = false;
     let highlightKey = '';
@@ -1189,7 +1212,6 @@
     }
     function renderWall(emptyMessage) {
       const sessionSnapshot = wallSession.snapshot();
-      const desiredScroll = restoredScroll ? grid.scrollTop : sessionSnapshot.scrollTop;
       grid.className = `rmw-size-${sessionSnapshot.cardSize}`;
       const visible = filterMedia(controller.items(), sessionSnapshot.mediaFilter);
       loaded.textContent = `已收集 ${controller.items().length} 项 / 当前显示 ${visible.length} 项`;
@@ -1200,8 +1222,10 @@
         button.classList.toggle('is-active', button.dataset.value === sessionSnapshot.cardSize);
       });
       renderCards(doc, grid, state, modal, visible, emptyMessage, wallSession, revealCurrentCard, requestMore, highlightKey, deselectCurrentCard);
-      grid.scrollTop = desiredScroll;
-      restoredScroll = true;
+      if (!restoredScroll) {
+        grid.scrollTop = sessionSnapshot.scrollTop;
+        restoredScroll = true;
+      }
     }
     function scheduleVirtualRender() {
       if (controller.items().length <= VIRTUALIZE_THRESHOLD || virtualRenderFrame) return;
@@ -1210,11 +1234,6 @@
         virtualRenderFrame = null;
         renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
       });
-    }
-    if (root.ResizeObserver) {
-      const resizeObserver = new root.ResizeObserver(() => sizeGridCards(grid));
-      resizeObserver.observe(grid);
-      disconnectResize = () => resizeObserver.disconnect();
     }
     if (adapter.observeResponses) {
       stopCapture = adapter.observeResponses((items) => {
@@ -1398,7 +1417,6 @@
       if (slideshowTimer) { clearTimeout(slideshowTimer); slideshowTimer = null; }
       slideshowActive = false;
       disconnect?.();
-      disconnectResize?.();
       stopCapture?.();
       wallSession.rememberView({ scrollTop: grid.scrollTop, previewKey: wallSession.snapshot().previewKey });
       state.closeWall();
