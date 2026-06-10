@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         湖北21世纪学习平台 - AI自动答题
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.0.1
+// @version      1.0.2
 // @description  自动提取考试题目，调用 AI 分析答案，自动填写并定时交卷
 // @author       Flywind
 // @match        https://www.hubei21.com/*
@@ -20,14 +20,14 @@
 
   // ========== 默认配置 ==========
   const DEFAULT_CONFIG = {
-    apiBase: 'https://api.laozhang.ai/v1',
+    apiBase: 'https://api.deepseek.com',
     apiKey: '',
-    model: 'gpt-4o',
+    model: 'deepseek-v4-pro',
     submitDelay: 11, // 交卷等待分钟数
   };
 
   function getConfig() {
-    return GM_getValue('exam_config', DEFAULT_CONFIG);
+    return { ...DEFAULT_CONFIG, ...GM_getValue('exam_config', {}) };
   }
 
   function saveConfig(config) {
@@ -39,6 +39,23 @@
     if (input) input.value = value || '';
   }
 
+  function getProviderPreset(config) {
+    if (
+      config.apiBase === 'https://api.deepseek.com' &&
+      config.model === 'deepseek-v4-pro'
+    ) {
+      return 'deepseek';
+    }
+    return 'custom';
+  }
+
+  function applyProviderPreset(provider) {
+    if (provider === 'deepseek') {
+      setInputValue('cfg-base', 'https://api.deepseek.com');
+      setInputValue('cfg-model', 'deepseek-v4-pro');
+    }
+  }
+
   // ========== 配置面板 ==========
   function showConfigDialog() {
     const config = getConfig();
@@ -48,6 +65,13 @@
     overlay.innerHTML = `
       <div style="background:#fff;border-radius:12px;padding:24px;width:420px;font-family:'Microsoft YaHei',sans-serif;">
         <h3 style="margin:0 0 16px;color:#c0392b;">AI 答题配置</h3>
+        <label style="display:block;margin-bottom:12px;">
+          <div style="font-size:13px;color:#666;margin-bottom:4px;">常用配置</div>
+          <select id="cfg-provider" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;box-sizing:border-box;background:#fff;">
+            <option value="deepseek">DeepSeek 官方</option>
+            <option value="custom">自定义 OpenAI 兼容接口</option>
+          </select>
+        </label>
         <label style="display:block;margin-bottom:12px;">
           <div style="font-size:13px;color:#666;margin-bottom:4px;">API Base URL</div>
           <input id="cfg-base" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;box-sizing:border-box;" />
@@ -76,6 +100,11 @@
     setInputValue('cfg-key', config.apiKey);
     setInputValue('cfg-model', config.model);
     setInputValue('cfg-delay', config.submitDelay);
+    setInputValue('cfg-provider', getProviderPreset(config));
+
+    document.getElementById('cfg-provider').onchange = (event) => {
+      applyProviderPreset(event.target.value);
+    };
 
     document.getElementById('cfg-cancel').onclick = () => overlay.remove();
     document.getElementById('cfg-save').onclick = () => {

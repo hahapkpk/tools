@@ -43,6 +43,16 @@ test('exam config dialog assigns saved values through DOM properties', () => {
   assert.doesNotMatch(exam, /id="cfg-key" type="password" value="\$\{config\.apiKey\}"/);
 });
 
+test('exam config defaults to DeepSeek official API and exposes provider preset', () => {
+  assert.match(exam, /apiBase: 'https:\/\/api\.deepseek\.com'/);
+  assert.match(exam, /model: 'deepseek-v4-pro'/);
+  assert.match(exam, /id="cfg-provider"/);
+  assert.match(exam, /DeepSeek 官方/);
+  assert.match(exam, /function applyProviderPreset\(/);
+  assert.match(exam, /setInputValue\('cfg-base', 'https:\/\/api\.deepseek\.com'\)/);
+  assert.match(exam, /setInputValue\('cfg-model', 'deepseek-v4-pro'\)/);
+});
+
 test('exam answer parsing normalizes and rejects invalid AI answers', () => {
   assert.match(exam, /function normalizeAnswer\(/);
   assert.match(exam, /normalizeAnswer\(a\.answer\)/);

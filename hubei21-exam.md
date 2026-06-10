@@ -43,9 +43,9 @@
 
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
-| API Base URL | OpenAI 兼容接口地址 | `https://api.laozhang.ai/v1` |
+| API Base URL | OpenAI 兼容接口地址 | `https://api.deepseek.com` |
 | API Key | 你的 API 密钥 | 空（必填） |
-| 模型 | 使用的模型名称 | `gpt-4o` |
+| 模型 | 使用的模型名称 | `deepseek-v4-pro` |
 | 交卷等待时间 | 提交前等待分钟数 | `11` |
 
 > 支持任何 OpenAI 兼容 API，如 DeepSeek、Claude、通义千问等中转服务。
@@ -147,6 +147,6 @@ function letterToValue(letter) {
 ## 文件信息
 
 - **作者**：Flywind
-- **版本**：1.0.1
+- **版本**：1.0.2
 - **适用平台**：https://www.hubei21.com
 - **GitHub**：https://github.com/hahapkpk/tools
