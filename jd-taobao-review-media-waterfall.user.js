@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.10
+// @version      0.5.11
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -30,18 +30,67 @@
     return null;
   }
 
+  function normalizeMediaKey(url) {
+    if (!url) return '';
+    try {
+      const parsed = new URL(String(url).startsWith('//') ? `https:${url}` : String(url), root.location?.href || 'https://review-media-wall.local/');
+      parsed.hash = '';
+      parsed.search = '';
+      const host = parsed.hostname.toLowerCase();
+      let path = parsed.pathname;
+      if (/360buyimg\.com$/.test(host)) {
+        path = path.replace(/^\/[^/]+\/(?:s\d+x\d+_)?(jfs\/.*)$/i, '/$1');
+      }
+      if (/(?:alicdn|taobao|tbcdn|tmall)\.com$/.test(host)) {
+        path = path.replace(/(\.(?:jpg|jpeg|png|webp|gif))(?:_.+)?$/i, '$1');
+      }
+      return `${host}${path}`;
+    } catch (error) {
+      return String(url).split(/[?#]/)[0];
+    }
+  }
+
+  function mediaQualityScore(url) {
+    if (!url) return 0;
+    const value = String(url);
+    const jdSize = value.match(/\/s(\d+)x(\d+)_jfs\//i);
+    if (jdSize) return Number(jdSize[1]) * Number(jdSize[2]);
+    const taobaoSize = value.match(/_(\d+)x(\d+)(?:q\d+)?\./i);
+    if (taobaoSize) return Number(taobaoSize[1]) * Number(taobaoSize[2]);
+    return 1000000000;
+  }
+
+  function mergePreferredMedia(existing, incoming) {
+    if (mediaQualityScore(incoming.src || incoming.poster || '') <= mediaQualityScore(existing.src || existing.poster || '')) return existing;
+    return {
+      ...incoming,
+      text: existing.text,
+      meta: existing.meta,
+      poster: incoming.poster || existing.poster
+    };
+  }
+
   function createMediaStore() {
     let media = [];
-    const keyed = (item) => item.src || item.poster || '';
+    const keyed = (item) => normalizeMediaKey(item.src || item.poster || '');
 
     function unique(items) {
+      const result = [];
       const seen = new Set();
-      return items.filter((item) => {
+      const indexByKey = new Map();
+      items.forEach((item) => {
         const key = keyed(item);
-        if (!key || seen.has(key)) return false;
+        if (!key) return;
+        if (seen.has(key)) {
+          const index = indexByKey.get(key);
+          result[index] = mergePreferredMedia(result[index], item);
+          return;
+        }
         seen.add(key);
-        return true;
+        indexByKey.set(key, result.length);
+        result.push(item);
       });
+      return result;
     }
 
     return {
@@ -69,7 +118,7 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.10';
+  const SCRIPT_VERSION = '0.5.11';
   const WHEEL_SHIFT_COOLDOWN = 320;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;

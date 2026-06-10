@@ -22,6 +22,52 @@ test('媒体条目按原图地址去重且保留首次评价上下文', () => {
   assert.deepEqual(store.items().map(item => item.text), ['第一条', '视频']);
 });
 
+test('媒体去重会归一化京东和淘宝同图不同尺寸地址', () => {
+  const store = api.createMediaStore();
+  store.replace([
+    {
+      type: 'image',
+      src: 'https://img30.360buyimg.com/shaidan/s1080x1080_jfs/t1/431531/36/16798/2026145/6a0a67a8F2ae0d4cc/00a9000c0026c2f7.jpg.dpg',
+      text: '京东大图'
+    },
+    {
+      type: 'image',
+      src: 'https://img30.360buyimg.com/shaidan/s300x300_jfs/t1/431531/36/16798/2026145/6a0a67a8F2ae0d4cc/00a9000c0026c2f7.jpg.dpg',
+      text: '京东小图'
+    },
+    {
+      type: 'image',
+      src: 'https://gw.alicdn.com/imgextra/i1/123/O1CN01abc.jpg_400x400q90.jpg',
+      text: '淘宝缩略图'
+    },
+    {
+      type: 'image',
+      src: 'https://gw.alicdn.com/imgextra/i1/123/O1CN01abc.jpg?x-oss-process=image/resize,w_800',
+      text: '淘宝原图'
+    }
+  ]);
+  assert.deepEqual(store.items().map(item => item.text), ['京东大图', '淘宝缩略图']);
+});
+
+test('媒体归一化去重时保留首次评价文字并升级到更高清图片', () => {
+  const store = api.createMediaStore();
+  store.replace([
+    {
+      type: 'image',
+      src: 'https://img30.360buyimg.com/shaidan/s300x300_jfs/t1/431531/36/16798/2026145/6a0a67a8F2ae0d4cc/00a9000c0026c2f7.jpg.dpg',
+      text: '首次评论'
+    },
+    {
+      type: 'image',
+      src: 'https://img30.360buyimg.com/shaidan/s1080x1080_jfs/t1/431531/36/16798/2026145/6a0a67a8F2ae0d4cc/00a9000c0026c2f7.jpg.dpg',
+      text: '重复评论'
+    }
+  ]);
+  assert.equal(store.items().length, 1);
+  assert.equal(store.items()[0].text, '首次评论');
+  assert.match(store.items()[0].src, /s1080x1080_jfs/);
+});
+
 test('淘宝 adapter 仅抽取评价相册媒体并附评价文字', () => {
   const comment = {
     innerText: '匿名买家 2026年5月15日 已购：粉蓝款 实物很漂亮',
@@ -578,7 +624,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.10/);
+  assert.match(source, /@version\s+0\.5\.11/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
