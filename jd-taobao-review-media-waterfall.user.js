@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.7
+// @version      0.5.8
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -69,7 +69,7 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.7';
+  const SCRIPT_VERSION = '0.5.8';
   const WHEEL_SHIFT_COOLDOWN = 320;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;
@@ -962,10 +962,14 @@
       return { start: 0, end: total, topRows: 0, bottomRows: 0, virtualized: false };
     }
     const metrics = getGridMetrics(grid);
-    const firstRow = Math.max(0, Math.floor(grid.scrollTop / Math.max(metrics.rowHeight, 1)) - VIRTUAL_BUFFER_SCREENS);
+    const currentRow = Math.floor(grid.scrollTop / Math.max(metrics.rowHeight, 1));
     const visibleRows = Math.ceil((grid.clientHeight || 1) / Math.max(metrics.rowHeight, 1));
+    const chunkRows = Math.max(1, Math.floor(visibleRows / 2));
+    const anchorRow = Math.floor(currentRow / chunkRows) * chunkRows;
+    const bufferRows = visibleRows * VIRTUAL_BUFFER_SCREENS;
+    const firstRow = Math.max(0, anchorRow - bufferRows);
     const lastRow = Math.ceil(total / metrics.columns);
-    const endRow = Math.min(lastRow, firstRow + visibleRows + VIRTUAL_BUFFER_SCREENS * 2 + 1);
+    const endRow = Math.min(lastRow, anchorRow + visibleRows + bufferRows + chunkRows + 1);
     const start = Math.min(total, firstRow * metrics.columns);
     const end = Math.min(total, endRow * metrics.columns);
     return {
@@ -1001,14 +1005,33 @@
     return `已加载 ${total} 项，继续向下滚动以加载更多`;
   }
 
+  function virtualRenderSignature(grid, items, windowInfo, loadingState, highlightKey, emptyMessage) {
+    const first = items[windowInfo.start]?.src || '';
+    const last = items[Math.max(windowInfo.start, windowInfo.end - 1)]?.src || '';
+    return [
+      grid.className,
+      items.length,
+      windowInfo.start,
+      windowInfo.end,
+      loadingState,
+      highlightKey,
+      emptyMessage,
+      first,
+      last
+    ].join('|');
+  }
+
   function renderCards(doc, grid, state, modal, items, emptyMessage, session, onReturn, onRetry, highlightKey, onDeselect) {
+    let windowInfo = items.length ? getVirtualWindow(grid, items.length) : { start: 0, end: items.length, virtualized: false };
+    const loadingState = session.snapshot().loadingState;
+    const signature = virtualRenderSignature(grid, items, windowInfo, loadingState, highlightKey, emptyMessage);
+    if (grid.dataset.renderSignature === signature) return;
+    grid.dataset.renderSignature = signature;
     grid.textContent = '';
-    let windowInfo = { start: 0, end: items.length, virtualized: false };
     if (!items.length) {
       setVirtualPadding(grid, { virtualized: false });
       grid.appendChild(makeElement(doc, 'div', 'rmw-status', emptyMessage));
     } else {
-      windowInfo = getVirtualWindow(grid, items.length);
       setVirtualPadding(grid, windowInfo);
       preloadVisibleThumbs(items, windowInfo.start, windowInfo.end);
       items.slice(windowInfo.start, windowInfo.end).forEach((item, offset) => {
@@ -1019,7 +1042,7 @@
       if (item.src === highlightKey) card.classList.add('rmw-current');
       const media = doc.createElement('img');
       media.src = item.poster || item.src;
-      media.loading = 'lazy';
+      media.loading = windowInfo.virtualized ? 'eager' : 'lazy';
       media.decoding = 'async';
       media.alt = '用户评价图片';
       card.appendChild(media);
@@ -1044,7 +1067,6 @@
       grid.appendChild(card);
     });
     }
-    const loadingState = session.snapshot().loadingState;
     const shouldShowStatus = !windowInfo.virtualized || windowInfo.end >= items.length || loadingState === 'error';
     if (shouldShowStatus) {
       const status = makeElement(doc, 'div', 'rmw-status', statusMessage(session, items.length));

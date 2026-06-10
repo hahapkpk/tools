@@ -384,6 +384,8 @@ test('图片墙大量媒体采用前后三屏缓冲虚拟化渲染', () => {
   assert.match(source, /--rmw-virtual-top/);
   assert.match(source, /--rmw-virtual-bottom/);
   assert.match(source, /const shouldShowStatus = !windowInfo\.virtualized \|\| windowInfo\.end >= items\.length \|\| loadingState === 'error'/);
+  assert.match(source, /const chunkRows = Math\.max\(1, Math\.floor\(visibleRows \/ 2\)\)/);
+  assert.match(source, /const bufferRows = visibleRows \* VIRTUAL_BUFFER_SCREENS/);
   assert.doesNotMatch(source, /rmw-virtual-spacer/);
 });
 
@@ -395,10 +397,18 @@ test('虚拟化窗口会跟随图片墙滚动节流刷新', () => {
   assert.match(source, /if \(virtualRenderFrame\) root\.cancelAnimationFrame\?\.|\|\| root\.clearTimeout/);
 });
 
+test('图片墙滚动在虚拟窗口未变化时不清空重建卡片以避免闪烁', () => {
+  assert.match(source, /function virtualRenderSignature/);
+  assert.match(source, /grid\.dataset\.renderSignature === signature/);
+  assert.match(source, /if \(grid\.dataset\.renderSignature === signature\) return;/);
+  assert.match(source, /grid\.dataset\.renderSignature = signature;[\s\S]*grid\.textContent = '';/);
+});
+
 test('图片墙只预热视口附近缩略图并在预览时预热前后两张', () => {
   assert.match(source, /const THUMB_PRELOAD_AHEAD = 18/);
   assert.match(source, /function preloadVisibleThumbs/);
   assert.match(source, /preloadVisibleThumbs\(items, windowInfo\.start, windowInfo\.end\)/);
+  assert.match(source, /media\.loading = windowInfo\.virtualized \? 'eager' : 'lazy'/);
   assert.match(source, /\[index, index \+ 1, index - 1, index \+ 2, index - 2\]/);
   assert.doesNotMatch(source, /items\.forEach[\s\S]{0,400}preloadPreviewMedia\(item\)/);
 });
@@ -558,7 +568,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.7/);
+  assert.match(source, /@version\s+0\.5\.8/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
