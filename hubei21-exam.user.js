@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         湖北21世纪学习平台 - AI自动答题
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.0.0
+// @version      1.0.1
 // @description  自动提取考试题目，调用 AI 分析答案，自动填写并定时交卷
 // @author       Flywind
 // @match        https://www.hubei21.com/*
+// @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/hubei21-exam.user.js
+// @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/hubei21-exam.user.js
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -32,6 +34,11 @@
     GM_setValue('exam_config', config);
   }
 
+  function setInputValue(id, value) {
+    const input = document.getElementById(id);
+    if (input) input.value = value || '';
+  }
+
   // ========== 配置面板 ==========
   function showConfigDialog() {
     const config = getConfig();
@@ -43,19 +50,19 @@
         <h3 style="margin:0 0 16px;color:#c0392b;">AI 答题配置</h3>
         <label style="display:block;margin-bottom:12px;">
           <div style="font-size:13px;color:#666;margin-bottom:4px;">API Base URL</div>
-          <input id="cfg-base" value="${config.apiBase}" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;box-sizing:border-box;" />
+          <input id="cfg-base" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;box-sizing:border-box;" />
         </label>
         <label style="display:block;margin-bottom:12px;">
           <div style="font-size:13px;color:#666;margin-bottom:4px;">API Key</div>
-          <input id="cfg-key" type="password" value="${config.apiKey}" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;box-sizing:border-box;" />
+          <input id="cfg-key" type="password" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;box-sizing:border-box;" />
         </label>
         <label style="display:block;margin-bottom:12px;">
           <div style="font-size:13px;color:#666;margin-bottom:4px;">模型 (如 gpt-4o, deepseek-chat, claude-sonnet-4-20250514)</div>
-          <input id="cfg-model" value="${config.model}" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;box-sizing:border-box;" />
+          <input id="cfg-model" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;box-sizing:border-box;" />
         </label>
         <label style="display:block;margin-bottom:16px;">
           <div style="font-size:13px;color:#666;margin-bottom:4px;">交卷等待时间（分钟）</div>
-          <input id="cfg-delay" type="number" value="${config.submitDelay}" min="1" max="60" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;box-sizing:border-box;" />
+          <input id="cfg-delay" type="number" min="1" max="60" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;box-sizing:border-box;" />
         </label>
         <div style="display:flex;gap:8px;justify-content:flex-end;">
           <button id="cfg-cancel" style="padding:8px 20px;border:1px solid #ddd;border-radius:6px;background:#fff;cursor:pointer;">取消</button>
@@ -64,6 +71,11 @@
       </div>
     `;
     document.body.appendChild(overlay);
+
+    setInputValue('cfg-base', config.apiBase);
+    setInputValue('cfg-key', config.apiKey);
+    setInputValue('cfg-model', config.model);
+    setInputValue('cfg-delay', config.submitDelay);
 
     document.getElementById('cfg-cancel').onclick = () => overlay.remove();
     document.getElementById('cfg-save').onclick = () => {
@@ -192,12 +204,34 @@
     // 从返回文本中提取 JSON 数组
     const jsonMatch = text.match(/\[[\s\S]*\]/);
     if (!jsonMatch) throw new Error('AI 返回格式异常，未找到 JSON');
-    return JSON.parse(jsonMatch[0]);
+    const answers = JSON.parse(jsonMatch[0]);
+    if (!Array.isArray(answers)) throw new Error('AI 返回格式异常，不是 JSON 数组');
+
+    return answers.map((a) => {
+      const answer = normalizeAnswer(a.answer);
+      if (!a.num || !answer) {
+        throw new Error(`第${a.num}题答案格式异常: ${JSON.stringify(a.answer)}`);
+      }
+      return { num: parseInt(a.num, 10), answer };
+    });
+  }
+
+  function normalizeAnswer(answer) {
+    if (Array.isArray(answer)) answer = answer.join('');
+    if (answer == null) return '';
+
+    let text = String(answer).trim().toUpperCase();
+    text = text
+      .replace(/正确|对|TRUE/g, 'A')
+      .replace(/错误|错|FALSE/g, 'B')
+      .replace(/[^A-F]/g, '');
+
+    return /^[A-F]+$/.test(text) ? text : '';
   }
 
   // ========== 答案填写 ==========
   function letterToValue(letter) {
-    return { A: 1, B: 2, C: 3, D: 4, E: 5, F: 6 }[letter.toUpperCase()] || 1;
+    return { A: 1, B: 2, C: 3, D: 4, E: 5, F: 6 }[letter.toUpperCase()];
   }
 
   function fillAnswers(aiAnswers) {
@@ -246,6 +280,15 @@
     const btn = Array.from(document.querySelectorAll('button')).find((b) =>
       b.innerText.includes('交卷')
     );
+    if (btn) btn.click();
+  }
+
+  function clickSubmitConfirm() {
+    const confirmTexts = ['确认交卷', '确定', '确认', '提交'];
+    const btn = Array.from(document.querySelectorAll('button')).find((b) => {
+      const text = b.innerText?.trim();
+      return text && confirmTexts.some((item) => text.includes(item));
+    });
     if (btn) btn.click();
   }
 
@@ -391,6 +434,9 @@
       updateProgress(98);
       addLog('开始交卷');
       clickSubmit();
+
+      await sleep(1000);
+      clickSubmitConfirm();
 
       await sleep(3000);
       updateProgress(100);

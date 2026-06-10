@@ -142,11 +142,11 @@ function letterToValue(letter) {
 
 ## 相关脚本
 
-- [hubei21-autolearn.user.js](hubei21-autolearn.md) — 自动完成视频学习进度
+- [hubei21-autolearn.user.js](hubei21-autolearn.user.js) — 自动完成视频学习进度
 
 ## 文件信息
 
 - **作者**：Flywind
-- **版本**：1.0.0
+- **版本**：1.0.1
 - **适用平台**：https://www.hubei21.com
 - **GitHub**：https://github.com/hahapkpk/tools

@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         湖北21世纪学习平台 - 自动刷课
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.0.0
+// @version      1.0.1
 // @description  自动完成 hubei21.com 学习平台的所有课程视频学习进度
 // @author       Flywind
 // @match        https://www.hubei21.com/*
+// @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/hubei21-autolearn.user.js
+// @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/hubei21-autolearn.user.js
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
@@ -34,6 +36,38 @@
 
   function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
+  }
+
+  function parseDurationSeconds(value) {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      return value;
+    }
+    if (typeof value !== 'string') return null;
+
+    const trimmed = value.trim();
+    if (/^\d+(\.\d+)?$/.test(trimmed)) return parseFloat(trimmed);
+
+    const parts = trimmed.split(':').map((part) => parseInt(part, 10));
+    if (parts.some((part) => Number.isNaN(part))) return null;
+    if (parts.length === 2) return parts[0] * 60 + parts[1];
+    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    return null;
+  }
+
+  function getLessonDuration(lesson) {
+    const candidates = [
+      lesson.duration,
+      lesson.video_duration,
+      lesson.video_time,
+      lesson.study_time,
+      lesson.time,
+      lesson.length,
+    ];
+    for (const value of candidates) {
+      const seconds = parseDurationSeconds(value);
+      if (seconds) return seconds;
+    }
+    return 1800;
   }
 
   async function apiPost(path, body) {
@@ -83,6 +117,9 @@
       });
 
       if (onProgress) onProgress(i, steps, result);
+      if (result.code !== 200) {
+        throw new Error(`学习进度上报失败: ${result.msg || result.message || '未知错误'}`);
+      }
       if (i < steps) await sleep(2000);
     }
   }
@@ -217,14 +254,13 @@
         updateStatus(`正在学习 (${i + 1}/${todoLessons.length}): ${lesson.title}`);
         addLog(`开始: ${lesson.title}`);
 
-        // 假设每节课约 30 分钟 (1800秒)
-        const estimatedDuration = 1800;
+        const duration = getLessonDuration(lesson);
 
         await studyOneLesson(
           videoId,
           lesson.id,
           year,
-          estimatedDuration,
+          duration,
           (step, total, result) => {
             const overallNow = Math.round(
               ((i + step / total) / todoLessons.length) * 100
