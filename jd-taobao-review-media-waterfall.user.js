@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.9
+// @version      0.5.10
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -69,7 +69,7 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.9';
+  const SCRIPT_VERSION = '0.5.10';
   const WHEEL_SHIFT_COOLDOWN = 320;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;
@@ -728,7 +728,7 @@
 .rmw-size-small { grid-template-columns:repeat(6,minmax(0,1fr)) !important; }
 .rmw-size-medium { grid-template-columns:repeat(5,minmax(0,1fr)) !important; }
 .rmw-size-large { grid-template-columns:repeat(4,minmax(0,1fr)) !important; }
-.rmw-card { position:relative; aspect-ratio:1 / 1; contain:layout paint; border-radius:18px; overflow:hidden; background:#f1f3f4; cursor:zoom-in; outline:none; transition:box-shadow .16s ease, transform .16s ease; }
+.rmw-card { position:relative; height:var(--rmw-card-size, 180px); contain:paint; border-radius:18px; overflow:hidden; background:#f1f3f4; cursor:zoom-in; outline:none; transition:box-shadow .16s ease, transform .16s ease; }
 .rmw-card:focus-visible { box-shadow:0 0 0 3px #1a73e8; }
 .rmw-card.rmw-current { box-shadow:0 0 0 4px #1a73e8; transform:scale(.985); }
 .rmw-card img, .rmw-card video { position:absolute; inset:0; display:block; width:100%; height:100%; object-fit:cover; }
@@ -940,12 +940,19 @@
     const width = grid.clientWidth || grid.getBoundingClientRect?.().width || 0;
     const style = root.getComputedStyle?.(grid);
     const template = style?.gridTemplateColumns || '';
-    const templateColumns = template && template !== 'none' ? template.split(' ').filter(Boolean).length : 0;
+    const columnTracks = template && template !== 'none'
+      ? template.split(' ').map((value) => Number.parseFloat(value)).filter((value) => value > 0)
+      : [];
+    const templateColumns = columnTracks.length;
     const probe = grid.querySelector('.rmw-card');
     const cardWidth = probe?.getBoundingClientRect?.().width || 0;
+    const paddingX = (Number.parseFloat(style?.paddingLeft || '0') || 0) + (Number.parseFloat(style?.paddingRight || '0') || 0);
     const columns = Math.max(1, templateColumns || Math.round(width / Math.max(cardWidth, 180)));
     const gap = Number.parseFloat(style?.rowGap || '14') || 14;
-    const cardHeight = Math.round(cardWidth || Math.max(160, (width - gap * (columns - 1)) / columns));
+    const trackWidth = columnTracks[0] || 0;
+    const contentWidth = Math.max(0, width - paddingX);
+    const cardHeight = Math.round(trackWidth || cardWidth || Math.max(160, (contentWidth - gap * (columns - 1)) / columns));
+    grid.style.setProperty('--rmw-card-size', `${cardHeight}px`);
     return { columns, gap, cardHeight, rowHeight: cardHeight + gap };
   }
 
@@ -1049,6 +1056,7 @@
 
   function renderCards(doc, grid, state, modal, items, emptyMessage, session, onReturn, onRetry, highlightKey, onDeselect) {
     let windowInfo = items.length ? getVirtualWindow(grid, items.length) : { start: 0, end: items.length, virtualized: false };
+    if (items.length && !windowInfo.virtualized) getGridMetrics(grid);
     const loadingState = session.snapshot().loadingState;
     setVirtualPadding(grid, windowInfo);
     const signature = virtualRenderSignature(grid, items, windowInfo, loadingState, highlightKey, emptyMessage);

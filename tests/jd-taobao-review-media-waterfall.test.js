@@ -365,13 +365,18 @@ test('热更新时会替换旧版本图片墙入口以移除旧监听器', () =>
 
 test('图片墙采用规则方形图集并仅在内容区纵向滚动', () => {
   assert.match(source, /#\$\{IDS\.grid\}\s*\{[^}]*display:grid;[^}]*grid-template-columns:repeat\(5,minmax\(0,1fr\)\);[^}]*overflow-y:auto;[^}]*overflow-anchor:none;/s);
-  assert.match(source, /\.rmw-card\s*\{[^}]*aspect-ratio:1 \/ 1;[^}]*contain:layout paint;/s);
+  assert.match(source, /\.rmw-card\s*\{[^}]*height:var\(--rmw-card-size, 180px\);[^}]*contain:paint;/s);
   assert.match(source, /\.rmw-card img,\s*\.rmw-card video\s*\{[^}]*position:absolute;[^}]*inset:0;[^}]*height:100%;[^}]*object-fit:cover;/s);
+  assert.doesNotMatch(source, /aspect-ratio:1 \/ 1/);
   assert.doesNotMatch(source, /\.rmw-card::before/);
   assert.doesNotMatch(source, /column-count:/);
 });
 
-test('图片墙依赖 CSS 方形比例而非滚动中逐卡片测量高度', () => {
+test('图片墙每次按网格列宽设置统一卡片高度避免京东行高塌陷', () => {
+  assert.match(source, /grid\.style\.setProperty\('--rmw-card-size', `\$\{cardHeight\}px`\)/);
+  assert.match(source, /const columnTracks = template && template !== 'none'/);
+  assert.match(source, /const paddingX = \(Number\.parseFloat\(style\?\.paddingLeft/);
+  assert.match(source, /if \(items\.length && !windowInfo\.virtualized\) getGridMetrics\(grid\)/);
   assert.doesNotMatch(source, /function sizeGridCards/);
   assert.doesNotMatch(source, /getBoundingClientRect\(\)\.width[\s\S]{0,120}card\.style\.height/);
   assert.doesNotMatch(source, /ResizeObserver[\s\S]{0,160}sizeGridCards/);
@@ -573,7 +578,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.9/);
+  assert.match(source, /@version\s+0\.5\.10/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
