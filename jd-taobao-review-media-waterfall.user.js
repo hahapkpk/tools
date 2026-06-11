@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.11
+// @version      0.5.12
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -42,7 +42,10 @@
         path = path.replace(/^\/[^/]+\/(?:s\d+x\d+_)?(jfs\/.*)$/i, '/$1');
       }
       if (/(?:alicdn|taobao|tbcdn|tmall)\.com$/.test(host)) {
+        path = path.replace(/^\/bao\/uploaded\/+/, '/');
         path = path.replace(/(\.(?:jpg|jpeg|png|webp|gif))(?:_.+)?$/i, '$1');
+        const fileName = path.split('/').filter(Boolean).pop();
+        if (fileName) return `taobao:${fileName}`;
       }
       return `${host}${path}`;
     } catch (error) {
@@ -118,7 +121,7 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.11';
+  const SCRIPT_VERSION = '0.5.12';
   const WHEEL_SHIFT_COOLDOWN = 320;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;
@@ -126,7 +129,7 @@
   const AUTO_LOAD_NEAR_BOTTOM = 900;
   const AUTO_LOAD_MAX_ROUNDS = 80;
   const AUTO_LOAD_IDLE_LIMIT = 5;
-  const VIRTUALIZE_THRESHOLD = 120;
+  const VIRTUALIZE_THRESHOLD = 60;
   const VIRTUAL_BUFFER_SCREENS = 3;
   const THUMB_PRELOAD_AHEAD = 18;
   const preloadedPreviewMedia = new Set();
@@ -294,9 +297,34 @@
     (info.picList || []).forEach((src) => {
       items.push({ type: 'image', src: absoluteMediaUrl(src), poster: '', text, meta });
     });
-    (info.videoList || []).forEach((video) => {
-      const src = absoluteMediaUrl(typeof video === 'string' ? video : (video.url || video.videoUrl || video.playUrl));
-      const poster = absoluteMediaUrl(typeof video === 'object' ? (video.cover || video.coverUrl || '') : '');
+    appendTaobaoVideos(items, info.videoList || [], text, meta);
+  }
+
+  function usableVideoUrl(url) {
+    const value = absoluteMediaUrl(url || '');
+    if (!value || /(?:^|\/)null(?:$|[?#])/.test(value)) return '';
+    return value;
+  }
+
+  function extractTaobaoVideo(video) {
+    if (typeof video === 'string') return { src: usableVideoUrl(video), poster: '' };
+    if (!video || typeof video !== 'object') return { src: '', poster: '' };
+    const candidates = [
+      video.sourceVideoUrl,
+      video.sourceUrl,
+      video.cloudVideoUrl,
+      video.url,
+      video.videoUrl,
+      video.playUrl
+    ];
+    const src = candidates.map(usableVideoUrl).find(Boolean) || '';
+    const poster = absoluteMediaUrl(video.cover || video.coverUrl || video.picUrl || video.poster || '');
+    return { src, poster };
+  }
+
+  function appendTaobaoVideos(items, videos, text, meta) {
+    videos.forEach((video) => {
+      const { src, poster } = extractTaobaoVideo(video);
       if (src) items.push({ type: 'video', src, poster, text, meta });
     });
   }
@@ -327,11 +355,7 @@
         pictures.forEach((src) => {
           items.push({ type: 'image', src: absoluteMediaUrl(src), poster: '', text, meta });
         });
-        videos.forEach((video) => {
-          const src = absoluteMediaUrl(typeof video === 'string' ? video : (video.url || video.videoUrl || video.playUrl));
-          const poster = absoluteMediaUrl(typeof video === 'object' ? (video.cover || video.coverUrl || '') : '');
-          if (src) items.push({ type: 'video', src, poster, text, meta });
-        });
+        appendTaobaoVideos(items, videos, text, meta);
         return;
       }
       comment.querySelectorAll('[class*="album--"] img').forEach((img) => {

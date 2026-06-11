@@ -44,9 +44,19 @@ test('媒体去重会归一化京东和淘宝同图不同尺寸地址', () => {
       type: 'image',
       src: 'https://gw.alicdn.com/imgextra/i1/123/O1CN01abc.jpg?x-oss-process=image/resize,w_800',
       text: '淘宝原图'
+    },
+    {
+      type: 'image',
+      src: 'https://gw.alicdn.com/bao/uploaded/i1/O1CN01crossHost.jpg',
+      text: '天猫 gw 图'
+    },
+    {
+      type: 'image',
+      src: 'https://img.alicdn.com/imgextra/i1/4611686018427380848/O1CN01crossHost.jpg',
+      text: '天猫 img 图'
     }
   ]);
-  assert.deepEqual(store.items().map(item => item.text), ['京东大图', '淘宝缩略图']);
+  assert.deepEqual(store.items().map(item => item.text), ['京东大图', '淘宝缩略图', '天猫 gw 图']);
 });
 
 test('媒体归一化去重时保留首次评价文字并升级到更高清图片', () => {
@@ -161,6 +171,45 @@ test('淘宝图集模式从 React reviews 提取真实图片而非占位缩略�
     poster: '',
     text: '实物漂亮',
     meta: '2026年5月15日 粉蓝款'
+  }]);
+});
+
+test('淘宝视频跳过 null 地址并使用可播放的源视频地址', () => {
+  const item = {
+    __reactFiber$gallery: {
+      return: {
+        return: {
+          memoizedProps: {
+            reviews: [{
+              skuText: '透明款',
+              reviewInfo: {
+                date: '2026年6月1日',
+                content: '视频能看清楚',
+                picList: [],
+                videoList: [{
+                  url: '//gw.alicdn.com/bao/uploaded/null',
+                  sourceVideoUrl: '//pingjia.alicdn.com/aus/wantu_pingjia/123/review-video.mp4',
+                  coverUrl: '//img.alicdn.com/imgextra/i1/video-cover.jpg'
+                }]
+              }
+            }]
+          }
+        }
+      }
+    }
+  };
+  const root = {
+    querySelectorAll(selector) {
+      if (selector.includes('commentsImgItem')) return [item];
+      return [];
+    }
+  };
+  assert.deepEqual(api.adapters.taobao.collectMedia(root), [{
+    type: 'video',
+    src: 'https://pingjia.alicdn.com/aus/wantu_pingjia/123/review-video.mp4',
+    poster: 'https://img.alicdn.com/imgextra/i1/video-cover.jpg',
+    text: '视频能看清楚',
+    meta: '2026年6月1日 透明款'
   }]);
 });
 
@@ -429,7 +478,7 @@ test('图片墙每次按网格列宽设置统一卡片高度避免京东行高�
 });
 
 test('图片墙大量媒体采用前后三屏缓冲虚拟化渲染', () => {
-  assert.match(source, /const VIRTUALIZE_THRESHOLD = 120/);
+  assert.match(source, /const VIRTUALIZE_THRESHOLD = 60/);
   assert.match(source, /const VIRTUAL_BUFFER_SCREENS = 3/);
   assert.match(source, /function getVirtualWindow/);
   assert.match(source, /gridTemplateColumns/);
@@ -565,6 +614,8 @@ test('预览图片区域支持滚轮切换上一张和下一张并防止连续�
 test('淘宝天猫评价内容使用同一套预览阅读排版', () => {
   assert.match(source, /function appendTaobaoReviewMedia/);
   assert.match(source, /items\.push\(\{ type: 'image', src: absoluteMediaUrl\(src\), poster: '', text, meta \}\)/);
+  assert.match(source, /function extractTaobaoVideo/);
+  assert.match(source, /function appendTaobaoVideos/);
   assert.match(source, /context\.appendChild\(makeElement\(doc, 'p', 'rmw-context-text', item\.text \|\|/);
   assert.match(source, /context\.appendChild\(makeElement\(doc, 'p', 'rmw-context-meta', item\.meta\)\)/);
 });
@@ -624,7 +675,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.11/);
+  assert.match(source, /@version\s+0\.5\.12/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
