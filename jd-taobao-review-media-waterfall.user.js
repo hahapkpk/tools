@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.14
+// @version      0.5.15
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -121,7 +121,7 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.14';
+  const SCRIPT_VERSION = '0.5.15';
   const WHEEL_SHIFT_COOLDOWN = 320;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;
@@ -132,6 +132,10 @@
   const VIRTUALIZE_THRESHOLD = 60;
   const VIRTUAL_BUFFER_SCREENS = 3;
   const THUMB_PRELOAD_AHEAD = 18;
+  const FAST_SCROLL_THRESHOLD = 1800;
+  const FAST_SCROLL_PRELOAD_AHEAD = 8;
+  const THUMB_RETRY_LIMIT = 2;
+  const THUMB_RETRY_DELAY = 450;
   const preloadedPreviewMedia = new Set();
   let lastPreviewWheelShift = 0;
   let slideshowTimer = null;
@@ -256,6 +260,57 @@
 
   function preloadPreviewAround(items, index) {
     [index, index + 1, index - 1, index + 2, index - 2].forEach((position) => preloadPreviewMedia(items[position]));
+  }
+
+  function getScrollMode(scrollSpeed) {
+    return Math.abs(Number(scrollSpeed) || 0) >= FAST_SCROLL_THRESHOLD ? 'fast' : 'normal';
+  }
+
+  function getThumbPreloadAhead(scrollMode) {
+    return scrollMode === 'fast' ? FAST_SCROLL_PRELOAD_AHEAD : THUMB_PRELOAD_AHEAD;
+  }
+
+  function shouldEagerLoadThumb(index, windowInfo, scrollMode) {
+    if (!windowInfo.virtualized) return false;
+    const eagerEnd = windowInfo.start + Math.max(windowInfo.columns || 1, 1) * (scrollMode === 'fast' ? 2 : 4);
+    return index < eagerEnd;
+  }
+
+  function buildThumbCandidates(item) {
+    return [item?.poster, item?.src].filter(Boolean).filter((src, index, list) => list.indexOf(src) === index);
+  }
+
+  function retryUrl(url, retryCount) {
+    if (!url) return '';
+    const separator = url.includes('?') ? '&' : '?';
+    return `${url}${separator}rmw_retry=${retryCount}`;
+  }
+
+  function bindMediaLoadState(media, card, item, onThumbFailure) {
+    if (!media || !card) return;
+    const loadedEvent = String(media.tagName || '').toUpperCase() === 'VIDEO' ? 'loadedmetadata' : 'load';
+    let retryCount = 0;
+    const candidates = buildThumbCandidates(item);
+    if (media.complete || media.readyState >= 1) {
+      card.classList.add('is-loaded');
+      card.classList.remove('is-failed');
+    }
+    media.addEventListener(loadedEvent, () => {
+      card.classList.add('is-loaded');
+      card.classList.remove('is-failed');
+    }, { once: true });
+    media.addEventListener('error', () => {
+      if (retryCount < THUMB_RETRY_LIMIT) {
+        retryCount += 1;
+        const candidate = candidates[Math.min(retryCount, candidates.length - 1)] || candidates[0];
+        root.setTimeout(() => {
+          if (candidate) media.src = retryCount >= candidates.length ? retryUrl(candidate, retryCount) : candidate;
+        }, THUMB_RETRY_DELAY * retryCount);
+        return;
+      }
+      card.classList.add('is-failed');
+      onThumbFailure?.();
+    });
   }
 
   function absoluteMediaUrl(url) {
@@ -804,10 +859,16 @@
 .rmw-size-medium { grid-template-columns:repeat(5,minmax(0,1fr)) !important; }
 .rmw-size-large { grid-template-columns:repeat(4,minmax(0,1fr)) !important; }
 .rmw-card { position:relative; height:var(--rmw-card-size, 180px); contain:paint; border-radius:18px; overflow:hidden; background:#f1f3f4; cursor:zoom-in; outline:none; transition:box-shadow .16s ease, transform .16s ease; }
+.rmw-card::before { content:''; position:absolute; inset:0; z-index:1; background:linear-gradient(100deg,#f1f3f4 0%,#f8fafd 42%,#edf2f7 74%); background-size:220% 100%; animation:rmw-skeleton 1.15s ease-in-out infinite; opacity:1; transition:opacity .18s ease; pointer-events:none; }
+.rmw-card::after { content:'加载失败'; position:absolute; inset:auto 12px 12px; z-index:3; display:none; padding:6px 10px; border-radius:999px; background:rgba(32,33,36,.72); color:#fff; font-size:12px; text-align:center; pointer-events:none; }
+.rmw-card.is-loaded::before { opacity:0; animation:none; }
+.rmw-card.is-failed::after { display:block; }
+@keyframes rmw-skeleton { 0% { background-position:120% 0; } 100% { background-position:-120% 0; } }
 .rmw-virtual-spacer { grid-column:1 / -1; height:0; min-height:0; pointer-events:none; visibility:hidden; }
 .rmw-card:focus-visible { box-shadow:0 0 0 3px #1a73e8; }
 .rmw-card.rmw-current { box-shadow:0 0 0 4px #1a73e8; transform:scale(.985); }
-.rmw-card img, .rmw-card video { position:absolute; inset:0; display:block; width:100%; height:100%; object-fit:cover; }
+.rmw-card img, .rmw-card video { position:absolute; inset:0; display:block; width:100%; height:100%; object-fit:cover; opacity:0; transition:opacity .18s ease; }
+.rmw-card.is-loaded img, .rmw-card.is-loaded video { opacity:1; }
 .rmw-play { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); border-radius:50%; width:50px; height:50px; display:grid; place-items:center; background:rgba(0,0,0,.58); color:white; font-size:23px; }
 .rmw-status { grid-column:1 / -1; padding:26px 16px; text-align:center; color:#777; font-size:14px; }
 .rmw-retry { margin-left:12px; height:32px; padding:0 15px; border:1px solid #e1251b; border-radius:16px; background:#fff; color:#e1251b; cursor:pointer; }
@@ -872,6 +933,7 @@
       media.src = item.src;
     }
     if (item.type === 'video') {
+      media.preload = 'auto';
       media.controls = true;
       media.autoplay = true;
       if (item.poster) media.poster = item.poster;
@@ -1085,8 +1147,8 @@
     };
   }
 
-  function preloadVisibleThumbs(items, start, end) {
-    const preloadEnd = Math.min(items.length, end + THUMB_PRELOAD_AHEAD);
+  function preloadVisibleThumbs(items, start, end, scrollMode = 'normal') {
+    const preloadEnd = Math.min(items.length, end + getThumbPreloadAhead(scrollMode));
     for (let index = start; index < preloadEnd; index += 1) {
       preloadPreviewMedia(items[index]);
     }
@@ -1128,7 +1190,7 @@
     return `已加载 ${total} 项，继续向下滚动以加载更多`;
   }
 
-  function virtualRenderSignature(grid, items, windowInfo, loadingState, highlightKey, emptyMessage) {
+  function virtualRenderSignature(grid, items, windowInfo, loadingState, highlightKey, emptyMessage, scrollMode) {
     const first = items[windowInfo.start]?.src || '';
     const last = items[Math.max(windowInfo.start, windowInfo.end - 1)]?.src || '';
     return [
@@ -1138,6 +1200,7 @@
       items.length,
       windowInfo.topRows || 0,
       windowInfo.bottomRows || 0,
+      scrollMode,
       loadingState,
       highlightKey,
       emptyMessage,
@@ -1146,12 +1209,13 @@
     ].join('|');
   }
 
-  function renderCards(doc, grid, state, modal, items, emptyMessage, session, onReturn, onRetry, highlightKey, onDeselect) {
+  function renderCards(doc, grid, state, modal, items, emptyMessage, session, onReturn, onRetry, highlightKey, onDeselect, scrollSpeed = 0, onThumbFailure) {
     let windowInfo = items.length ? getVirtualWindow(grid, items.length) : { start: 0, end: items.length, virtualized: false };
     if (items.length && !windowInfo.virtualized) getGridMetrics(grid);
     const loadingState = session.snapshot().loadingState;
+    const scrollMode = getScrollMode(scrollSpeed);
     setVirtualWindowState(grid, windowInfo);
-    const signature = virtualRenderSignature(grid, items, windowInfo, loadingState, highlightKey, emptyMessage);
+    const signature = virtualRenderSignature(grid, items, windowInfo, loadingState, highlightKey, emptyMessage, scrollMode);
     if (grid.dataset.renderSignature === signature) return;
     const previousScrollTop = grid.scrollTop;
     grid.dataset.renderSignature = signature;
@@ -1159,7 +1223,7 @@
     if (!items.length) {
       grid.appendChild(makeElement(doc, 'div', 'rmw-status', emptyMessage));
     } else {
-      preloadVisibleThumbs(items, windowInfo.start, windowInfo.end);
+      preloadVisibleThumbs(items, windowInfo.start, windowInfo.end, scrollMode);
       appendVirtualSpacer(doc, grid, Number(grid.dataset.virtualTop) || 0, 'top');
       items.slice(windowInfo.start, windowInfo.end).forEach((item, offset) => {
       const index = windowInfo.start + offset;
@@ -1176,10 +1240,11 @@
         media.playsInline = true;
       } else {
         media.src = item.poster || item.src;
-        media.loading = windowInfo.virtualized ? 'eager' : 'lazy';
+        media.loading = shouldEagerLoadThumb(index, windowInfo, scrollMode) ? 'eager' : 'lazy';
         media.decoding = 'async';
         media.alt = '用户评价图片';
       }
+      bindMediaLoadState(media, card, item, onThumbFailure);
       card.appendChild(media);
       if (item.type === 'video') card.appendChild(makeElement(doc, 'span', 'rmw-play', '▶'));
       function openPreview() {
@@ -1305,6 +1370,10 @@
     let autoLoadIdleRounds = 0;
     let userRequestedMore = false;
     let virtualRenderFrame = null;
+    let scrollSpeed = 0;
+    let lastScrollTop = 0;
+    let lastScrollTime = Date.now();
+    const mediaStats = { lastAdded: 0, thumbFailures: 0 };
     function revealCurrentCard() {
       modal.focus();
       const key = wallSession.snapshot().previewKey;
@@ -1328,18 +1397,33 @@
       const sessionSnapshot = wallSession.snapshot();
       grid.className = `rmw-size-${sessionSnapshot.cardSize}`;
       const visible = filterMedia(controller.items(), sessionSnapshot.mediaFilter);
-      loaded.textContent = `已收集 ${controller.items().length} 项 / 当前显示 ${visible.length} 项`;
+      updateLoadedText(sessionSnapshot, visible.length);
       filterGroup.querySelectorAll('.rmw-filter').forEach((button) => {
         button.classList.toggle('is-active', button.dataset.value === sessionSnapshot.mediaFilter);
       });
       sizeGroup.querySelectorAll('.rmw-size').forEach((button) => {
         button.classList.toggle('is-active', button.dataset.value === sessionSnapshot.cardSize);
       });
-      renderCards(doc, grid, state, modal, visible, emptyMessage, wallSession, revealCurrentCard, requestMore, highlightKey, deselectCurrentCard);
+      renderCards(doc, grid, state, modal, visible, emptyMessage, wallSession, revealCurrentCard, requestMore, highlightKey, deselectCurrentCard, scrollSpeed, onThumbFailure);
       if (!restoredScroll) {
         grid.scrollTop = sessionSnapshot.scrollTop;
         restoredScroll = true;
       }
+    }
+    function updateLoadedText(sessionSnapshot, visibleCount) {
+      const statusText = {
+        idle: '空闲',
+        loading: '加载中',
+        exhausted: '已到底',
+        error: '加载失败'
+      }[sessionSnapshot.loadingState] || '空闲';
+      const failureText = mediaStats.thumbFailures ? ` / 失败 ${mediaStats.thumbFailures} 项` : '';
+      loaded.textContent = `已收集 ${controller.items().length} 项 / 当前显示 ${visibleCount} 项 / 最近新增 ${mediaStats.lastAdded} 项 / ${statusText}${failureText}`;
+    }
+    function onThumbFailure() {
+      mediaStats.thumbFailures += 1;
+      const visible = filterMedia(controller.items(), wallSession.snapshot().mediaFilter);
+      updateLoadedText(wallSession.snapshot(), visible.length);
     }
     function scheduleVirtualRender() {
       if (controller.items().length <= VIRTUALIZE_THRESHOLD || virtualRenderFrame) return;
@@ -1353,6 +1437,7 @@
       stopCapture = adapter.observeResponses((items) => {
         const before = controller.items().length;
         controller.append(items);
+        mediaStats.lastAdded = Math.max(0, controller.items().length - before);
         wallSession.finishLoad(controller.items().length > before);
         renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
         if (controller.items().length > before && userRequestedMore && isGridNearBottom()) scheduleAutoLoad(false);
@@ -1370,6 +1455,7 @@
       const before = controller.items().length;
       if (reset) controller.replace(observed);
       else controller.append(observed);
+      mediaStats.lastAdded = Math.max(0, controller.items().length - before);
       if (wallSession.snapshot().loadingState === 'loading') {
         wallSession.finishLoad(controller.items().length > before);
       }
@@ -1487,6 +1573,11 @@
       scheduleAutoLoad(false);
     }
     grid.addEventListener('scroll', () => {
+      const now = Date.now();
+      const elapsed = Math.max(1, now - lastScrollTime);
+      scrollSpeed = Math.abs(grid.scrollTop - lastScrollTop) / elapsed * 1000;
+      lastScrollTop = grid.scrollTop;
+      lastScrollTime = now;
       wallSession.rememberView({ scrollTop: grid.scrollTop, previewKey: wallSession.snapshot().previewKey });
       scheduleVirtualRender();
       if (isGridNearBottom()) requestMore();

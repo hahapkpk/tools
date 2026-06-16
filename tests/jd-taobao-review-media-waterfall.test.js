@@ -497,7 +497,6 @@ test('图片墙采用规则方形图集并仅在内容区纵向滚动', () => {
   assert.match(source, /\.rmw-card\s*\{[^}]*height:var\(--rmw-card-size, 180px\);[^}]*contain:paint;/s);
   assert.match(source, /\.rmw-card img,\s*\.rmw-card video\s*\{[^}]*position:absolute;[^}]*inset:0;[^}]*height:100%;[^}]*object-fit:cover;/s);
   assert.doesNotMatch(source, /aspect-ratio:1 \/ 1/);
-  assert.doesNotMatch(source, /\.rmw-card::before/);
   assert.doesNotMatch(source, /column-count:/);
 });
 
@@ -549,8 +548,8 @@ test('图片墙滚动在虚拟窗口未变化时不清空重建卡片以避免�
 test('图片墙只预热视口附近缩略图并在预览时预热前后两张', () => {
   assert.match(source, /const THUMB_PRELOAD_AHEAD = 18/);
   assert.match(source, /function preloadVisibleThumbs/);
-  assert.match(source, /preloadVisibleThumbs\(items, windowInfo\.start, windowInfo\.end\)/);
-  assert.match(source, /media\.loading = windowInfo\.virtualized \? 'eager' : 'lazy'/);
+  assert.match(source, /preloadVisibleThumbs\(items, windowInfo\.start, windowInfo\.end, scrollMode\)/);
+  assert.match(source, /media\.loading = shouldEagerLoadThumb\(index, windowInfo, scrollMode\) \? 'eager' : 'lazy'/);
   assert.match(source, /\[index, index \+ 1, index - 1, index \+ 2, index - 2\]/);
   assert.doesNotMatch(source, /items\.forEach[\s\S]{0,400}preloadPreviewMedia\(item\)/);
 });
@@ -561,6 +560,49 @@ test('视频无封面时卡片使用 video 元素读取首帧避免 mp4 被当�
   assert.match(source, /media\.preload = 'metadata'/);
   assert.match(source, /media\.muted = true/);
   assert.match(source, /media\.playsInline = true/);
+});
+
+test('图片卡片显示骨架占位并在加载完成后淡入', () => {
+  assert.match(source, /\.rmw-card::before\s*\{/);
+  assert.match(source, /@keyframes rmw-skeleton/);
+  assert.match(source, /\.rmw-card\.is-loaded::before/);
+  assert.match(source, /\.rmw-card\.is-failed::after/);
+  assert.match(source, /bindMediaLoadState\(media, card, item, onThumbFailure\)/);
+});
+
+test('缩略图加载失败会有限重试并回退到原图地址', () => {
+  assert.match(source, /const THUMB_RETRY_LIMIT = 2/);
+  assert.match(source, /const THUMB_RETRY_DELAY = 450/);
+  assert.match(source, /function buildThumbCandidates/);
+  assert.match(source, /function bindMediaLoadState/);
+  assert.match(source, /media\.addEventListener\('error'/);
+  assert.match(source, /retryCount < THUMB_RETRY_LIMIT/);
+  assert.match(source, /card\.classList\.add\('is-failed'\)/);
+});
+
+test('图片墙根据滚动速度调整缩略图预取距离和加载优先级', () => {
+  assert.match(source, /const FAST_SCROLL_THRESHOLD = 1800/);
+  assert.match(source, /function getScrollMode/);
+  assert.match(source, /function getThumbPreloadAhead/);
+  assert.match(source, /function shouldEagerLoadThumb/);
+  assert.match(source, /let scrollSpeed = 0/);
+  assert.match(source, /scrollSpeed = Math\.abs\(grid\.scrollTop - lastScrollTop\)/);
+  assert.match(source, /getScrollMode\(scrollSpeed\)/);
+});
+
+test('视频预览才加载完整播放源，卡片阶段保持轻量 metadata', () => {
+  assert.match(source, /media\.preload = 'metadata'/);
+  assert.match(source, /if \(item\.type === 'video'\) \{[\s\S]*media\.preload = 'auto'/);
+  assert.match(source, /media\.src = item\.src/);
+  assert.doesNotMatch(source, /useVideoThumb[\s\S]{0,160}media\.preload = 'auto'/);
+});
+
+test('工具栏显示更细的加载进度、最近新增和缩略图失败数量', () => {
+  assert.match(source, /const mediaStats = \{ lastAdded: 0, thumbFailures: 0 \}/);
+  assert.match(source, /function updateLoadedText/);
+  assert.match(source, /最近新增 \$\{mediaStats\.lastAdded\} 项/);
+  assert.match(source, /失败 \$\{mediaStats\.thumbFailures\} 项/);
+  assert.match(source, /onThumbFailure/);
 });
 
 test('图片墙包含类型尺寸控制与键盘可达的卡片', () => {
@@ -720,7 +762,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.14/);
+  assert.match(source, /@version\s+0\.5\.15/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
