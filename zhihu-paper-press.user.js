@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         知乎 · Paper Press 阅读模式
 // @namespace    https://github.com/hahapkpk/tools
-// @version      2.1.0
+// @version      2.1.1
 // @description  知乎专栏 → 杂志风格沉浸阅读：悬浮目录 · 代码高亮 · 图片灯箱 · 深色模式 · 阅读进度 · 字号/宽度调节 · 代码复制
 // @author       hahapkpk
 // @match        https://zhuanlan.zhihu.com/p/*
@@ -231,7 +231,7 @@
       '#pp-lightbox .pp-lb-close:hover{background:rgba(255,255,255,0.2);}',
 
       /* ── 悬浮目录 TOC ── */
-      '#pp-toc{position:fixed;right:16px;top:50%;transform:translateY(-50%);z-index:9998;font-family:' + FONTS.body + ';max-width:180px;}',,
+      '#pp-toc{position:fixed;right:16px;top:50%;transform:translateY(-50%);z-index:9998;font-family:' + FONTS.body + ';max-width:180px;}',
       '#pp-toc a{display:block;padding:3px 12px;font-size:12px;color:' + T.textFaint + ';text-decoration:none!important;border-left:2px solid transparent;transition:all 0.2s;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
       '#pp-toc a:hover,#pp-toc a.active{color:' + T.accent + ';border-left-color:' + T.accent + ';}',
       '#pp-toc a.pp-toc-h2{padding-left:12px;font-weight:500;}',
@@ -498,7 +498,9 @@
 
     // 更新 grain / vignette
     var T = THEMES[mode];
-    document.body.style.background = T.shell;
+    if (document.body) {
+      document.body.style.background = T.shell;
+    }
 
     // 重建面板以更新颜色
     rebuildPanel();
