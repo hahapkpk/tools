@@ -174,6 +174,40 @@ test('淘宝图集模式从 React reviews 提取真实图片而非占位缩略�
   }]);
 });
 
+test('淘宝图集模式会跳过未挂载 reviews 的首个节点继续查找后续节点', () => {
+  const emptyItem = {};
+  const item = {
+    __reactFiber$gallery: {
+      return: {
+        memoizedProps: {
+          reviews: [{
+            skuText: '黑色',
+            reviewInfo: {
+              date: '2026年6月16日',
+              content: '后续节点有真实图集',
+              picList: ['//img.alicdn.com/imgextra/gallery-second-real.jpg'],
+              videoList: []
+            }
+          }]
+        }
+      }
+    }
+  };
+  const root = {
+    querySelectorAll(selector) {
+      if (selector.includes('commentsImgItem')) return [emptyItem, item];
+      return [];
+    }
+  };
+  assert.deepEqual(api.adapters.taobao.collectMedia(root), [{
+    type: 'image',
+    src: 'https://img.alicdn.com/imgextra/gallery-second-real.jpg',
+    poster: '',
+    text: '后续节点有真实图集',
+    meta: '2026年6月16日 黑色'
+  }]);
+});
+
 test('淘宝视频跳过 null 地址并使用可播放的源视频地址', () => {
   const item = {
     __reactFiber$gallery: {
@@ -521,6 +555,14 @@ test('图片墙只预热视口附近缩略图并在预览时预热前后两张',
   assert.doesNotMatch(source, /items\.forEach[\s\S]{0,400}preloadPreviewMedia\(item\)/);
 });
 
+test('视频无封面时卡片使用 video 元素读取首帧避免 mp4 被当图片加载为空白', () => {
+  assert.match(source, /const useVideoThumb = item\.type === 'video' && !item\.poster/);
+  assert.match(source, /doc\.createElement\(useVideoThumb \? 'video' : 'img'\)/);
+  assert.match(source, /media\.preload = 'metadata'/);
+  assert.match(source, /media\.muted = true/);
+  assert.match(source, /media\.playsInline = true/);
+});
+
 test('图片墙包含类型尺寸控制与键盘可达的卡片', () => {
   assert.match(source, /rmw-filter/);
   assert.match(source, /rmw-size/);
@@ -678,7 +720,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.13/);
+  assert.match(source, /@version\s+0\.5\.14/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });

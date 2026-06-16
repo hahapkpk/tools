@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.13
+// @version      0.5.14
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -121,7 +121,7 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.13';
+  const SCRIPT_VERSION = '0.5.14';
   const WHEEL_SHIFT_COOLDOWN = 320;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;
@@ -331,8 +331,10 @@
 
   function collectFromTaobaoGallery(nativeRoot) {
     if (!nativeRoot) return [];
-    const item = nativeRoot.querySelectorAll('[class*="commentsImgItem--"]')[0];
-    const props = getReactProps(item, (value) => Array.isArray(value.reviews));
+    const galleryNodes = Array.from(nativeRoot.querySelectorAll('[class*="commentsImgItem--"]'));
+    const props = galleryNodes
+      .map((node) => getReactProps(node, (value) => Array.isArray(value.reviews)))
+      .find(Boolean);
     if (!props) return [];
     const items = [];
     props.reviews.forEach((review) => appendTaobaoReviewMedia(items, review));
@@ -1165,11 +1167,19 @@
       card.tabIndex = 0;
       card.dataset.mediaKey = item.src;
       if (item.src === highlightKey) card.classList.add('rmw-current');
-      const media = doc.createElement('img');
-      media.src = item.poster || item.src;
-      media.loading = windowInfo.virtualized ? 'eager' : 'lazy';
-      media.decoding = 'async';
-      media.alt = '用户评价图片';
+      const useVideoThumb = item.type === 'video' && !item.poster;
+      const media = doc.createElement(useVideoThumb ? 'video' : 'img');
+      if (useVideoThumb) {
+        media.src = item.src;
+        media.muted = true;
+        media.preload = 'metadata';
+        media.playsInline = true;
+      } else {
+        media.src = item.poster || item.src;
+        media.loading = windowInfo.virtualized ? 'eager' : 'lazy';
+        media.decoding = 'async';
+        media.alt = '用户评价图片';
+      }
       card.appendChild(media);
       if (item.type === 'video') card.appendChild(makeElement(doc, 'span', 'rmw-play', '▶'));
       function openPreview() {
