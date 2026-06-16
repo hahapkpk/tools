@@ -482,15 +482,16 @@ test('图片墙大量媒体采用前后三屏缓冲虚拟化渲染', () => {
   assert.match(source, /const VIRTUAL_BUFFER_SCREENS = 3/);
   assert.match(source, /function getVirtualWindow/);
   assert.match(source, /gridTemplateColumns/);
-  assert.match(source, /function setVirtualPadding/);
-  assert.match(source, /--rmw-virtual-top/);
-  assert.match(source, /--rmw-virtual-bottom/);
+  assert.match(source, /function setVirtualWindowState/);
+  assert.match(source, /function appendVirtualSpacer/);
+  assert.match(source, /rmw-virtual-spacer/);
   assert.match(source, /const shouldShowStatus = !windowInfo\.virtualized \|\| windowInfo\.end >= items\.length \|\| loadingState === 'error'/);
   assert.match(source, /const chunkRows = Math\.max\(1, Math\.floor\(visibleRows \/ 2\)\)/);
   assert.match(source, /const bufferRows = visibleRows \* VIRTUAL_BUFFER_SCREENS/);
   assert.match(source, /const previousStartRow = Number\(grid\.dataset\.virtualStartRow\)/);
   assert.match(source, /currentRow >= previousStartRow \+ guardRows/);
-  assert.doesNotMatch(source, /rmw-virtual-spacer/);
+  assert.doesNotMatch(source, /--rmw-virtual-top/);
+  assert.doesNotMatch(source, /--rmw-virtual-bottom/);
 });
 
 test('虚拟化窗口会跟随图片墙滚动节流刷新', () => {
@@ -504,9 +505,11 @@ test('虚拟化窗口会跟随图片墙滚动节流刷新', () => {
 test('图片墙滚动在虚拟窗口未变化时不清空重建卡片以避免闪烁', () => {
   assert.match(source, /function virtualRenderSignature/);
   assert.match(source, /grid\.dataset\.renderSignature === signature/);
-  assert.match(source, /setVirtualPadding\(grid, windowInfo\);[\s\S]*if \(grid\.dataset\.renderSignature === signature\) return;/);
+  assert.match(source, /setVirtualWindowState\(grid, windowInfo\);[\s\S]*if \(grid\.dataset\.renderSignature === signature\) return;/);
   assert.match(source, /if \(grid\.dataset\.renderSignature === signature\) return;/);
   assert.match(source, /grid\.dataset\.renderSignature = signature;[\s\S]*grid\.textContent = '';/);
+  assert.match(source, /const previousScrollTop = grid\.scrollTop/);
+  assert.match(source, /grid\.scrollTop = previousScrollTop/);
 });
 
 test('图片墙只预热视口附近缩略图并在预览时预热前后两张', () => {
@@ -675,7 +678,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.12/);
+  assert.match(source, /@version\s+0\.5\.13/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
@@ -824,6 +827,8 @@ test('图片墙滚动接近底部时按需懒加载原生评价列表补齐更�
 test('按需懒加载新增内容后只有仍接近图片墙底部才继续下一批', () => {
   assert.match(source, /let userRequestedMore = false/);
   assert.match(source, /userRequestedMore = true/);
+  assert.match(source, /wallSession\.snapshot\(\)\.loadingState === 'exhausted'/);
+  assert.match(source, /wallSession\.retryLoad\(\)/);
   assert.match(source, /if \(\(moved \|\| added\) && userRequestedMore && isGridNearBottom\(\) && autoLoadRounds < AUTO_LOAD_MAX_ROUNDS/);
   assert.match(source, /controller\.items\(\)\.length > before && userRequestedMore && isGridNearBottom\(\)/);
 });

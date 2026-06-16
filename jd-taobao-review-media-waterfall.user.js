@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.12
+// @version      0.5.13
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -121,7 +121,7 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.12';
+  const SCRIPT_VERSION = '0.5.13';
   const WHEEL_SHIFT_COOLDOWN = 320;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;
@@ -797,11 +797,12 @@
 .rmw-loaded { margin-left:auto; color:#5f6368; font-size:13px; white-space:nowrap; }
 .rmw-sync { color:#1a73e8; }
 .rmw-close { width:36px; padding:0; border-color:transparent; color:#5f6368; font-size:24px; line-height:30px; }
-#${IDS.grid} { flex:1; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); align-content:start; gap:14px; overflow-y:auto; overflow-x:hidden; overflow-anchor:none; padding:calc(18px + var(--rmw-virtual-top, 0px)) 20px calc(30px + var(--rmw-virtual-bottom, 0px)); background:#fff; }
+#${IDS.grid} { flex:1; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); align-content:start; gap:14px; overflow-y:auto; overflow-x:hidden; overflow-anchor:none; padding:18px 20px 30px; background:#fff; }
 .rmw-size-small { grid-template-columns:repeat(6,minmax(0,1fr)) !important; }
 .rmw-size-medium { grid-template-columns:repeat(5,minmax(0,1fr)) !important; }
 .rmw-size-large { grid-template-columns:repeat(4,minmax(0,1fr)) !important; }
 .rmw-card { position:relative; height:var(--rmw-card-size, 180px); contain:paint; border-radius:18px; overflow:hidden; background:#f1f3f4; cursor:zoom-in; outline:none; transition:box-shadow .16s ease, transform .16s ease; }
+.rmw-virtual-spacer { grid-column:1 / -1; height:0; min-height:0; pointer-events:none; visibility:hidden; }
 .rmw-card:focus-visible { box-shadow:0 0 0 3px #1a73e8; }
 .rmw-card.rmw-current { box-shadow:0 0 0 4px #1a73e8; transform:scale(.985); }
 .rmw-card img, .rmw-card video { position:absolute; inset:0; display:block; width:100%; height:100%; object-fit:cover; }
@@ -1056,6 +1057,7 @@
         topRows: previousStartRow,
         bottomRows: Math.max(0, lastRow - previousEndRow),
         rowHeight: metrics.rowHeight,
+        gap: metrics.gap,
         columns: metrics.columns,
         startRow: previousStartRow,
         endRow: previousEndRow,
@@ -1073,6 +1075,7 @@
       topRows: firstRow,
       bottomRows: Math.max(0, lastRow - endRow),
       rowHeight: metrics.rowHeight,
+      gap: metrics.gap,
       columns: metrics.columns,
       startRow: firstRow,
       endRow,
@@ -1087,21 +1090,32 @@
     }
   }
 
-  function setVirtualPadding(grid, windowInfo) {
+  function setVirtualWindowState(grid, windowInfo) {
     const rowHeight = Math.max(0, windowInfo.rowHeight || 0);
-    const top = windowInfo.virtualized ? Math.round((windowInfo.topRows || 0) * rowHeight) : 0;
-    const bottom = windowInfo.virtualized ? Math.round((windowInfo.bottomRows || 0) * rowHeight) : 0;
-    grid.style.setProperty('--rmw-virtual-top', `${top}px`);
-    grid.style.setProperty('--rmw-virtual-bottom', `${bottom}px`);
+    const gap = Math.max(0, windowInfo.gap || 0);
+    const top = windowInfo.virtualized ? Math.max(0, Math.round((windowInfo.topRows || 0) * rowHeight - gap)) : 0;
+    const bottom = windowInfo.virtualized ? Math.max(0, Math.round((windowInfo.bottomRows || 0) * rowHeight - gap)) : 0;
     if (windowInfo.virtualized) {
       grid.dataset.virtualStartRow = String(windowInfo.startRow || 0);
       grid.dataset.virtualEndRow = String(windowInfo.endRow || 0);
       grid.dataset.virtualColumns = String(windowInfo.columns || 0);
+      grid.dataset.virtualTop = String(top);
+      grid.dataset.virtualBottom = String(bottom);
     } else {
       delete grid.dataset.virtualStartRow;
       delete grid.dataset.virtualEndRow;
       delete grid.dataset.virtualColumns;
+      delete grid.dataset.virtualTop;
+      delete grid.dataset.virtualBottom;
     }
+  }
+
+  function appendVirtualSpacer(doc, grid, height, position) {
+    if (!height) return;
+    const spacer = makeElement(doc, 'div', 'rmw-virtual-spacer', '');
+    spacer.dataset.position = position;
+    spacer.style.height = `${height}px`;
+    grid.appendChild(spacer);
   }
 
   function statusMessage(session, total) {
@@ -1119,6 +1133,9 @@
       grid.className,
       windowInfo.start,
       windowInfo.end,
+      items.length,
+      windowInfo.topRows || 0,
+      windowInfo.bottomRows || 0,
       loadingState,
       highlightKey,
       emptyMessage,
@@ -1131,15 +1148,17 @@
     let windowInfo = items.length ? getVirtualWindow(grid, items.length) : { start: 0, end: items.length, virtualized: false };
     if (items.length && !windowInfo.virtualized) getGridMetrics(grid);
     const loadingState = session.snapshot().loadingState;
-    setVirtualPadding(grid, windowInfo);
+    setVirtualWindowState(grid, windowInfo);
     const signature = virtualRenderSignature(grid, items, windowInfo, loadingState, highlightKey, emptyMessage);
     if (grid.dataset.renderSignature === signature) return;
+    const previousScrollTop = grid.scrollTop;
     grid.dataset.renderSignature = signature;
     grid.textContent = '';
     if (!items.length) {
       grid.appendChild(makeElement(doc, 'div', 'rmw-status', emptyMessage));
     } else {
       preloadVisibleThumbs(items, windowInfo.start, windowInfo.end);
+      appendVirtualSpacer(doc, grid, Number(grid.dataset.virtualTop) || 0, 'top');
       items.slice(windowInfo.start, windowInfo.end).forEach((item, offset) => {
       const index = windowInfo.start + offset;
       const card = makeElement(doc, 'div', 'rmw-card', '');
@@ -1172,6 +1191,7 @@
       });
       grid.appendChild(card);
     });
+      appendVirtualSpacer(doc, grid, Number(grid.dataset.virtualBottom) || 0, 'bottom');
     }
     const shouldShowStatus = !windowInfo.virtualized || windowInfo.end >= items.length || loadingState === 'error';
     if (shouldShowStatus) {
@@ -1183,6 +1203,9 @@
         status.appendChild(retry);
       }
       grid.appendChild(status);
+    }
+    if (windowInfo.virtualized && Math.abs(grid.scrollTop - previousScrollTop) > 1) {
+      grid.scrollTop = previousScrollTop;
     }
   }
 
@@ -1447,6 +1470,10 @@
     function requestMore() {
       if (!nativeRoot) return;
       userRequestedMore = true;
+      if (wallSession.snapshot().loadingState === 'exhausted') {
+        wallSession.retryLoad();
+        autoLoadIdleRounds = 0;
+      }
       scheduleAutoLoad(false);
     }
     grid.addEventListener('scroll', () => {
