@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         知乎 · Paper Press 阅读模式
 // @namespace    https://github.com/hahapkpk/tools
-// @version      2.0.0
+// @version      2.0.1
 // @description  知乎专栏 → 杂志风格沉浸阅读：悬浮目录 · 代码高亮 · 图片灯箱 · 深色模式 · 阅读进度 · 字号/宽度调节 · 代码复制
 // @author       hahapkpk
 // @match        https://zhuanlan.zhihu.com/p/*
@@ -218,7 +218,7 @@
 
       /* ── 悬浮工具栏 ── */
       '#pp-toolbar{position:fixed;bottom:28px;right:28px;z-index:9999;display:flex;flex-direction:column;gap:8px;font-family:' + FONTS.body + ';}',
-      '#pp-toolbar button{width:40px;height:40px;border-radius:50%;border:1px solid ' + T.rule + ';background:' + T.surface2 + ';color:' + T.textMute + ';cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:all 0.2s;backdrop-filter:blur(8px);}',
+      '#pp-toolbar button{position:relative;width:40px;height:40px;border-radius:50%;border:1px solid ' + T.rule + ';background:' + T.surface2 + ';color:' + T.textMute + ';cursor:pointer;font-size:15px;font-weight:600;display:flex;align-items:center;justify-content:center;transition:all 0.2s;backdrop-filter:blur(8px);line-height:1;}',
       '#pp-toolbar button:hover{background:' + T.accentSoft + ';color:' + T.accent + ';border-color:' + T.accent + ';}',
       '#pp-toolbar button.active{background:' + T.accent + ';color:#fff;border-color:' + T.accent + ';}',
       '#pp-toolbar .pp-tooltip{position:absolute;right:52px;white-space:nowrap;background:' + T.surface3 + ';color:' + T.text + ';padding:4px 10px;border-radius:4px;font-size:12px;opacity:0;pointer-events:none;transition:opacity 0.2s;}',
@@ -304,25 +304,26 @@
     }
 
     // 字号调节
-    var fsDown = btn('A⁻', '缩小字号', function () {
+    var fsDown = btn('A−', '缩小字号', function () {
       var cur = PREF.fontSize;
       if (cur > 14) { PREF.fontSize = cur - 2; applyFontSize(); }
     });
-    var fsUp = btn('A⁺', '增大字号', function () {
+    var fsUp = btn('A+', '增大字号', function () {
       var cur = PREF.fontSize;
       if (cur < 24) { PREF.fontSize = cur + 2; applyFontSize(); }
     });
 
     // 宽度切换
-    var widthLabel = { narrow: '窄', standard: '标', wide: '宽' };
+    var widthIcons = { narrow: 'N', standard: 'S', wide: 'W' };
+    var widthTitles = { narrow: '窄栏', standard: '标准', wide: '宽栏' };
     var curW = PREF.width;
-    var widBtn = btn(widthLabel[curW] || '标', '切换宽度', function () {
+    var widBtn = btn(widthIcons[curW] || 'S', '宽度：' + widthTitles[curW], function () {
       var order = ['narrow', 'standard', 'wide'];
       var idx = order.indexOf(PREF.width);
       var next = order[(idx + 1) % 3];
       PREF.width = next;
-      widBtn.textContent = widthLabel[next];
-      widBtn.querySelector('.pp-tooltip').textContent = '宽度：' + ({ narrow: '窄栏', standard: '标准', wide: '宽栏' })[next];
+      widBtn.childNodes[0].textContent = widthIcons[next];
+      widBtn.querySelector('.pp-tooltip').textContent = '宽度：' + widthTitles[next];
       applyWidth();
     });
 
@@ -330,12 +331,13 @@
     var dmBtn = btn(PREF.mode === 'dark' ? '☀' : '☾', '切换主题', function () {
       var next = PREF.mode === 'light' ? 'dark' : 'light';
       PREF.mode = next;
-      dmBtn.innerHTML = (next === 'dark' ? '☀' : '☾') + '<span class="pp-tooltip">切换主题</span>';
+      dmBtn.childNodes[0].textContent = (next === 'dark' ? '☀' : '☾');
+      dmBtn.querySelector('.pp-tooltip').textContent = (next === 'dark' ? '日间模式' : '夜间模式');
       applyTheme(next);
     });
 
     // 回顶
-    var topBtn = btn('↑', '回到顶部', function () {
+    var topBtn = btn('▲', '回到顶部', function () {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     });
 
