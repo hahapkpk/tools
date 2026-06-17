@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      3.3.28
+// @version      4.0.0
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -16,11 +16,8 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_registerMenuCommand
-// @grant        GM_xmlhttpRequest
-// @connect      discord.com
-// @connect      api.telegram.org
 // @run-at       document-idle
-// @description  替换每条推文的 Grok 图标，点击后选择总结、解释、翻译或自定义提示词，并自动调出右下角 Grok 聊天窗口进入对话。兼容领哥脚本备注/重点关注数据，支持推送通知和私密模式。
+// @description  替换每条推文的 Grok 图标，点击后选择总结、解释、翻译或自定义提示词，并自动调出右下角 Grok 聊天窗口进入对话。兼容领哥脚本备注/重点关注数据，支持私密模式。
 // ==/UserScript==
 
 (function () {
@@ -90,16 +87,8 @@
       alert_saved: "\u2705 \u8BBE\u7F6E\u5DF2\u4FDD\u5B58",
       alert_no_grok: "\u26A0\uFE0F \u627E\u4E0D\u5230\u5168\u5C40 Grok \u6309\u94AE",
       need_reopen: "\u8BF7\u5148\u70B9\u51FB\u53F3\u4E0B\u89D2 Grok \u6309\u94AE\u6253\u5F00\u4FA7\u8FB9\u680F",
-      push_section: "\u1F4E8 \u63A8\u9001\u8BBE\u7F6E",
-      push_discord: "Discord",
-      push_telegram: "Telegram",
-      push_add: "+ \u65B0\u589E",
       push_test: "\u6D4B\u8BD5\u53D1\u9001",
       push_test_sending: "\u53D1\u9001\u4E2D\u2026",
-      push_not_configured: "\u5C1A\u914D\u7F6E\u63A8\u9001\u76EE\u6807",
-      push_result_ok: "\u2705 \u63A8\u9001\u6210\u529F",
-      push_result_fail: "\u274C \u63A8\u9001\u5931\u8D25",
-      push_url_format: "\u94FE\u63A5\u8F6C\u6362\u683C\u5F0F",
       private_mode: "\uD83D\uDD12 \u79C1\u5BC6\u6A21\u5F0F",
     },
     en: {
@@ -114,16 +103,8 @@
       alert_saved: "\u2705 Settings saved!",
       alert_no_grok: "\u26A0\uFE0F Global Grok button not found.",
       need_reopen: "Click the bottom-right Grok button first to open sidebar",
-      push_section: "\u1F4E8 Push Settings",
-      push_discord: "Discord",
-      push_telegram: "Telegram",
-      push_add: "+ Add",
       push_test: "Test",
       push_test_sending: "Sending\u2026",
-      push_not_configured: "No push targets configured",
-      push_result_ok: "\u2705 Push sent",
-      push_result_fail: "\u274C Push failed",
-      push_url_format: "URL Converter",
       private_mode: "\uD83D\uDD12 Private Mode",
     },
     ja: {
@@ -138,16 +119,8 @@
       alert_saved: "\u2705 \u8A2D\u5B9A\u3092\u4FDD\u5B58\u3057\u307E\u3057\u305F!",
       alert_no_grok: "\u26A0\uFE0F \u30B0\u30ED\u30FC\u30D0\u30EB Grok \u30DC\u30BF\u30F3\u304C\u8981\u308A\u307E\u305B\u3093\u3002",
       need_reopen: "\u53F3\u4E0B\u306E Grok \u30DC\u30BF\u30F3\u3092\u30AF\u30EA\u30C3\u30AF\u3057\u3066\u30B5\u30A4\u30C9\u30D0\u30FC\u3092\u958B\u3044\u3066\u304F\u3060\u3055",
-      push_section: "\u1F4E8 \u30D7\u30C3\u30B7\uE5300\u8A2D\u5B9A",
-      push_discord: "Discord",
-      push_telegram: "Telegram",
-      push_add: "+ \u8FFD\u52A0",
       push_test: "\u30C6\u30B9\u30C8",
       push_test_sending: "\u9001\u4FE1\u4E2D\u2026",
-      push_not_configured: "\u30D7\u30C3\u30B7\u5148\u304C\u8A2D\u5B9A\u3055\u308C\u3066\u3044\u307E\u305B\u3093",
-      push_result_ok: "\u2705 \u9001\u4FE1\u6210\u529F",
-      push_result_fail: "\u274C \u9001\u4FE1\u5931\u6557",
-      push_url_format: "URL \u5909\u63DB",
       private_mode: "\uD83D\uDD12 \u30D7\u30E9\u30A4\u30D9\u30FC\u30C8\u30E2\u30FC\u30C9",
     },
   };
@@ -215,8 +188,6 @@
   const SEND_SVG_FINGERPRINT =
     "M2.504 21.866l.526-2.108C3.04 19.756 4 15.015 4 12s-.96-7.756-.97-7.757l-.527-2.109L21.5 12 2.504 21.866zM5.981 13c-.072 1.962-.34 3.806-.583 5.183L17.764 12 5.398 5.818c.242 1.376.51 3.22.583 5.182H10v2H5.981z";
 
-  const URL_CONVERTER_DOMAINS = ["vxtwitter.com","fixupx.com","fxtwitter.com","cunnyx.com","fixvx.com","twitter.com","x.com"];
-
   const INJECT_MAX_ATTEMPTS = 100;
   const INJECT_INTERVAL_MS = 80;
   const HIJACK_ARTICLE_SCAN_LIMIT = 40;
@@ -266,24 +237,6 @@
   }
 
   // ─── 推送配置 ──
-  function loadPushConfig() {
-    try {
-      const raw = JSON.parse(GM_getValue("gq_push_config", "{}"));
-      return normalizePushConfig(raw);
-    } catch { return { discord: [], telegram: [], skipConfirm: false, urlConverter: "x.com" }; }
-  }
-
-  function savePushConfig(cfg) { GM_setValue("gq_push_config", JSON.stringify(cfg)); }
-
-  function normalizePushConfig(raw) {
-    const cfg = raw && typeof raw === "object" ? raw : {};
-    return {
-      discord: Array.isArray(cfg.discord) ? cfg.discord : [],
-      telegram: Array.isArray(cfg.telegram) ? cfg.telegram : [],
-      skipConfirm: !!cfg.skipConfirm,
-      urlConverter: URL_CONVERTER_DOMAINS.includes(cfg.urlConverter) ? cfg.urlConverter : "x.com",
-    };
-  }
 
   // ════════════════════════════════════════════════════════════════
   //  工具函数
@@ -398,7 +351,7 @@
     if (rect.width < 20 || rect.height < 10) return false;
     const style = window.getComputedStyle(el);
     if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return false;
-    if (el.closest("#gq-menu,#gq-settings-overlay,#gq-push-overlay")) return false;
+    if (el.closest("#gq-menu,#gq-settings-overlay")) return false;
     return true;
   }
 
@@ -530,12 +483,6 @@
     const div = document.createElement("div");
     div.textContent = str;
     return div.innerHTML;
-  }
-
-  function convertTweetUrl(url, domain) {
-    if (!domain) return url;
-    try { return url.replace(/^(https?:\/\/)(www\.)?(x\.com|twitter\.com|pro\.x\.com|mobile\.twitter\.com|m\.x\.com)/i, `$1${domain}`); }
-    catch { return url; }
   }
 
   function markGrokOpenIntent(ms = 6000) {
@@ -673,7 +620,7 @@
     const STOP_PATH = "M3 5.5C3 4.12 4.12 3 5.5 3h13C19.88";
     for (const btn of document.querySelectorAll("button,[role='button']")) {
       if (btn.offsetParent === null) continue;
-      if (btn.closest("article,.gq-btn,.gq-quick-trigger,#gq-menu,#gq-settings-overlay,#gq-push-overlay")) continue;
+      if (btn.closest("article,.gq-btn,.gq-quick-trigger,#gq-menu,#gq-settings-overlay")) continue;
       const label = btn.getAttribute("aria-label") || "";
       if (STOP_RE.test(label.trim())) {
         console.log("[GQ] stopGrokGeneration hit:", label);
@@ -822,17 +769,11 @@
       () => toggleAutoSend(sendBtn));
     sendBtn.id = "gq-send-mode-btn";
 
-    // 推送按钮
-    const pushCfg = loadPushConfig();
-    const hasPush = pushCfg.discord?.some(e=>e.enabled&&e.url) || pushCfg.telegram?.some(e=>e.enabled&&e.token&&e.chat);
-    const pushBtn = createFooterButton(hasPush ? "\uD83D\uDCE8" : "\uD83D\uDCE8", t("push_section"),
-      () => { closeMenu(); doPush(tweetData); });
-
     // 设置
     const setBtn = createFooterButton("\u2699\uFE0F", t("settings_title").split(/\s/)[1] || "Settings",
       () => { closeMenu(); openSettings(); });
 
-    footer.append(sendBtn, pushBtn, setBtn);
+    footer.append(sendBtn, setBtn);
     menu.appendChild(footer);
     document.body.appendChild(menu);
 
@@ -886,101 +827,6 @@
   document.addEventListener("keydown", (e) => { if (e.key==="Escape") closeMenu(); }, true);
 
   // ════════════════════════════════════════════════════════════════
-  //  推送功能（融合自 Grok Commander）
-  // ════════════════════════════════════════════════════════════════
-  function doPush(tweetData) {
-    const cfg = loadPushConfig();
-    const allTargets = [
-      ...(cfg.discord||[]).filter(e=>e.enabled&&e.url).map(e=>({type:"discord",label:e.label||"Discord",url:e.url})),
-      ...(cfg.telegram||[]).filter(e=>e.enabled&&e.token&&e.chat).map(e=>({type:"telegram",label:e.label||"Telegram",token:e.token,chat:e.chat})),
-    ];
-    if (!allTargets.length) { showToast(t("push_not_configured")); openSettings(); return; }
-    if (allTargets.length === 1) { execPush(tweetData, allTargets); return; }
-    showPushSelect(tweetData, allTargets);
-  }
-
-  function showPushSelect(tweetData, targets) {
-    const cfg = loadPushConfig();
-    const convUrl = convertTweetUrl(tweetData.url, cfg.urlConverter);
-    const ovId = "gq-push-overlay";
-    document.getElementById(ovId)?.remove();
-
-    const ov = document.createElement("div"); ov.id = ovId;
-    ov.onclick = (e) => { if (e.target===ov) ov.remove(); };
-    ov.innerHTML = `
-      <div id="gq-push-box">
-        <h3>${t("push_section")}</h3>
-        <p style="font-size:12px;color:#71767B;margin-bottom:10px;word-break:break-all">${escapeHtml(convUrl)}</p>
-        <div id="gq-push-list"></div>
-        <div class="gq-push-actions">
-          <button id="gq-push-cancel" class="gq-btn gq-btn-secondary">\u53D6\u6D88</button>
-          <button id="gq-push-ok"     class="gq-btn gq-btn-primary">\u63A8\u9001</button>
-        </div>
-      </div>`;
-    document.body.appendChild(ov);
-
-    const list = ov.querySelector("#gq-push-list");
-    targets.forEach((tgt,i)=>{
-      const row = document.createElement("label"); row.className = "gq-push-select-item";
-      row.innerHTML = `<input type=checkbox checked data-i="${i}"> <span>${escapeHtml(tgt.label)}</span> <span class="gq-badge ${tgt.type}">${tgt.type}</span>`;
-      list.appendChild(row);
-    });
-
-    ov.querySelector("#gq-push-cancel").onclick = () => ov.remove();
-    ov.querySelector("#gq-push-ok").onclick = () => {
-      const selected = [...list.querySelectorAll(":checked")].map(el=>targets[parseInt(el.dataset.i)]);
-      if (!selected.length) { showToast(t("push_not_configured")); return; }
-      ov.remove(); execPush(tweetData, selected);
-    };
-  }
-
-  function execPush(tweetData, targets) {
-    const cfg = loadPushConfig();
-    const convertedUrl = convertTweetUrl(tweetData.url, cfg.urlConverter);
-    const message = buildPushMessage(tweetData, convertedUrl);
-    let ok = 0, fail = 0, total = targets.length;
-    function done() { if (ok+fail>=total) showToast(`${ok?t("push_result_ok"):t("push_result_fail")} (${ok}/${total})`); }
-
-    targets.forEach((tgt,i)=>{
-      setTimeout(()=>{
-        if (tgt.type==="discord") {
-          GM_xmlhttpRequest({
-            method:"POST", url:tgt.url,
-            headers:{"Content-Type":"application/json"},
-            data:JSON.stringify({content: truncateFor(message, 1900)}),
-            onload:(r)=>{(r.status>=200&&r.status<300)?ok++:fail++;done()},
-            onerror:()=>{fail++;done()}
-          });
-        } else {
-          GM_xmlhttpRequest({
-            method:"POST", url:`https://api.telegram.org/bot${tgt.token}/sendMessage`,
-            headers:{"Content-Type":"application/json"},
-            data:JSON.stringify({chat_id:tgt.chat,text:truncateFor(message, 3900),disable_web_page_preview:false}),
-            onload:(r)=>{try{JSON.parse(r.responseText).ok?ok++:fail++}catch{fail++}done()},
-            onerror:()=>{fail++;done()}
-          });
-        }
-      }, i*500);
-    });
-  }
-
-  function buildPushMessage(tweetData, convertedUrl) {
-    const parts = [];
-    const author = [tweetData.displayName, tweetData.author].filter(Boolean).join(" ");
-    if (tweetData.vip?.label) parts.push(`重点关注: ${tweetData.vip.label}`);
-    if (tweetData.note) parts.push(`备注: ${tweetData.note}`);
-    if (author) parts.push(`作者: ${author}`);
-    if (tweetData.text) parts.push(`内容: ${truncateFor(tweetData.text, 900)}`);
-    parts.push(convertedUrl || tweetData.url || location.href);
-    return parts.join("\n");
-  }
-
-  function truncateFor(text, maxLen) {
-    const value = String(text || "");
-    return value.length > maxLen ? value.slice(0, maxLen - 1) + "…" : value;
-  }
-
-  // ════════════════════════════════════════════════════════════════
   //  设置面板（增强版）
   // ════════════════════════════════════════════════════════════════
   function openSettings() {
@@ -991,7 +837,6 @@
     draft.autoSend = cfg.autoSend;
     draft.privateMode = cfg.privateMode;
     draft.lang = cfg.lang;
-    const pc = loadPushConfig();
 
     const ov = document.createElement("div"); ov.id = "gq-settings-overlay";
     ov.onclick = (e) => { if (e.target===ov) closeSettings(); };
@@ -999,7 +844,7 @@
     const modal = document.createElement("div"); modal.id = "gq-settings-modal";
 
     modal.innerHTML = `
-      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v3.3.28</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
+      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v4.0.0</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
       <div class="gq-modal-body">
         <!-- 语言 & 模式 -->
         <div class="gq-section-card"><div class="gq-section-header">⚙️ ${t("lang_label")} & ${t("send_mode_label")}</div><div class="gq-section-body">
@@ -1015,17 +860,13 @@
         </div></div>
 
         <!-- 导入/导出 -->
-        <div class="gq-section-card"><div class="gq-section-header">\uD83D\uDCE4 / \uD83D\uDCE5 ${t("push_url_format")} & \u5BFC\u5165/\u5BFC\u51FA</div><div class="gq-section-body gq-import-export-row">
+        <div class="gq-section-card"><div class="gq-section-header">📤 / 📥 导入/导出</div><div class="gq-section-body gq-import-export-row">
           <button id="gq-btn-export" class="gq-btn gq-btn-sm gq-btn-outline">\uD83D\uDCE5 Export JSON</button>
           <label class="gq-btn gq-btn-sm gq-btn-outline"><input type=file id="gq-file-import" accept=.json style=display:none>\uD83D\uDCE4 Import</label>
         </div></div>
 
         <!-- 模板 -->
         <div id="gq-template-container"></div>
-
-        <!-- 推送设置 -->
-        <div class="gq-section-card"><div class="gq-section-header">${t("push_section")}</div><div class="gq-section-body" id="gq-push-container"></div></div>
-      </div>
 
       <div class="gq-modal-footer">
         <button id="gq-btn-cancel" class="gq-btn gq-btn-secondary">${t("btn_cancel")}</button>
@@ -1036,7 +877,6 @@
 
     // 渲染模板编辑器
     renderTemplateEditors(document.getElementById("gq-template-container"), draft);
-    renderPushSection(document.getElementById("gq-push-container"), pc);
 
     document.getElementById("gq-close-btn").onclick = closeSettings;
     document.getElementById("gq-btn-cancel").onclick = closeSettings;
@@ -1052,7 +892,6 @@
         const k = inp.dataset.key; if(draft[k]) draft[k].label = inp.value;
       });
       // 保存推送
-      savePushConfig(collectPushConfig(pc));
       saveConfig(draft); showToast(t("alert_saved")); closeSettings();
     };
 
@@ -1061,7 +900,7 @@
       draft.autoSend = document.getElementById("gq-autosend-chk").checked;
       draft.privateMode = document.getElementById("gq-private-chk").checked;
       collectTemplateValues(draft);
-      const data = JSON.stringify({ ...draft, push: collectPushConfig(pc) }, null, 2);
+      const data = JSON.stringify({ ...draft }, null, 2);
       const blob = new Blob([data], {type:"application/json"});
       const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
       a.download = `grok-quick-v3-${Date.now()}.json`; a.click();
@@ -1081,9 +920,6 @@
           if(typeof imported.autoSend==="boolean") draft.autoSend = imported.autoSend;
           if(typeof imported.privateMode==="boolean") draft.privateMode = imported.privateMode;
           if(imported.lang) draft.lang = imported.lang;
-          if(imported.push && typeof imported.push === "object") {
-            Object.assign(pc, normalizePushConfig(imported.push));
-            renderPushSection(document.getElementById("gq-push-container"), pc);
           }
           document.getElementById("gq-autosend-chk").checked = draft.autoSend;
           document.getElementById("gq-private-chk").checked = draft.privateMode;
@@ -1148,88 +984,6 @@
       }
       container.appendChild(card);
     });
-  }
-
-  function renderPushSection(container, pc) {
-    container.innerHTML = "";
-
-    // URL 转换器
-    const ucRow = document.createElement("div"); ucRow.className = "gq-form-row";
-    const selectedDomain = pc.urlConverter || "x.com";
-    const domainOptions = URL_CONVERTER_DOMAINS.map(domain => `<option value="${domain}" ${selectedDomain===domain?"selected":""}>${domain}</option>`).join("");
-    ucRow.innerHTML = `<label class="gq-form-label">${t("push_url_format")}</label>
-      <select id="gq-url-sel" class="gq-input-text">${domainOptions}</select>`;
-    container.appendChild(ucRow);
-
-    // Discord
-    const dHeader = document.createElement("div"); dHeader.style.cssText="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-size:12px;font-weight:bold;color:#8899A6;";
-    dHeader.innerHTML=`<span>${t("push_discord")}</span>`;
-    const dAdd = document.createElement("button"); dAdd.className = "gq-btn-reset"; dAdd.textContent = t("push_add"); dAdd.style.cssText="padding:3px 10px;border-radius:8px;border:1px dashed #536471;background:transparent;color:#536471;font-size:11px;";
-    dAdd.onclick = () => { if ((pc.discord||[]).length >= 10) { showToast("Max 10"); return; } pc.discord = pc.discord || []; pc.discord.push({label:"",url:"",enabled:true}); renderPushSection(container, pc); };
-    dHeader.appendChild(dAdd); container.appendChild(dHeader);
-
-    (pc.discord||[]).forEach((entry,idx)=>{
-      container.appendChild(createPushEntry("discord", entry, idx, pc));
-    });
-    if (!(pc.discord||[]).length) {
-      const empty = document.createElement("div"); empty.style.cssText="font-size:11px;color:#3d4a55;padding:4px 0;"; empty.textContent = t("push_add")+" →"; container.appendChild(empty);
-    }
-
-    // Telegram
-    const tHeader = document.createElement("div"); tHeader.style.cssText = dHeader.style.cssText;
-    tHeader.innerHTML = `<span>${t("push_telegram")}</span>`;
-    const tAdd = document.createElement("button"); tAdd.className = "gq-btn-reset"; tAdd.textContent = t("push_add"); tAdd.style.cssText = dAdd.style.cssText;
-    tAdd.onclick = () => { if ((pc.telegram||[]).length >= 10) { showToast("Max 10"); return; } pc.telegram = pc.telegram || []; pc.telegram.push({label:"",token:"",chat:"",enabled:true}); renderPushSection(container, pc); };
-    tHeader.appendChild(tAdd); container.appendChild(tHeader);
-
-    (pc.telegram||[]).forEach((entry,idx)=>{
-      container.appendChild(createPushEntry("telegram", entry, idx, pc));
-    });
-    if (!(pc.telegram||[]).length) { const empty = document.createElement("div"); empty.style.cssText = "font-size:11px;color:#3d4a55;padding:4px 0;"; empty.textContent = t("push_add")+" →"; container.appendChild(empty); }
-
-    // 绑定 URL 选择器变化
-    container.querySelector("#gq-url-sel")?.addEventListener("change", (e) => { pc.urlConverter = e.target.value; });
-  }
-
-  function createPushEntry(type, entry, idx, pc) {
-    const div = document.createElement("div"); div.className = "gq-push-entry";
-    div.style.cssText = "display:flex;flex-direction:column;gap:4px;padding:8px 10px;background:#16181C;border:1px solid #2f3336;border-radius:8px;";
-
-    const hdr = document.createElement("div"); hdr.style.cssText = "display:flex;align-items:center;gap:6px;";
-    const chk = document.createElement("input"); chk.type = "checkbox"; chk.checked = entry.enabled !== false; chk.style.cssText = "cursor:pointer;width:14px;height:14px;";
-    chk.onchange = () => { entry.enabled = chk.checked; };
-    const lbl = document.createElement("input"); lbl.className = "gq-input-text"; lbl.style.cssText = "flex:1;height:24px;padding:3px 8px;font-size:12px;box-sizing:border-box;";
-    lbl.placeholder = "Channel name"; lbl.value = entry.label || "";
-    lbl.oninput = () => { entry.label = lbl.value; };
-    const rm = document.createElement("button"); rm.className = "gq-remove-btn"; rm.textContent = "\u2715";
-    rm.style.cssText = "background:none;border:none;color:#536471;font-size:14px;cursor:pointer;padding:0 4px;line-height:1;flex-shrink:0;";
-    rm.onclick = () => { if(type==="discord") pc.discord.splice(idx,1); else pc.telegram.splice(idx,1); renderPushSection(document.getElementById("gq-push-container")||document.body, pc); };
-    hdr.append(chk, lbl, rm); div.append(hdr);
-
-    if (type === "discord") {
-      const r = document.createElement("div"); r.className = "gq-form-row"; r.innerHTML = `<label class="gq-form-label">Webhook URL</label>`;
-      const inp = document.createElement("input"); inp.className = "gq-input-text"; inp.placeholder = "https://discord.com/api/webhooks/...";
-      inp.value = entry.url || ""; inp.oninput = () => { entry.url = inp.value; }; r.appendChild(inp); div.append(r);
-    } else {
-      const r1 = document.createElement("div"); r1.className = "gq-form-row"; r1.innerHTML = `<label class="gq-form-label">Bot Token</label>`;
-      const inp1 = document.createElement("input"); inp1.className = "gq-input-text"; inp1.placeholder = "123456789:ABC-xxx";
-      inp1.value = entry.token || ""; inp1.oninput = () => { entry.token = inp1.value; }; r1.appendChild(inp1); div.append(r1);
-      const r2 = document.createElement("div"); r2.className = "gq-form-row"; r2.innerHTML = `<label class="gq-form-label">Chat ID</label>`;
-      const inp2 = document.createElement("input"); inp2.className = "gq-input-text"; inp2.placeholder = "-100xxx or @channel";
-      inp2.value = entry.chat || ""; inp2.oninput = () => { entry.chat = inp2.value; }; r2.appendChild(inp2); div.append(r2);
-    }
-    return div;
-  }
-
-  function collectPushConfig(pc) {
-    const sel = document.getElementById("gq-url-sel");
-    const current = normalizePushConfig(pc || loadPushConfig());
-    return {
-      discord: current.discord,
-      telegram: current.telegram,
-      skipConfirm: current.skipConfirm,
-      urlConverter: sel ? sel.value : "x.com",
-    };
   }
 
   function closeSettings() { document.getElementById("gq-settings-overlay")?.remove(); }
@@ -1332,7 +1086,7 @@
       origBtn.style.color = "#FF1493";
       origBtn.style.cursor = "pointer";
       origBtn.setAttribute("aria-label", "Grok Quick: \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49");
-      origBtn.title = "Grok Quick v3.3.28 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
+      origBtn.title = "Grok Quick v4.0.0 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
 
       origBtn.addEventListener("click", (e) => {
         if (_nativeClickBypass.has(origBtn)) return;
@@ -1413,18 +1167,8 @@
     .gq-btn-outline:hover{border-color:#FF1493;color:#FF1493;background:rgba(255,20,147,.06)}
     .gq-quick-trigger{color:#FF1493!important;cursor:pointer!important}
     .gq-quick-trigger:hover{color:#ff5bb8!important}
-    .gq-push-entry input[type=text]{background:#0d1117!important;border:1px solid #2f3336!important;color:#E7E9EA!important;border-radius:6px!important;font-size:12px!important;padding:4px 8px!important}
     /* Push Select */
-    #gq-push-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:2147483641;display:flex;justify-content:center;align-items:center;animation:gqOverlayIn .2s ease}
-    #gq-push-box{background:#16181C;border:1px solid #2f3336;border-radius:16px;padding:22px;width:380px;max-width:92vw;font-family:inherit;color:#E7E9EA;box-shadow:0 8px 24px rgba(0,0,0,.6)}
-    #gq-push-box h3{margin:0 0 14px;font-size:15px;color:#fff}
-    .gq-push-select-item{display:flex;align-items:center;gap:8px;padding:8px 10px;background:#0d1117;border:1px solid #2f3336;border-radius:8px;cursor:pointer;font-size:13px;margin-bottom:4px}
-    .gq-push-select-item:hover{border-color:#FF1493}
-    .gq-push-select-item input{cursor:pointer;width:14px;height:14px;flex-shrink:0}
-    .gq-badge{font-size:10px;padding:1px 6px;border-radius:10px;margin-left:auto;flex-shrink:0}
-    .gq-badge.discord{background:rgba(88,101,242,.2);color:#8b9eff}
-    .gq-badge.telegram{background:rgba(41,182,246,.2);color:#64c8f5}
-    .gq-push-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:14px}
+    {position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:2147483641;display:flex;justify-content:center;align-items:center;animation:gqOverlayIn .2s ease}
 
     /* Grok panel resize handle */
     #gq-panel-resize{position:absolute!important;top:0;left:0;right:0;height:12px;cursor:ns-resize;z-index:9999;pointer-events:all;border-radius:4px 4px 0 0;transition:background .2s;user-select:none}
@@ -1575,7 +1319,7 @@
         return;
       }
       const target = e.target;
-      if (target?.closest?.(".gq-quick-trigger,#gq-menu,#gq-overlay,#gq-settings-overlay,#gq-push-overlay,#gq-panel-expand,#gq-panel-collapse,#gq-panel-dock-hit,#gq-panel-resize,#gq-panel-resize-w")) return;
+      if (target?.closest?.(".gq-quick-trigger,#gq-menu,#gq-overlay,#gq-settings-overlay,#gq-panel-expand,#gq-panel-collapse,#gq-panel-dock-hit,#gq-panel-resize,#gq-panel-resize-w")) return;
       if (e.composedPath?.().includes(drawer)) return;
       const rect = drawer.getBoundingClientRect();
       const outsideDrawer =
@@ -1810,7 +1554,7 @@
   let scrollTimer = null;
   window.addEventListener("scroll", () => { if (scrollTimer) return; scrollTimer = setTimeout(() => { scrollTimer = null; scheduleHijack(); }, 200); }, { passive: true });
 
-  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v3.3.28 \u8BBE\u7F6E", openSettings);
+  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v4.0.0 \u8BBE\u7F6E", openSettings);
   GM_registerMenuCommand("\u21BA \u91CD\u7F6E Grok \u9762\u677F\u5E03\u5C40", resetGrokPanelLayout);
-  console.log("[Grok Quick] v3.3.28 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
+  console.log("[Grok Quick] v4.0.0 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
 })();
