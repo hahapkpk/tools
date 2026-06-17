@@ -867,6 +867,7 @@
 
         <!-- 模板 -->
         <div id="gq-template-container"></div>
+      </div>
 
       <div class="gq-modal-footer">
         <button id="gq-btn-cancel" class="gq-btn gq-btn-secondary">${t("btn_cancel")}</button>
@@ -920,7 +921,6 @@
           if(typeof imported.autoSend==="boolean") draft.autoSend = imported.autoSend;
           if(typeof imported.privateMode==="boolean") draft.privateMode = imported.privateMode;
           if(imported.lang) draft.lang = imported.lang;
-          }
           document.getElementById("gq-autosend-chk").checked = draft.autoSend;
           document.getElementById("gq-private-chk").checked = draft.privateMode;
           renderTemplateEditors(document.getElementById("gq-template-container"), draft);
