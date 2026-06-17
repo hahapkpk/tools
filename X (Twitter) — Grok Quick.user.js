@@ -2,7 +2,7 @@
 // @name         X (Twitter) — Grok Quick
 // @name:zh-CN   X (Twitter) — Grok 快捷分析
 // @namespace    https://github.com/hahapkpk/tools
-// @version      4.0.1
+// @version      4.1.0
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/X%20(Twitter)%20%E2%80%94%20Grok%20Quick.user.js
 // @license      MIT
@@ -258,13 +258,15 @@
 
   function isLikelyGrokButton(el) {
     if (!el || el.classList?.contains("gq-quick-trigger")) return false;
-    const label = [
-      el.getAttribute("aria-label"),
-      el.getAttribute("title"),
-      el.getAttribute("data-testid"),
-      el.textContent,
-    ].filter(Boolean).join(" ").toLowerCase();
-    if (/\bgrok\b/.test(label) || label.includes("\u95EE grok") || label.includes("\u5411 grok") || label.includes("\u64CD\u4F5C")) return true;
+    // 优先：aria-label / title / data-testid 匹配（不受 SVG 路径变更影响）
+    const ariaLabel = (el.getAttribute("aria-label") || "").toLowerCase();
+    const title     = (el.getAttribute("title") || "").toLowerCase();
+    const testId    = (el.getAttribute("data-testid") || "").toLowerCase();
+    const GROK_RE   = /\bgrok\b|向\s*grok|问\s*grok|grok\s*に/i;
+    if (GROK_RE.test(ariaLabel) || GROK_RE.test(title) || testId.includes("grok")) return true;
+    // 其次：父级容器特征（X 常把按钮嵌在带 grok 标记的容器内）
+    if (el.closest("[data-testid*='grok' i],[aria-label*='Grok' i]")) return true;
+    // 兜底：SVG 路径指纹（X 更新 UI 后可能失效，作为最后手段）
     return [...el.querySelectorAll("path")].some(path => {
       const d = path.getAttribute("d") || "";
       return GROK_PATH_PATTERNS.some(p => d.startsWith(p));
@@ -844,7 +846,7 @@
     const modal = document.createElement("div"); modal.id = "gq-settings-modal";
 
     modal.innerHTML = `
-      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v4.0.1</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
+      <div class="gq-modal-header"><span class="gq-modal-title">${t("settings_title")} <small>v4.1.0</small></span><span id="gq-close-btn" class="gq-close-icon" role=button tabindex=0 aria-label="\u5173\u95ED">\u2715</span></div>
       <div class="gq-modal-body">
         <!-- 语言 & 模式 -->
         <div class="gq-section-card"><div class="gq-section-header">⚙️ ${t("lang_label")} & ${t("send_mode_label")}</div><div class="gq-section-body">
@@ -1086,7 +1088,7 @@
       origBtn.style.color = "#FF1493";
       origBtn.style.cursor = "pointer";
       origBtn.setAttribute("aria-label", "Grok Quick: \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49");
-      origBtn.title = "Grok Quick v4.0.1 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
+      origBtn.title = "Grok Quick v4.1.0 \u2014 \u603B\u7ED3 / \u89E3\u91CA / \u81EA\u5B9A\u4E49";
 
       origBtn.addEventListener("click", (e) => {
         if (_nativeClickBypass.has(origBtn)) return;
@@ -1109,8 +1111,8 @@
     style.id = "gq-style";
     style.textContent = `
     #gq-overlay{position:fixed;inset:0;z-index:99989;background:transparent}
-    #gq-menu{position:fixed;z-index:99990;background:var(--gq-bg,#000);border:1px solid var(--gq-border,#333639);border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.45),0 0 60px -10px rgba(255,20,147,.18);padding:8px;display:flex;flex-direction:column;gap:2px;min-width:186px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;animation:gqFadeIn .15s cubic-bezier(.16,1,.3,1);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
-    @keyframes gqFadeIn{from{opacity:0;transform:translateY(-6px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+    #gq-menu{position:fixed;z-index:99990;background:var(--gq-bg,#000);border:1px solid var(--gq-border,#333639);border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.45),0 0 60px -10px rgba(255,20,147,.18);padding:8px;display:flex;flex-direction:column;gap:2px;min-width:186px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;animation:gqMenuIn .18s cubic-bezier(.2,.9,.3,1);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
+    @keyframes gqMenuIn{from{opacity:0;transform:scale(.93) translateY(-6px)}to{opacity:1;transform:scale(1) translateY(0)}}to{opacity:1;transform:translateY(0) scale(1)}}
     .gq-menu-item{display:flex;align-items:center;gap:11px;padding:10px 14px;color:var(--gq-text,#E7E9EA);font-size:14px;font-weight:500;border-radius:10px;cursor:pointer;user-select:none;transition:all .12s ease;outline:none}
     .gq-menu-item:hover,.gq-menu-item.gq-menu-item-active{background:linear-gradient(135deg,#FF1493 0%,#E0458A 100%);color:#fff;transform:scale(1.01)}
     .gq-menu-icon{font-size:17px;flex-shrink:0}
@@ -1123,7 +1125,9 @@
     .gq-menu-footer{border-top:1px solid var(--gq-divider,rgba(255,255,255,.08));padding:6px 8px 4px;margin-top:4px;display:flex;justify-content:space-around;align-items:center}
     .gq-footer-btn{padding:5px 9px;font-size:16px;cursor:pointer;color:var(--gq-muted,#71767B);border-radius:8px;user-select:none;transition:all .15s;outline:none}
     .gq-footer-btn:hover{background:var(--gq-hover,rgba(255,255,255,.08));color:#fff;transform:scale(1.1)}
-    .gq-toast{position:fixed;bottom:24px;right:24px;background:rgba(15,20,28,.95);border:1.5px solid #FF1493;color:#fff;font-size:13px;font-family:inherit;padding:12px 20px;border-radius:12px;z-index:2147483647;box-shadow:0 8px 32px rgba(255,20,147,.25),0 2px 8px rgba(0,0,0,.3);opacity:0;transform:translateY(8px) scale(.96);transition:all .3s cubic-bezier(.16,1,.3,1);pointer-events:none}
+    @keyframes gqMenuIn{from{opacity:0;transform:scale(.92) translateY(-4px)}to{opacity:1;transform:scale(1) translateY(0)}}
+    @keyframes gqOverlayIn{from{opacity:0}to{opacity:1}}
+        .gq-toast{position:fixed;bottom:24px;right:24px;background:rgba(15,20,28,.95);border:1.5px solid #FF1493;color:#fff;font-size:13px;font-family:inherit;padding:12px 20px;border-radius:12px;z-index:2147483647;box-shadow:0 8px 32px rgba(255,20,147,.25),0 2px 8px rgba(0,0,0,.3);opacity:0;transform:translateY(8px) scale(.96);transition:all .3s cubic-bezier(.16,1,.3,1);pointer-events:none}
     .gq-toast.gq-toast-visible{opacity:1;transform:translateY(0) scale(1);pointer-events:auto}
     /* Settings */
     #gq-settings-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);z-index:2147483640;display:flex;justify-content:center;align-items:center;animation:gqOverlayIn .2s ease}
@@ -1187,9 +1191,7 @@
     .gq-panel-floating-btn:hover{border-color:rgba(255,20,147,.72);color:#fff;background:rgba(18,24,32,.98);box-shadow:0 12px 32px rgba(255,20,147,.12),0 10px 28px rgba(0,0,0,.38)}
     [data-testid='GrokDrawer'][data-gq-panel-hidden='1']{top:78px!important;right:10px!important;width:54px!important;min-width:54px!important;max-width:54px!important;height:96px!important;min-height:96px!important;max-height:96px!important;background:transparent!important;border-color:transparent!important;box-shadow:none!important;overflow:visible!important}
     [data-testid='GrokDrawer'][data-gq-panel-hidden='1']::before{content:'';position:absolute;inset:0;border-radius:18px;background:linear-gradient(180deg,rgba(18,24,32,.9),rgba(5,8,12,.86));border:1px solid rgba(255,255,255,.14);box-shadow:0 10px 26px rgba(0,0,0,.35),0 0 18px rgba(255,255,255,.05);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);pointer-events:none}
-    #gq-panel-expand{top:8px;left:6px;width:42px;height:80px;padding:7px 4px 6px;flex-direction:column;gap:6px;border-radius:14px;font-size:0}
-    #gq-panel-expand .gq-grok-dot{display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:11px;background:linear-gradient(145deg,rgba(255,255,255,.16),rgba(255,255,255,.05));border:1px solid rgba(255,255,255,.22);color:#fff;font-size:17px;font-weight:800;line-height:1;letter-spacing:0;box-shadow:inset 0 1px 0 rgba(255,255,255,.12)}
-    #gq-panel-expand .gq-grok-label{display:block;color:rgba(255,255,255,.72);font-size:10px;font-weight:750;line-height:1;letter-spacing:0}
+    #gq-panel-expand{top:8px;left:6px;width:42px;height:42px;padding:0;flex-direction:column;gap:0;border-radius:13px;font-size:0;justify-content:center;align-items:center}
     #gq-panel-expand:hover{transform:translateY(-1px)}
     #gq-panel-collapse{top:12px;right:14px;left:auto;height:34px;padding:0 12px;gap:6px;border-radius:999px;font-size:13px;font-weight:750;line-height:1}
     #gq-panel-dock-hit{position:absolute!important;inset:0;z-index:5;display:none;cursor:pointer;background:transparent;pointer-events:all}
@@ -1395,7 +1397,12 @@
       expandBtn.id = "gq-panel-expand";
       expandBtn.className = "gq-panel-floating-btn";
       expandBtn.type = "button";
-      expandBtn.innerHTML = "<span class=\"gq-grok-dot\" aria-hidden=\"true\">G</span><span class=\"gq-grok-label\" aria-hidden=\"true\">Grok</span>";
+      expandBtn.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="display:block;margin:auto">' +
+        '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" fill="rgba(255,255,255,0.08)"/>' +
+        '<path d="M13.5 3.5L14.8 7.2L18.5 8L14.8 8.8L13.5 12.5L12.2 8.8L8.5 8L12.2 7.2L13.5 3.5Z" fill="white" opacity="0.95"/>' +
+        '<path d="M8 14L8.9 16.6L11.5 17.5L8.9 18.4L8 21L7.1 18.4L4.5 17.5L7.1 16.6L8 14Z" fill="white" opacity="0.7"/>' +
+        '<path d="M17 13L17.6 14.9L19.5 15.5L17.6 16.1L17 18L16.4 16.1L14.5 15.5L16.4 14.9L17 13Z" fill="white" opacity="0.6"/>' +
+        '</svg>';
       expandBtn.setAttribute("aria-label", "展开 Grok 面板");
       expandBtn.title = "展开面板";
       expandBtn.style.display = "flex";
@@ -1554,7 +1561,7 @@
   let scrollTimer = null;
   window.addEventListener("scroll", () => { if (scrollTimer) return; scrollTimer = setTimeout(() => { scrollTimer = null; scheduleHijack(); }, 200); }, { passive: true });
 
-  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v4.0.1 \u8BBE\u7F6E", openSettings);
+  GM_registerMenuCommand("\u2699\uFE0F Grok Quick v4.1.0 \u8BBE\u7F6E", openSettings);
   GM_registerMenuCommand("\u21BA \u91CD\u7F6E Grok \u9762\u677F\u5E03\u5C40", resetGrokPanelLayout);
-  console.log("[Grok Quick] v4.0.1 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
+  console.log("[Grok Quick] v4.1.0 loaded — Powered by Flywind | Enhanced from Grok Commander by Star_tanuki07");
 })();
