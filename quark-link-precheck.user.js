@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         夸克网盘链接预检
 // @namespace    local.codex
-// @version      0.6.1
+// @version      0.6.2
 // @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。支持 URL 白名单：白名单为空时自动检测，白名单非空时仅匹配的页面激活。
-// @match        *://*/*
+// @match        https://www.xn--wcv59z.com/*
+// @match        https://www.qmp4.com/*
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
 // @connect      drive-h.quark.cn
