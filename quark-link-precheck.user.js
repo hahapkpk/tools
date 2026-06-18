@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         夸克网盘链接预检
 // @namespace    local.codex
-// @version      0.6.0
-// @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。支持 URL 白名单：设置白名单后仅对匹配页面生效。
+// @version      0.6.1
+// @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。支持 URL 白名单：白名单为空时自动检测，白名单非空时仅匹配的页面激活。
 // @match        *://*/*
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
@@ -20,12 +20,44 @@
 (function () {
   'use strict';
 
+  // ========== 早期白名单检查 ==========
+  // 白名单非空且当前页面不匹配时，脚本直接退出（仅注册菜单命令），不做任何 DOM 操作。
+  var _wl_early = [];
+  try {
+    _wl_early = JSON.parse(GM_getValue('whitelist', '[]'));
+    if (!Array.isArray(_wl_early)) _wl_early = [];
+  } catch (_) {}
+
+  if (_wl_early.length > 0) {
+    var _href = location.href;
+    var _matched = _wl_early.some(function (p) { return _href.indexOf(p) !== -1; });
+    if (!_matched) {
+      // 仅注册白名单管理菜单，然后退出
+      GM_registerMenuCommand('夸克预检：添加当前页到白名单', function () {
+        var wl = [];
+        try { wl = JSON.parse(GM_getValue('whitelist', '[]')); } catch (_) {}
+        if (!Array.isArray(wl)) wl = [];
+        if (wl.indexOf(location.href) === -1) {
+          wl.push(location.href);
+          GM_setValue('whitelist', JSON.stringify(wl));
+          location.reload();
+        }
+      });
+      GM_registerMenuCommand('夸克预检：清空白名单', function () {
+        GM_setValue('whitelist', '[]');
+        location.reload();
+      });
+      return;
+    }
+  }
+  // ========== 早期检查结束 ==========
+
   const SCRIPT_ID = 'codex-quark-link-precheck';
   const CACHE_PREFIX = `${SCRIPT_ID}:cache:`;
   const CACHE_TTL = 6 * 60 * 60 * 1000;
   let CONCURRENCY = Number(GM_getValue('concurrency', 6));
   let CHECK_INTERVAL = Number(GM_getValue('interval', 200));
-  let WHITELIST = parseWhitelist();
+  let WHITELIST = _wl_early;
   const DEBUG = false;
 
   const QUARK_LINK_RE = /https?:\/\/pan\.quark\.cn\/s\/([A-Za-z0-9_-]{6,})(?:[/?#][^\s"'<>]*)?/gi;
