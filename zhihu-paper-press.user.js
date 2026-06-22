@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         知乎 · Paper Press 阅读模式
 // @namespace    https://github.com/hahapkpk/tools
-// @version      2.2.1
+// @version      2.2.2
 // @description  知乎专栏 → 杂志风格沉浸阅读：悬浮目录 · 代码高亮 · 图片灯箱 · 深色模式 · 阅读进度 · 字号/宽度调节 · 代码复制
 // @author       hahapkpk
 // @match        https://zhuanlan.zhihu.com/p/*
@@ -393,7 +393,7 @@
     sep3.className = 'pp-sep';
     panel.appendChild(sep3);
 
-    var topBtn = btn('↑', null, function () {
+    var topBtn = btn('▲', null, function () {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }, '回到顶部');
     panel.appendChild(topBtn);
