@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         知乎 · Paper Press 阅读模式
 // @namespace    https://github.com/hahapkpk/tools
-// @version      2.2.0
+// @version      2.2.1
 // @description  知乎专栏 → 杂志风格沉浸阅读：悬浮目录 · 代码高亮 · 图片灯箱 · 深色模式 · 阅读进度 · 字号/宽度调节 · 代码复制
 // @author       hahapkpk
 // @match        https://zhuanlan.zhihu.com/p/*
@@ -247,11 +247,12 @@
       '#pp-progress{position:fixed;top:0;left:0;height:3px;background:' + T.accent + ';z-index:99999;transition:width 0.1s linear;border-radius:0 2px 2px 0;}',
 
       '/* ── 侧边按钮面板 ── */',
-      '#pp-panel{position:fixed;right:16px;top:140px;z-index:9997;display:flex;flex-direction:column;gap:6px;font-family:' + FONTS.body + ';}',
-      '#pp-panel button{display:block;width:52px;padding:8px 4px;border:1px solid ' + T.rule + ';background:' + T.surface2 + ';color:' + T.textMute + ';cursor:pointer;font-size:13px;font-weight:500;text-align:center;border-radius:6px;transition:all 0.2s;line-height:1.3;font-family:' + FONTS.body + ';}',
+      '#pp-panel{position:fixed;right:16px;top:50%;transform:translateY(-50%);z-index:9997;display:flex;flex-direction:column;gap:3px;font-family:' + FONTS.body + ';padding:6px;background:' + T.surface + ';border:1px solid ' + T.rule + ';border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,0.06);}',
+      '#pp-panel button{display:block;width:40px;height:32px;padding:0 2px;border:1px solid transparent;background:transparent;color:' + T.textMute + ';cursor:pointer;font-size:11px;font-weight:500;text-align:center;border-radius:6px;transition:all 0.2s;line-height:1.2;font-family:' + FONTS.body + ';}',
       '#pp-panel button:hover{background:' + T.accentSoft + ';color:' + T.accent + ';border-color:' + T.accent + ';}',
-      '#pp-panel .pp-panel-label{font-size:10px;display:block;color:' + T.textFaint + ';margin-top:1px;}',
+      '#pp-panel .pp-panel-label{font-size:8px;display:block;color:' + T.textFaint + ';margin-top:1px;}',
       '#pp-panel button:hover .pp-panel-label{color:' + T.accent + ';}',
+      '#pp-panel .pp-sep{height:1px;background:' + T.rule + ';margin:2px 0;}',
 
       '/* ── 图片灯箱 ── */',
       '#pp-lightbox{position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;cursor:zoom-out;opacity:0;pointer-events:none;transition:opacity 0.25s;}',
@@ -261,11 +262,13 @@
       '#pp-lightbox .pp-lb-close:hover{background:rgba(255,255,255,0.2);}',
 
       '/* ── 悬浮目录 TOC ── */',
-      '#pp-toc{position:fixed;right:16px;top:50%;transform:translateY(-50%);z-index:9998;font-family:' + FONTS.body + ';max-width:180px;}',
-      '#pp-toc a{display:block;padding:3px 12px;font-size:12px;color:' + T.textFaint + ';text-decoration:none!important;border-left:2px solid transparent;transition:all 0.2s;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+      '#pp-toc{position:fixed;left:16px;top:50%;transform:translateY(-50%);z-index:9998;font-family:' + FONTS.body + ';max-width:180px;max-height:80vh;overflow-y:auto;padding:8px 0;border-radius:8px;background:' + T.surface + ';border:1px solid ' + T.rule + ';box-shadow:0 2px 12px rgba(0,0,0,0.06);}',
+      '#pp-toc::-webkit-scrollbar{width:4px;}',
+      '#pp-toc::-webkit-scrollbar-thumb{background:' + T.rule + ';border-radius:2px;}',
+      '#pp-toc a{display:block;padding:4px 14px;font-size:12px;color:' + T.textFaint + ';text-decoration:none!important;border-left:2px solid transparent;transition:all 0.2s;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
       '#pp-toc a:hover,#pp-toc a.active{color:' + T.accent + ';border-left-color:' + T.accent + ';}',
-      '#pp-toc a.pp-toc-h2{padding-left:12px;font-weight:500;}',
-      '#pp-toc a.pp-toc-h3{padding-left:22px;font-size:11px;}',
+      '#pp-toc a.pp-toc-h2{padding-left:14px;font-weight:500;}',
+      '#pp-toc a.pp-toc-h3{padding-left:24px;font-size:11px;}',
 
       '/* 宽度模式 */',
       '.pp-width-narrow .Post-Row-Content-left{max-width:620px!important;}',
@@ -280,8 +283,8 @@
       '.Post-RichTextContainer h3{line-height:1.4!important;}',
       '.Post-RichTextContainer pre{padding:16px!important;}',
       '#pp-toc{display:none!important;}',
-      '#pp-panel{position:fixed;top:auto;bottom:0;left:0;right:0;flex-direction:row;justify-content:center;gap:2px;z-index:9997;background:' + T.surface2 + ';padding:6px 8px;border-top:1px solid ' + T.rule + ';}',
-      '#pp-panel button{flex:1;max-width:80px;padding:6px 2px;border-radius:4px;font-size:11px;border:none;background:transparent;}',
+      '#pp-panel{position:fixed;top:auto;bottom:16px;right:16px;left:auto;flex-direction:row;justify-content:center;gap:2px;z-index:9997;padding:6px;background:' + T.surface + ';border:1px solid ' + T.rule + ';border-radius:10px;}',
+      '#pp-panel button{flex:0;width:44px;height:32px;padding:0;border-radius:6px;font-size:11px;border:none;background:transparent;}',
       '#pp-panel .pp-panel-label{display:none;}',
       '}',
 
@@ -324,9 +327,10 @@
     var panel = document.createElement('div');
     panel.id = 'pp-panel';
 
-    function btn(text, sub, onClick) {
+    function btn(text, sub, onClick, title) {
       var b = document.createElement('button');
       b.textContent = text;
+      if (title) b.title = title;
       if (sub) {
         var label = document.createElement('span');
         label.className = 'pp-panel-label';
@@ -338,9 +342,9 @@
     }
 
     var widthLabels = [
-      { key: 'narrow', text: '窄栏', sub: '620' },
-      { key: 'standard', text: '标准', sub: '860' },
-      { key: 'wide', text: '宽栏', sub: '1100' },
+      { key: 'narrow', text: '窄', sub: '620', title: '窄栏 (620px)' },
+      { key: 'standard', text: '标', sub: '860', title: '标准 (860px)' },
+      { key: 'wide', text: '宽', sub: '1100', title: '宽栏 (1100px)' },
     ];
 
     widthLabels.forEach(function (wl) {
@@ -350,7 +354,7 @@
         $$('#pp-panel .pp-width-btn').forEach(function (bb) { bb.style.borderColor = ''; bb.style.color = ''; });
         b.style.borderColor = T('accent');
         b.style.color = T('accent');
-      });
+      }, wl.title);
       b.className = 'pp-width-btn';
       if (PREF.width === wl.key) {
         b.style.borderColor = T('accent');
@@ -360,36 +364,38 @@
     });
 
     var sep = document.createElement('div');
-    sep.style.cssText = 'height:1px;background:' + T('rule') + ';margin:4px 0;';
+    sep.className = 'pp-sep';
     panel.appendChild(sep);
 
     var fsDown = btn('A-', '缩小', function () {
       var cur = PREF.fontSize;
       if (cur > 14) { PREF.fontSize = cur - 2; applyFontSize(); }
-    });
+    }, '缩小字号');
     var fsUp = btn('A+', '放大', function () {
       var cur = PREF.fontSize;
       if (cur < 24) { PREF.fontSize = cur + 2; applyFontSize(); }
-    });
+    }, '放大字号');
     panel.appendChild(fsDown);
     panel.appendChild(fsUp);
 
     var sep2 = document.createElement('div');
-    sep2.style.cssText = 'height:1px;background:' + T('rule') + ';margin:4px 0;';
+    sep2.className = 'pp-sep';
     panel.appendChild(sep2);
 
-    var dmBtn = btn(PREF.mode === 'dark' ? '日间' : '夜间', PREF.mode === 'dark' ? '☀' : '☾', function () {
+    var dmBtn = btn(PREF.mode === 'dark' ? '☀' : '☾', null, function () {
       var next = PREF.mode === 'light' ? 'dark' : 'light';
       PREF.mode = next;
-      dmBtn.childNodes[0].textContent = (next === 'dark' ? '日间' : '夜间');
-      dmBtn.querySelector('.pp-panel-label').textContent = (next === 'dark' ? '☀' : '☾');
       applyTheme(next);
-    });
+    }, PREF.mode === 'dark' ? '切换日间模式' : '切换夜间模式');
     panel.appendChild(dmBtn);
 
-    var topBtn = btn('↑ 顶部', null, function () {
+    var sep3 = document.createElement('div');
+    sep3.className = 'pp-sep';
+    panel.appendChild(sep3);
+
+    var topBtn = btn('↑', null, function () {
       window.scrollTo({ top: 0, behavior: 'smooth' });
-    });
+    }, '回到顶部');
     panel.appendChild(topBtn);
 
     document.body.appendChild(panel);
@@ -435,7 +441,7 @@
     $$('.Post-RichTextContainer pre').forEach(function (pre) {
       if ($('.pp-copy-btn', pre)) return;
       var code = pre.querySelector('code');
-      if (!code) return;
+      if (!code) return; // 没有 code 标签就不加按钮
 
       var btn = document.createElement('button');
       btn.className = 'pp-copy-btn';
@@ -527,11 +533,13 @@
       document.body.style.background = T.shell;
     }
 
+    // 修复：暗色模式下切换代码高亮配色
     applyHighlightTheme(mode);
+
     rebuildPanel();
   }
 
-  // 修复：字号调节需要同时影响标题和列表
+  // 修复：字号调节需要同时影响标题和列表，而不仅仅是正文段落
   function applyFontSize() {
     var fs = PREF.fontSize;
     var ratio = fs / 16;
@@ -540,6 +548,7 @@
       article.style.fontSize = (ratio * 1.1).toFixed(2) + 'rem';
     }
 
+    // 动态覆盖标题/列表的字号，让它们随用户设置一起缩放
     if (_fontSizeOverride) _fontSizeOverride.remove();
     _fontSizeOverride = document.createElement('style');
     _fontSizeOverride.id = 'pp-fontsize-override';
@@ -568,6 +577,7 @@
   var _hljsThemeEl = null;
 
   function loadHighlightJS(cb) {
+    // 根据当前模式加载对应的高亮主题
     var isDark = PREF.mode === 'dark';
     var themeUrl = isDark
       ? 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css'
@@ -587,6 +597,7 @@
     appendToHead(script);
   }
 
+  // 修复：暗色模式下覆盖 hljs 颜色以适配我们的主题
   function applyHighlightTheme(mode) {
     if (_hljsThemeEl) _hljsThemeEl.remove();
     _hljsThemeEl = document.createElement('style');
@@ -645,11 +656,13 @@
         $$(sel).forEach(function (el) { el.remove(); });
       });
       $$('.Sticky--holder').forEach(function (el) { el.remove(); });
+      // 修复：只在灯箱未打开时才恢复滚动
       if (!document.body.classList.contains('pp-lightbox-open')) {
         document.body.style.overflow = 'auto';
       }
     }
 
+    // 修复：标题清理只移除知乎后缀，不盲目删除括号前缀
     var title = document.title;
     var cleaned = title.replace(/\s*-\s*知乎$/, '').replace(/\s*-\s*知乎专栏$/, '');
     if (cleaned !== title) document.title = cleaned;
@@ -661,7 +674,7 @@
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // 修复：用 MutationObserver 持续监听动态内容
+  // 修复：用 MutationObserver 持续监听动态内容，替代 setTimeout 猜测
   // ═══════════════════════════════════════════════════════════════
 
   function observeDynamicContent() {
@@ -677,6 +690,7 @@
         addCopyButtons();
         highlightAll();
         bindImages();
+        // 如果新增了标题，重建 TOC
         var headings = $$('.Post-RichTextContainer h2, .Post-RichTextContainer h3');
         var tocLinks = $$('#pp-toc a');
         if (headings.length !== tocLinks.length) {
@@ -705,7 +719,7 @@
   // 入口
   // ═══════════════════════════════════════════════════════════════
 
-  var lb;
+  var lb; // 灯箱实例，需要在 bindImages 中使用
 
   function init() {
     loadFonts();
@@ -720,21 +734,26 @@
       _panelRef = buildPanel();
       lb = buildLightbox();
 
+      // 绑定图片点击
       setTimeout(function () {
         bindImages();
       }, 400);
 
+      // 代码高亮
       loadHighlightJS(function () {
         addCopyButtons();
         highlightAll();
         setTimeout(function () { addCopyButtons(); highlightAll(); }, 1000);
       });
 
+      // TOC
       setTimeout(buildTOC, 500);
 
+      // 应用偏好
       applyFontSize();
       applyWidth();
 
+      // 修复：持续监听知乎的异步渲染
       observeDynamicContent();
     }
 
