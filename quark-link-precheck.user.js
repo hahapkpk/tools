@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         夸克网盘链接预检
 // @namespace    local.codex
-// @version      0.6.3
-// @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。可在文件头手动维护自动启动白名单。
+// @version      0.6.4
+// @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。支持从 GitHub 公共白名单文件自动读取启动地址。
 // @match        https://www.xn--wcv59z.com/*
 // @match        https://www.qmp4.com/*
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
@@ -21,19 +21,21 @@
 (function () {
   'use strict';
 
-  // 在这里手动填写自动启动白名单。
-  // 规则：数组非空时，仅当前 URL 包含任一条目才会启动脚本；数组为空时，仍沿用原有自动识别逻辑。
+  // 本地兜底白名单。GitHub 白名单文件不可用时，脚本会回退到这里。
   // 注意：新增站点时，还需要在文件头同步添加对应的 @match 规则，否则油猴不会注入脚本。
-  const AUTO_START_WHITELIST = [
+  const LOCAL_FALLBACK_WHITELIST = [
     'https://www.xn--wcv59z.com/',
     'https://www.qmp4.com/'
   ];
+  const REMOTE_WHITELIST_URL = 'https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.whitelist.json';
 
   const SCRIPT_ID = 'codex-quark-link-precheck';
   const CACHE_PREFIX = `${SCRIPT_ID}:cache:`;
   const CACHE_TTL = 6 * 60 * 60 * 1000;
   let CONCURRENCY = Number(GM_getValue('concurrency', 6));
   let CHECK_INTERVAL = Number(GM_getValue('interval', 200));
+  let AUTO_START_WHITELIST = LOCAL_FALLBACK_WHITELIST.slice();
+  let whitelistSource = 'local';
   const DEBUG = false;
 
   const QUARK_LINK_RE = /https?:\/\/pan\.quark\.cn\/s\/([A-Za-z0-9_-]{6,})(?:[/?#][^\s"'<>]*)?/gi;
@@ -62,6 +64,38 @@
   let hasRunChecks = false;
 
   // --- Whitelist helpers ---
+
+  function normalizeWhitelist(list) {
+    if (!Array.isArray(list)) return [];
+    return list
+      .filter(function (pattern) { return typeof pattern === 'string'; })
+      .map(function (pattern) { return pattern.trim(); })
+      .filter(Boolean);
+  }
+
+  async function loadRemoteWhitelist() {
+    try {
+      const response = await gmRequest({
+        url: REMOTE_WHITELIST_URL,
+        responseType: 'text',
+        headers: { 'Accept': 'application/json, text/plain, */*' }
+      });
+      if (response.status < 200 || response.status >= 300) {
+        throw new Error('HTTP ' + response.status);
+      }
+      const parsed = safeJson(response.text);
+      const nextList = normalizeWhitelist(parsed);
+      if (!Array.isArray(parsed)) {
+        throw new Error('白名单 JSON 不是数组');
+      }
+      AUTO_START_WHITELIST = nextList;
+      whitelistSource = 'remote';
+    } catch (err) {
+      AUTO_START_WHITELIST = LOCAL_FALLBACK_WHITELIST.slice();
+      whitelistSource = 'local';
+      log('load remote whitelist failed', err);
+    }
+  }
 
   function isInWhitelist() {
     if (!AUTO_START_WHITELIST.length) return false;
@@ -573,8 +607,9 @@
           ${settingsVisible ? `
             <div style="margin-bottom:10px;padding:10px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;color:#475569;font-size:12px">
               ${AUTO_START_WHITELIST.length
-                ? `自动启动白名单已启用，共 ${AUTO_START_WHITELIST.length} 条。需要修改时，请直接编辑脚本顶部的 AUTO_START_WHITELIST 和 @match。`
+                ? `自动启动白名单已启用，共 ${AUTO_START_WHITELIST.length} 条。当前来源：${whitelistSource === 'remote' ? 'GitHub 公共白名单' : '脚本内本地兜底白名单'}。`
                 : '自动启动白名单为空，当前使用页面内容自动识别模式。'}
+              <div style="margin-top:6px;word-break:break-all;color:#64748b">${escapeHtml(REMOTE_WHITELIST_URL)}</div>
             </div>
             <div style="margin-bottom:10px;padding:10px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0">
               <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 10px;align-items:center;font-size:12px">
@@ -779,11 +814,12 @@
     }, true);
   }
 
-  function init() {
+  async function init() {
     if (document.documentElement.getAttribute('data-' + SCRIPT_ID)) return;
 
     GM_registerMenuCommand('夸克链接预检：重新检测', () => runChecks(true));
     GM_registerMenuCommand('夸克链接预检：清除本页缓存', clearCache);
+    await loadRemoteWhitelist();
 
     if (!shouldActivate()) {
       log('not in auto-start whitelist', location.href);
