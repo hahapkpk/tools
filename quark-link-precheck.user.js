@@ -1,10 +1,9 @@
 // ==UserScript==
 // @name         夸克网盘链接预检
 // @namespace    local.codex
-// @version      0.6.4
-// @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。支持从 GitHub 公共白名单文件自动读取启动地址。
-// @match        https://www.xn--wcv59z.com/*
-// @match        https://www.qmp4.com/*
+// @version      0.6.5
+// @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。支持从 GitHub 公共白名单文件自动读取启动地址，并在非白名单页面快速退出。
+// @match        *://*/*
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
 // @connect      drive-h.quark.cn
@@ -22,7 +21,6 @@
   'use strict';
 
   // 本地兜底白名单。GitHub 白名单文件不可用时，脚本会回退到这里。
-  // 注意：新增站点时，还需要在文件头同步添加对应的 @match 规则，否则油猴不会注入脚本。
   const LOCAL_FALLBACK_WHITELIST = [
     'https://www.xn--wcv59z.com/',
     'https://www.qmp4.com/'
@@ -32,6 +30,8 @@
   const SCRIPT_ID = 'codex-quark-link-precheck';
   const CACHE_PREFIX = `${SCRIPT_ID}:cache:`;
   const CACHE_TTL = 6 * 60 * 60 * 1000;
+  const WHITELIST_CACHE_KEY = `${SCRIPT_ID}:remote-whitelist-cache`;
+  const WHITELIST_CACHE_TTL = 30 * 60 * 1000;
   let CONCURRENCY = Number(GM_getValue('concurrency', 6));
   let CHECK_INTERVAL = Number(GM_getValue('interval', 200));
   let AUTO_START_WHITELIST = LOCAL_FALLBACK_WHITELIST.slice();
@@ -73,7 +73,52 @@
       .filter(Boolean);
   }
 
-  async function loadRemoteWhitelist() {
+  function saveWhitelistCache(list) {
+    try {
+      GM_setValue(WHITELIST_CACHE_KEY, {
+        time: Date.now(),
+        list: normalizeWhitelist(list)
+      });
+    } catch (_) {
+      // Ignore storage errors.
+    }
+  }
+
+  function readWhitelistCache() {
+    try {
+      const cached = GM_getValue(WHITELIST_CACHE_KEY, null);
+      if (!cached || typeof cached !== 'object') return null;
+      const list = normalizeWhitelist(cached.list);
+      const time = Number(cached.time || 0);
+      if (!time) return null;
+      return { time, list };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function applyWhitelist(list, source) {
+    AUTO_START_WHITELIST = normalizeWhitelist(list);
+    whitelistSource = source;
+  }
+
+  function restoreWhitelistFromCache() {
+    const cached = readWhitelistCache();
+    if (!cached) {
+      applyWhitelist(LOCAL_FALLBACK_WHITELIST, 'local');
+      return false;
+    }
+    applyWhitelist(cached.list, 'remote-cache');
+    return Date.now() - cached.time <= WHITELIST_CACHE_TTL;
+  }
+
+  async function loadRemoteWhitelist(force) {
+    const cached = readWhitelistCache();
+    if (!force && cached && Date.now() - cached.time <= WHITELIST_CACHE_TTL) {
+      applyWhitelist(cached.list, 'remote-cache');
+      return true;
+    }
+
     try {
       const response = await gmRequest({
         url: REMOTE_WHITELIST_URL,
@@ -88,12 +133,17 @@
       if (!Array.isArray(parsed)) {
         throw new Error('白名单 JSON 不是数组');
       }
-      AUTO_START_WHITELIST = nextList;
-      whitelistSource = 'remote';
+      applyWhitelist(nextList, 'remote-live');
+      saveWhitelistCache(nextList);
+      return true;
     } catch (err) {
-      AUTO_START_WHITELIST = LOCAL_FALLBACK_WHITELIST.slice();
-      whitelistSource = 'local';
+      if (cached) {
+        applyWhitelist(cached.list, 'remote-cache');
+      } else {
+        applyWhitelist(LOCAL_FALLBACK_WHITELIST, 'local');
+      }
       log('load remote whitelist failed', err);
+      return false;
     }
   }
 
@@ -607,7 +657,7 @@
           ${settingsVisible ? `
             <div style="margin-bottom:10px;padding:10px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;color:#475569;font-size:12px">
               ${AUTO_START_WHITELIST.length
-                ? `自动启动白名单已启用，共 ${AUTO_START_WHITELIST.length} 条。当前来源：${whitelistSource === 'remote' ? 'GitHub 公共白名单' : '脚本内本地兜底白名单'}。`
+                ? `自动启动白名单已启用，共 ${AUTO_START_WHITELIST.length} 条。当前来源：${whitelistSource === 'remote-live' ? 'GitHub 实时白名单' : whitelistSource === 'remote-cache' ? 'GitHub 缓存白名单' : '脚本内本地兜底白名单'}。`
                 : '自动启动白名单为空，当前使用页面内容自动识别模式。'}
               <div style="margin-top:6px;word-break:break-all;color:#64748b">${escapeHtml(REMOTE_WHITELIST_URL)}</div>
             </div>
@@ -819,7 +869,10 @@
 
     GM_registerMenuCommand('夸克链接预检：重新检测', () => runChecks(true));
     GM_registerMenuCommand('夸克链接预检：清除本页缓存', clearCache);
-    await loadRemoteWhitelist();
+    const cacheFresh = restoreWhitelistFromCache();
+    if (!cacheFresh) {
+      await loadRemoteWhitelist(false);
+    }
 
     if (!shouldActivate()) {
       log('not in auto-start whitelist', location.href);
