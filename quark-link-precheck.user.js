@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         夸克网盘链接预检
 // @namespace    local.codex
-// @version      0.6.2
-// @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。支持 URL 白名单：白名单为空时自动检测，白名单非空时仅匹配的页面激活。
+// @version      0.6.3
+// @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。可在文件头手动维护自动启动白名单。
 // @match        https://www.xn--wcv59z.com/*
 // @match        https://www.qmp4.com/*
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
@@ -21,44 +21,19 @@
 (function () {
   'use strict';
 
-  // ========== 早期白名单检查 ==========
-  // 白名单非空且当前页面不匹配时，脚本直接退出（仅注册菜单命令），不做任何 DOM 操作。
-  var _wl_early = [];
-  try {
-    _wl_early = JSON.parse(GM_getValue('whitelist', '[]'));
-    if (!Array.isArray(_wl_early)) _wl_early = [];
-  } catch (_) {}
-
-  if (_wl_early.length > 0) {
-    var _href = location.href;
-    var _matched = _wl_early.some(function (p) { return _href.indexOf(p) !== -1; });
-    if (!_matched) {
-      // 仅注册白名单管理菜单，然后退出
-      GM_registerMenuCommand('夸克预检：添加当前页到白名单', function () {
-        var wl = [];
-        try { wl = JSON.parse(GM_getValue('whitelist', '[]')); } catch (_) {}
-        if (!Array.isArray(wl)) wl = [];
-        if (wl.indexOf(location.href) === -1) {
-          wl.push(location.href);
-          GM_setValue('whitelist', JSON.stringify(wl));
-          location.reload();
-        }
-      });
-      GM_registerMenuCommand('夸克预检：清空白名单', function () {
-        GM_setValue('whitelist', '[]');
-        location.reload();
-      });
-      return;
-    }
-  }
-  // ========== 早期检查结束 ==========
+  // 在这里手动填写自动启动白名单。
+  // 规则：数组非空时，仅当前 URL 包含任一条目才会启动脚本；数组为空时，仍沿用原有自动识别逻辑。
+  // 注意：新增站点时，还需要在文件头同步添加对应的 @match 规则，否则油猴不会注入脚本。
+  const AUTO_START_WHITELIST = [
+    'https://www.xn--wcv59z.com/',
+    'https://www.qmp4.com/'
+  ];
 
   const SCRIPT_ID = 'codex-quark-link-precheck';
   const CACHE_PREFIX = `${SCRIPT_ID}:cache:`;
   const CACHE_TTL = 6 * 60 * 60 * 1000;
   let CONCURRENCY = Number(GM_getValue('concurrency', 6));
   let CHECK_INTERVAL = Number(GM_getValue('interval', 200));
-  let WHITELIST = _wl_early;
   const DEBUG = false;
 
   const QUARK_LINK_RE = /https?:\/\/pan\.quark\.cn\/s\/([A-Za-z0-9_-]{6,})(?:[/?#][^\s"'<>]*)?/gi;
@@ -88,59 +63,19 @@
 
   // --- Whitelist helpers ---
 
-  function parseWhitelist() {
-    try {
-      const raw = GM_getValue('whitelist', '[]');
-      const arr = JSON.parse(raw);
-      return Array.isArray(arr) ? arr.filter(function (s) { return typeof s === 'string' && s.trim(); }) : [];
-    } catch (_) {
-      return [];
-    }
-  }
-
-  function saveWhitelist() {
-    GM_setValue('whitelist', JSON.stringify(WHITELIST));
-  }
-
   function isInWhitelist() {
-    if (!WHITELIST.length) return false;
+    if (!AUTO_START_WHITELIST.length) return false;
     var href = location.href;
-    return WHITELIST.some(function (pattern) {
-      return href.indexOf(pattern) !== -1;
+    return AUTO_START_WHITELIST.some(function (pattern) {
+      return typeof pattern === 'string' && pattern.trim() && href.indexOf(pattern.trim()) !== -1;
     });
-  }
-
-  function addToWhitelist(pattern) {
-    var p = String(pattern).trim();
-    if (!p) return false;
-    if (WHITELIST.indexOf(p) !== -1) return false;
-    WHITELIST.push(p);
-    saveWhitelist();
-    return true;
-  }
-
-  function removeFromWhitelist(pattern) {
-    var before = WHITELIST.length;
-    WHITELIST = WHITELIST.filter(function (item) { return item !== pattern; });
-    if (WHITELIST.length !== before) {
-      saveWhitelist();
-      return true;
-    }
-    return false;
-  }
-
-  function clearWhitelist() {
-    if (!WHITELIST.length) return false;
-    WHITELIST = [];
-    saveWhitelist();
-    return true;
   }
 
   // --- Activation logic ---
 
   function shouldActivate() {
     // 白名单非空时：仅白名单内的 URL 激活
-    if (WHITELIST.length > 0) {
+    if (AUTO_START_WHITELIST.length > 0) {
       return isInWhitelist();
     }
 
@@ -600,60 +535,6 @@
     return `<span class="status" style="color:${state.color};background:${state.bg}">${state.text}</span>`;
   }
 
-  function renderWhitelistUI() {
-    var items = WHITELIST.map(function (p) {
-      return '<div class="wl-item">' +
-        '<code>' + escapeHtml(p) + '</code>' +
-        '<button class="secondary danger" data-action="wl-remove" data-pattern="' + escapeAttr(p) + '" style="padding:1px 6px;font-size:11px">✕</button>' +
-        '</div>';
-    }).join('');
-
-    return '' +
-      '<div style="margin-bottom:10px;padding:10px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0">' +
-        '<div style="font-size:12px;font-weight:600;margin-bottom:6px;color:#0f172a">🎯 URL 白名单</div>' +
-        '<div style="font-size:11px;color:#64748b;margin-bottom:6px">设置后，脚本<b>仅</b>对匹配的页面生效。留空则自动检测夸克链接。</div>' +
-        (WHITELIST.length ? '<div style="margin-bottom:6px;max-height:120px;overflow:auto">' + items + '</div>' : '<div style="color:#94a3b8;font-size:11px;margin-bottom:6px">白名单为空，使用自动检测模式</div>') +
-        '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">' +
-          '<input type="text" data-setting="wl-input" placeholder="输入网址或域名关键词" style="flex:1;min-width:140px">' +
-          '<button data-action="wl-add" style="padding:4px 10px;font-size:12px">添加</button>' +
-          '<button class="secondary" data-action="wl-add-current" style="padding:4px 10px;font-size:12px">添加当前页</button>' +
-          (WHITELIST.length ? '<button class="secondary danger" data-action="wl-clear" style="padding:4px 10px;font-size:12px">清空</button>' : '') +
-        '</div>' +
-      '</div>';
-  }
-
-  function bindWhitelistEvents(root) {
-    root.querySelector('[data-action="wl-add"]')?.addEventListener('click', function () {
-      var input = root.querySelector('[data-setting="wl-input"]');
-      var val = input?.value?.trim();
-      if (!val) return;
-      if (addToWhitelist(val)) {
-        input.value = '';
-        renderPanel();
-      }
-    });
-
-    root.querySelector('[data-action="wl-add-current"]')?.addEventListener('click', function () {
-      if (addToWhitelist(location.href)) {
-        renderPanel();
-      }
-    });
-
-    root.querySelector('[data-action="wl-clear"]')?.addEventListener('click', function () {
-      if (clearWhitelist()) {
-        renderPanel();
-      }
-    });
-
-    root.querySelectorAll('[data-action="wl-remove"]').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        if (removeFromWhitelist(btn.dataset.pattern)) {
-          renderPanel();
-        }
-      });
-    });
-  }
-
   function renderPanel(notice = '') {
     const root = ensureRoot();
     const total = links.length;
@@ -683,14 +564,18 @@
       ${panelVisible ? `
         <div class="box">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px">
-            <strong>夸克链接预检${WHITELIST.length ? ' 🔒' : ''}</strong>
+            <strong>夸克链接预检${AUTO_START_WHITELIST.length ? ' 🔒' : ''}</strong>
             <div style="display:flex;align-items:center;gap:8px">
               <span style="color:#64748b;font-size:12px">${checking ? '检测中...' : '空闲'}</span>
               <button class="secondary" data-action="settings" style="padding:2px 7px;font-size:12px">⚙</button>
             </div>
           </div>
           ${settingsVisible ? `
-            ${renderWhitelistUI()}
+            <div style="margin-bottom:10px;padding:10px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;color:#475569;font-size:12px">
+              ${AUTO_START_WHITELIST.length
+                ? `自动启动白名单已启用，共 ${AUTO_START_WHITELIST.length} 条。需要修改时，请直接编辑脚本顶部的 AUTO_START_WHITELIST 和 @match。`
+                : '自动启动白名单为空，当前使用页面内容自动识别模式。'}
+            </div>
             <div style="margin-bottom:10px;padding:10px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0">
               <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 10px;align-items:center;font-size:12px">
                 <label>并发线程数</label>
@@ -733,8 +618,6 @@
       settingsVisible = false;
       renderPanel();
     });
-
-    bindWhitelistEvents(root);
   }
 
   function isVisible(el) {
@@ -899,23 +782,11 @@
   function init() {
     if (document.documentElement.getAttribute('data-' + SCRIPT_ID)) return;
 
-    // 始终注册菜单命令，确保白名单模式下也能管理白名单
     GM_registerMenuCommand('夸克链接预检：重新检测', () => runChecks(true));
     GM_registerMenuCommand('夸克链接预检：清除本页缓存', clearCache);
-    GM_registerMenuCommand('夸克链接预检：添加当前页到白名单', () => {
-      if (addToWhitelist(location.href)) {
-        location.reload();
-      }
-    });
-    GM_registerMenuCommand('夸克链接预检：清空白名单并刷新', () => {
-      if (clearWhitelist()) {
-        location.reload();
-      }
-    });
 
     if (!shouldActivate()) {
-      waitForActivation();
-      log('waiting for quark links', location.href);
+      log('not in auto-start whitelist', location.href);
       return;
     }
 
@@ -924,3 +795,4 @@
 
   init();
 })();
+
