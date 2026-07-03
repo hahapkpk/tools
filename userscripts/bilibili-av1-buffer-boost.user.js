@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Bilibili AV1 Buffer Boost
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.1.0
-// @description  Hold a key for adaptive 8x playback on Bilibili while avoiding low-buffer stalls.
+// @version      0.2.0
+// @description  Hold ArrowRight or left mouse for adaptive 8x playback on Bilibili while protecting buffer.
 // @author       Codex
 // @match        https://www.bilibili.com/video/*
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -15,11 +15,15 @@
   'use strict';
 
   const CONFIG = {
-    holdKey: 'Backquote',
+    holdKey: 'ArrowRight',
+    mouseButton: 0,
+    mouseHoldMs: 260,
     boostRate: 8,
-    catchupRate: 1.25,
-    minBufferSeconds: 8,
-    resumeBufferSeconds: 20,
+    catchupRate: 1,
+    minBufferSeconds: 20,
+    resumeBufferSeconds: 45,
+    criticalBufferSeconds: 4,
+    pauseUntilBufferSeconds: 30,
     tickMs: 250,
     hud: true
   };
@@ -49,6 +53,10 @@
     return event.code === holdKey || event.key === holdKey;
   }
 
+  function matchesMouseButton(event, button) {
+    return Boolean(event) && event.button === button;
+  }
+
   function shouldIgnoreKeyboardEvent(event) {
     const target = event && event.target;
     if (!target) {
@@ -64,7 +72,26 @@
       return {
         rate: state.normalRate,
         bufferLimited: false,
+        pausedForBuffer: false,
         reason: 'normal'
+      };
+    }
+
+    if (state.wasPausedForBuffer && state.bufferAhead < state.pauseUntilBufferSeconds) {
+      return {
+        rate: state.catchupRate,
+        bufferLimited: true,
+        pausedForBuffer: true,
+        reason: 'buffer-paused'
+      };
+    }
+
+    if (state.bufferAhead < state.criticalBufferSeconds) {
+      return {
+        rate: state.catchupRate,
+        bufferLimited: true,
+        pausedForBuffer: true,
+        reason: 'buffer-critical'
       };
     }
 
@@ -72,6 +99,7 @@
       return {
         rate: state.catchupRate,
         bufferLimited: true,
+        pausedForBuffer: false,
         reason: 'buffer-recovering'
       };
     }
@@ -80,6 +108,7 @@
       return {
         rate: state.catchupRate,
         bufferLimited: true,
+        pausedForBuffer: false,
         reason: 'buffer-low'
       };
     }
@@ -87,6 +116,7 @@
     return {
       rate: state.boostRate,
       bufferLimited: false,
+      pausedForBuffer: false,
       reason: 'boost'
     };
   }
@@ -97,7 +127,11 @@
     normalRate: 1,
     bufferLimited: false,
     lastReason: 'normal',
-    hud: null
+    hud: null,
+    mouseHoldTimer: null,
+    mouseBoosting: false,
+    pausedForBuffer: false,
+    pausedByScript: false
   };
 
   function findVideo() {
@@ -151,7 +185,8 @@
     }
 
     hud.style.display = 'block';
-    hud.textContent = `Bilibili Buffer Boost ${decision.rate}x | buffer ${bufferAhead.toFixed(1)}s | ${decision.reason}`;
+    const mode = decision.pausedForBuffer ? 'buffering' : `${decision.rate}x`;
+    hud.textContent = `Bilibili Buffer Boost ${mode} | buffer ${bufferAhead.toFixed(1)}s | ${decision.reason}`;
   }
 
   function prepareVideo(video) {
@@ -183,13 +218,47 @@
       bufferAhead,
       minBufferSeconds: CONFIG.minBufferSeconds,
       resumeBufferSeconds: CONFIG.resumeBufferSeconds,
-      wasBufferLimited: state.bufferLimited
+      criticalBufferSeconds: CONFIG.criticalBufferSeconds,
+      pauseUntilBufferSeconds: CONFIG.pauseUntilBufferSeconds,
+      wasBufferLimited: state.bufferLimited,
+      wasPausedForBuffer: state.pausedForBuffer
     });
 
     state.bufferLimited = decision.bufferLimited;
+    state.pausedForBuffer = decision.pausedForBuffer;
     state.lastReason = decision.reason;
     setVideoRate(video, decision.rate);
+    if (decision.pausedForBuffer && !video.paused) {
+      state.pausedByScript = true;
+      video.pause();
+    } else if (!decision.pausedForBuffer && state.pausedByScript && state.boosting) {
+      state.pausedByScript = false;
+      const playResult = video.play();
+      if (playResult && typeof playResult.catch === 'function') {
+        playResult.catch(() => {});
+      }
+    } else if (!decision.pausedForBuffer) {
+      state.pausedByScript = false;
+    }
     updateHud(video, bufferAhead, decision);
+  }
+
+  function beginBoost() {
+    const video = findVideo();
+    if (video) {
+      state.normalRate = video.playbackRate || 1;
+    }
+    state.boosting = true;
+    state.bufferLimited = false;
+    tick();
+  }
+
+  function endBoost() {
+    state.boosting = false;
+    state.bufferLimited = false;
+    state.pausedForBuffer = false;
+    state.mouseBoosting = false;
+    tick();
   }
 
   window.addEventListener('keydown', (event) => {
@@ -197,14 +266,8 @@
       return;
     }
 
-    const video = findVideo();
-    if (video) {
-      state.normalRate = video.playbackRate || 1;
-    }
-    state.boosting = true;
-    state.bufferLimited = false;
     event.preventDefault();
-    tick();
+    beginBoost();
   }, true);
 
   window.addEventListener('keyup', (event) => {
@@ -212,10 +275,41 @@
       return;
     }
 
-    state.boosting = false;
-    state.bufferLimited = false;
     event.preventDefault();
-    tick();
+    endBoost();
+  }, true);
+
+  window.addEventListener('mousedown', (event) => {
+    if (!matchesMouseButton(event, CONFIG.mouseButton) || shouldIgnoreKeyboardEvent(event)) {
+      return;
+    }
+
+    const video = findVideo();
+    if (!video || !event.target || !video.contains(event.target)) {
+      return;
+    }
+
+    window.clearTimeout(state.mouseHoldTimer);
+    state.mouseHoldTimer = window.setTimeout(() => {
+      state.mouseBoosting = true;
+      beginBoost();
+    }, CONFIG.mouseHoldMs);
+  }, true);
+
+  window.addEventListener('mouseup', () => {
+    window.clearTimeout(state.mouseHoldTimer);
+    state.mouseHoldTimer = null;
+    if (state.mouseBoosting) {
+      endBoost();
+    }
+  }, true);
+
+  window.addEventListener('blur', () => {
+    window.clearTimeout(state.mouseHoldTimer);
+    state.mouseHoldTimer = null;
+    if (state.boosting) {
+      endBoost();
+    }
   }, true);
 
   const observer = new MutationObserver(() => {
