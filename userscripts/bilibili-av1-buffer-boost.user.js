@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Bilibili AV1 Buffer Boost
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.2.0
-// @description  Hold ArrowRight or left mouse for adaptive 8x playback on Bilibili while protecting buffer.
+// @version      0.3.0
+// @description  Hold ArrowRight or left mouse for adaptive 8x playback on Bilibili, with optional experimental prefetch.
 // @author       Codex
 // @match        https://www.bilibili.com/video/*
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -25,7 +25,12 @@
     criticalBufferSeconds: 4,
     pauseUntilBufferSeconds: 30,
     tickMs: 250,
-    hud: true
+    hud: true,
+    experimentalPrefetch: false,
+    prefetchLookahead: 4,
+    prefetchConcurrency: 2,
+    prefetchRecentLimit: 16,
+    prefetchCacheLimit: 24
   };
 
   function getBufferedAhead(video) {
@@ -65,6 +70,56 @@
 
     const tagName = String(target.tagName || '').toUpperCase();
     return target.isContentEditable === true || tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT';
+  }
+
+  function isBilibiliMediaUrl(url) {
+    try {
+      const parsed = new URL(String(url));
+      return /(^|\.)bilivideo\.com$/i.test(parsed.hostname) && /\.m4s$/i.test(parsed.pathname);
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function rememberRecentMediaUrl(recentUrls, url, maxItems) {
+    const existingIndex = recentUrls.indexOf(url);
+    if (existingIndex >= 0) {
+      recentUrls.splice(existingIndex, 1);
+    }
+
+    recentUrls.unshift(url);
+    while (recentUrls.length > maxItems) {
+      recentUrls.pop();
+    }
+  }
+
+  function inferNextMediaUrls(url, count) {
+    let parsed;
+    try {
+      parsed = new URL(String(url));
+    } catch (_error) {
+      return [];
+    }
+
+    const match = parsed.pathname.match(/(\d+)(\.[^/.]+)$/);
+    if (!match) {
+      return [];
+    }
+
+    const width = match[1].length;
+    const current = Number(match[1]);
+    if (!Number.isSafeInteger(current)) {
+      return [];
+    }
+
+    const urls = [];
+    for (let offset = 1; offset <= count; offset += 1) {
+      const next = String(current + offset).padStart(width, '0');
+      const nextUrl = new URL(parsed.toString());
+      nextUrl.pathname = parsed.pathname.replace(/(\d+)(\.[^/.]+)$/, `${next}$2`);
+      urls.push(nextUrl.toString());
+    }
+    return urls;
   }
 
   function choosePlaybackRate(state) {
@@ -131,8 +186,105 @@
     mouseHoldTimer: null,
     mouseBoosting: false,
     pausedForBuffer: false,
-    pausedByScript: false
+    pausedByScript: false,
+    prefetchCache: new Map(),
+    prefetchQueue: [],
+    prefetchActive: 0,
+    prefetchRecentUrls: []
   };
+
+  function getRequestUrl(input) {
+    if (typeof input === 'string') {
+      return input;
+    }
+    if (input && typeof input.url === 'string') {
+      return input.url;
+    }
+    return '';
+  }
+
+  function trimPrefetchCache() {
+    while (state.prefetchCache.size > CONFIG.prefetchCacheLimit) {
+      const oldestKey = state.prefetchCache.keys().next().value;
+      state.prefetchCache.delete(oldestKey);
+    }
+  }
+
+  function enqueuePrefetch(url) {
+    if (!CONFIG.experimentalPrefetch || !isBilibiliMediaUrl(url)) {
+      return;
+    }
+    if (state.prefetchCache.has(url) || state.prefetchQueue.includes(url)) {
+      return;
+    }
+
+    state.prefetchQueue.push(url);
+    pumpPrefetchQueue();
+  }
+
+  function pumpPrefetchQueue() {
+    if (!CONFIG.experimentalPrefetch) {
+      return;
+    }
+
+    while (state.prefetchActive < CONFIG.prefetchConcurrency && state.prefetchQueue.length > 0) {
+      const url = state.prefetchQueue.shift();
+      state.prefetchActive += 1;
+      originalFetch(url, {
+        credentials: 'include',
+        cache: 'force-cache',
+        priority: 'low'
+      }).then((response) => {
+        if (!response.ok) {
+          return null;
+        }
+        return response.arrayBuffer().then((buffer) => ({
+          buffer,
+          status: response.status,
+          statusText: response.statusText,
+          headers: Array.from(response.headers.entries())
+        }));
+      }).then((entry) => {
+        if (entry) {
+          state.prefetchCache.set(url, entry);
+          trimPrefetchCache();
+        }
+      }).catch(() => {}).finally(() => {
+        state.prefetchActive -= 1;
+        pumpPrefetchQueue();
+      });
+    }
+  }
+
+  function observeMediaRequest(url) {
+    if (!CONFIG.experimentalPrefetch || !isBilibiliMediaUrl(url)) {
+      return;
+    }
+
+    rememberRecentMediaUrl(state.prefetchRecentUrls, url, CONFIG.prefetchRecentLimit);
+    inferNextMediaUrls(url, CONFIG.prefetchLookahead).forEach(enqueuePrefetch);
+  }
+
+  const originalFetch = window.fetch.bind(window);
+  if (CONFIG.experimentalPrefetch && typeof window.fetch === 'function') {
+    window.fetch = function patchedFetch(input, init) {
+      const url = getRequestUrl(input);
+      if (isBilibiliMediaUrl(url)) {
+        const cached = state.prefetchCache.get(url);
+        if (cached) {
+          state.prefetchCache.delete(url);
+          observeMediaRequest(url);
+          return Promise.resolve(new Response(cached.buffer.slice(0), {
+            status: cached.status,
+            statusText: cached.statusText,
+            headers: cached.headers
+          }));
+        }
+        observeMediaRequest(url);
+      }
+      return originalFetch(input, init);
+    };
+  }
 
   function findVideo() {
     const videos = Array.from(document.querySelectorAll('video'));
