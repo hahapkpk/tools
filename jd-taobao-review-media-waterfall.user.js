@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.15
+// @version      0.5.16
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -121,7 +121,7 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.15';
+  const SCRIPT_VERSION = '0.5.16';
   const WHEEL_SHIFT_COOLDOWN = 320;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;
@@ -518,6 +518,12 @@
     return '';
   }
 
+  function serializeRequestBody(body) {
+    if (typeof body === 'string') return body;
+    if (Object.prototype.toString.call(body) === '[object URLSearchParams]') return body.toString();
+    return '';
+  }
+
   function installJdResponseCapture(host, onMedia) {
     if (!host || !onMedia) return () => {};
     const captureKey = '__reviewMediaWallJdResponseCapture';
@@ -568,7 +574,7 @@
       };
       XHR.prototype.send = function send(...args) {
         if (/api\.m\.jd\.com\/client\.action/.test(this.__rmwJdResponseUrl || '')) {
-          capture.lastRequest = { url: this.__rmwJdResponseUrl, body: typeof args[0] === 'string' ? args[0] : '' };
+          capture.lastRequest = { url: this.__rmwJdResponseUrl, body: serializeRequestBody(args[0]) };
           this.addEventListener('load', () => {
             try {
               capture.emit(JSON.parse(this.responseText));
@@ -589,7 +595,7 @@
         const url = String(typeof input === 'string' ? input : input?.url || '');
         const body = args[0]?.body || input?.body || '';
         if (/api\.m\.jd\.com\/client\.action/.test(url)) {
-          capture.lastRequest = { url, body: typeof body === 'string' ? body : '' };
+          capture.lastRequest = { url, body: serializeRequestBody(body) };
         }
         return originalFetch.call(this, input, ...args).then((response) => {
           if (/api\.m\.jd\.com\/client\.action/.test(url)) {

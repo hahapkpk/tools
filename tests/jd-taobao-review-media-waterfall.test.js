@@ -305,6 +305,32 @@ test('京东原生 XHR 响应会把评价媒体送入图片墙监听器', () => 
   assert.equal(received[0].src, 'https://img30.360buyimg.com/shaidan/real.jpg');
 });
 
+test('京东继续加载会保留 URLSearchParams 形式的首个评论请求体', async () => {
+  const firstBody = new URLSearchParams({
+    body: JSON.stringify({ page: '0', pageSize: 10 })
+  });
+  const requests = [];
+  const host = {
+    fetch(url, options) {
+      requests.push({ url, options });
+      return Promise.resolve({
+        ok: true,
+        clone() {
+          return { json: () => Promise.resolve({ result: { pageInfo: { data: { pageIndex: 0, hasNextPage: true } } } }) };
+        }
+      });
+    }
+  };
+  const stop = api.installJdResponseCapture(host, () => {});
+  await host.fetch('https://api.m.jd.com/client.action', { method: 'POST', body: firstBody });
+  await host.__reviewMediaWallJdResponseCapture.requestNextPage();
+  stop();
+
+  assert.equal(requests.length, 2);
+  const nextPayload = JSON.parse(new URLSearchParams(requests[1].options.body).get('body'));
+  assert.equal(nextPayload.page, '1');
+});
+
 test('继续加载时优先驱动原生评价列表内部的滚动容器', () => {
   const child = { clientHeight: 200, scrollHeight: 600, parentElement: null };
   const root = {
@@ -762,7 +788,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.15/);
+  assert.match(source, /@version\s+0\.5\.16/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
