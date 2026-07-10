@@ -816,7 +816,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.17/);
+  assert.match(source, /@version\s+0\.5\.18/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
@@ -985,6 +985,22 @@ test('图片墙滚动接近底部时按需懒加载原生评价列表补齐更�
   assert.doesNotMatch(source, /waitForNative[\s\S]{0,260}scheduleAutoLoad\(true\)/);
 });
 
+test('京东原生评价列表每轮滚动都直达当前底部以触发下一页', () => {
+  const scroller = {
+    scrollTop: 0,
+    clientHeight: 576,
+    scrollHeight: 3500
+  };
+  const positions = [];
+  const moved = api.scrollNativeContainerToEnd(scroller, (node) => {
+    positions.push(node.scrollTop);
+    node.scrollHeight += 3100;
+  }, 3);
+
+  assert.equal(moved, true);
+  assert.deepEqual(positions, [2924, 6024, 9124]);
+});
+
 test('按需懒加载新增内容后只有仍接近图片墙底部才继续下一批', () => {
   assert.match(source, /let userRequestedMore = false/);
   assert.match(source, /userRequestedMore = true/);
@@ -1001,6 +1017,10 @@ test('京东自动加载会复用最近一次评论接口请求体拉取下一�
   assert.match(source, /capture\.requestNextPage/);
   assert.match(source, /if \(!response\.ok\) return false/);
   assert.match(source, /adapter\.requestNextPage/);
+});
+
+test('京东原生列表已经成功滚动时不重复发送可能失效的签名分页请求', () => {
+  assert.match(source, /const pageRequest = moved\s*\? Promise\.resolve\(false\)\s*:\s*\(adapter\.requestNextPage\?\.\(\) \|\| Promise\.resolve\(false\)\)/);
 });
 
 test('淘宝图视频筛选项含数量子节点时点击真实筛选容器', () => {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.17
+// @version      0.5.18
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -125,7 +125,7 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.17';
+  const SCRIPT_VERSION = '0.5.18';
   const WHEEL_SHIFT_COOLDOWN = 320;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;
@@ -1363,6 +1363,19 @@
     return candidates.sort((a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight));
   }
 
+  function scrollNativeContainerToEnd(scroller, emitScrollEvents, pulses = AUTO_LOAD_SCROLL_PULSES) {
+    let moved = false;
+    for (let i = 0; i < pulses; i += 1) {
+      const before = scroller.scrollTop;
+      const distance = Math.max(scroller.clientHeight * 1.4, 720);
+      const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+      scroller.scrollTop = maxTop;
+      emitScrollEvents?.(scroller, Math.max(distance, maxTop - before));
+      moved ||= scroller.scrollTop > before + 1;
+    }
+    return moved;
+  }
+
   function openWall(doc, adapter, wallSession = createWallSession(), wallController = createWallController(adapter)) {
     const old = doc.getElementById(IDS.backdrop);
     if (old) old.remove();
@@ -1536,16 +1549,7 @@
       scroller.dispatchEvent(new root.Event('scroll', { bubbles: true }));
     }
     function scrollOneNativeContainer(scroller) {
-      let moved = false;
-      for (let i = 0; i < AUTO_LOAD_SCROLL_PULSES; i += 1) {
-        const before = scroller.scrollTop;
-        const distance = Math.max(scroller.clientHeight * 1.4, 720);
-        const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-        scroller.scrollTop = Math.min(maxTop, scroller.scrollTop + distance);
-        emitScrollEvents(scroller, distance);
-        moved ||= scroller.scrollTop > before + 1;
-      }
-      return moved;
+      return scrollNativeContainerToEnd(scroller, emitScrollEvents);
     }
     function scrollNativeReviews() {
       const candidates = findScrollableCandidates(nativeRoot);
@@ -1583,7 +1587,9 @@
         renderWall('评价加载失败，请重试。');
         return;
       }
-      const pageRequest = adapter.requestNextPage?.() || Promise.resolve(false);
+      const pageRequest = moved
+        ? Promise.resolve(false)
+        : (adapter.requestNextPage?.() || Promise.resolve(false));
       root.Promise.resolve(pageRequest).then((requested) => {
         if (requested) moved = true;
       }).finally(() => root.setTimeout(() => {
@@ -1754,6 +1760,7 @@
     installJdResponseCapture,
     collectWithFallback,
     findScrollable,
+    scrollNativeContainerToEnd,
     ensureLauncher,
     init
   };
