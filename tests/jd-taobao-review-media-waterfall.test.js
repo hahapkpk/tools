@@ -331,6 +331,34 @@ test('京东继续加载会保留 URLSearchParams 形式的首个评论请求体
   assert.equal(nextPayload.page, '1');
 });
 
+test('京东继续加载支持 body 位于 GET 查询参数且递增 offset', async () => {
+  const firstPayload = { requestSource: 'pc', sku: '100083876773', offset: '1', num: '10', type: '4', isCurrentSku: true };
+  const firstUrl = `https://api.m.jd.com/client.action?appid=pc-rate-qa&body=${encodeURIComponent(JSON.stringify(firstPayload))}&functionId=getFoldCommentList`;
+  const requests = [];
+  const host = {
+    fetch(url, options) {
+      requests.push({ url: String(url), options });
+      return Promise.resolve({
+        ok: true,
+        clone() {
+          return { json: () => Promise.resolve({ result: { pageInfo: { data: { pageIndex: 1, hasNextPage: true, maxPage: 8 } } } }) };
+        }
+      });
+    }
+  };
+  const stop = api.installJdResponseCapture(host, () => {});
+  await host.fetch(firstUrl);
+  host.__reviewMediaWallJdResponseCapture.pageInfo = { pageIndex: 1, hasNextPage: true, maxPage: 8 };
+  await host.__reviewMediaWallJdResponseCapture.requestNextPage();
+  stop();
+
+  assert.equal(requests.length, 2);
+  const nextUrl = new URL(requests[1].url);
+  const nextPayload = JSON.parse(nextUrl.searchParams.get('body'));
+  assert.equal(nextPayload.offset, '2');
+  assert.equal(requests[1].options.method, 'GET');
+});
+
 test('继续加载时优先驱动原生评价列表内部的滚动容器', () => {
   const child = { clientHeight: 200, scrollHeight: 600, parentElement: null };
   const root = {
@@ -788,7 +816,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.16/);
+  assert.match(source, /@version\s+0\.5\.17/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
@@ -807,6 +835,29 @@ test('原生筛选切换后重置为当前筛选媒体集合', () => {
   controller.replace([{ src: 'old.jpg', type: 'image' }]);
   controller.onFilterChanged({});
   assert.deepEqual(controller.items().map(item => item.src), ['new.jpg']);
+});
+
+test('即时当前商品筛选先清空旧集合且后续 DOM 同步只追加不覆盖响应媒体', () => {
+  const controller = api.createWallController({
+    collectMedia: () => [{ src: 'dom-current.jpg', type: 'image' }]
+  });
+  controller.replace([{ src: 'all-products.jpg', type: 'image' }]);
+  const previous = controller.beginFilterChange();
+  controller.append([{ src: 'api-current.jpg', type: 'image' }]);
+  controller.appendFrom({});
+
+  assert.deepEqual(previous.map(item => item.src), ['all-products.jpg']);
+  assert.deepEqual(controller.items().map(item => item.src), ['api-current.jpg', 'dom-current.jpg']);
+  assert.match(source, /if \(behavior === 'immediate'\)[\s\S]{0,500}controller\.beginFilterChange\(\)[\s\S]{0,500}syncMedia\(false\)/);
+});
+
+test('当前商品首批媒体不足一屏时自动请求下一页', () => {
+  assert.equal(api.shouldAutoFillCurrentProduct({ active: true, added: true, nearBottom: true, loadingState: 'idle' }), true);
+  assert.equal(api.shouldAutoFillCurrentProduct({ active: false, added: true, nearBottom: true, loadingState: 'idle' }), false);
+  assert.equal(api.shouldAutoFillCurrentProduct({ active: true, added: false, nearBottom: true, loadingState: 'idle' }), false);
+  assert.equal(api.shouldAutoFillCurrentProduct({ active: true, added: true, nearBottom: false, loadingState: 'idle' }), false);
+  assert.equal(api.shouldAutoFillCurrentProduct({ active: true, added: true, nearBottom: true, loadingState: 'exhausted' }), false);
+  assert.match(source, /shouldAutoFillCurrentProduct\([\s\S]{0,300}requestMore\(\)/);
 });
 
 test('图视频筛选已激活时不重复触发原生点击', () => {
@@ -940,12 +991,13 @@ test('按需懒加载新增内容后只有仍接近图片墙底部才继续下�
   assert.match(source, /wallSession\.snapshot\(\)\.loadingState === 'exhausted'/);
   assert.match(source, /wallSession\.retryLoad\(\)/);
   assert.match(source, /if \(\(moved \|\| added\) && userRequestedMore && isGridNearBottom\(\) && autoLoadRounds < AUTO_LOAD_MAX_ROUNDS/);
-  assert.match(source, /controller\.items\(\)\.length > before && userRequestedMore && isGridNearBottom\(\)/);
+  assert.match(source, /else if \(added && userRequestedMore && nearBottom\)/);
 });
 
 test('京东自动加载会复用最近一次评论接口请求体拉取下一页', () => {
   assert.match(source, /function buildNextJdBody/);
-  assert.match(source, /capture\.lastRequest = \{ url: this\.__rmwJdResponseUrl/);
+  assert.match(source, /function buildNextJdRequest/);
+  assert.match(source, /capture\.lastRequest = \{\s*url: this\.__rmwJdResponseUrl/);
   assert.match(source, /capture\.requestNextPage/);
   assert.match(source, /if \(!response\.ok\) return false/);
   assert.match(source, /adapter\.requestNextPage/);

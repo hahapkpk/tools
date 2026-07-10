@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.16
+// @version      0.5.17
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -113,6 +113,10 @@
     return filter === 'all' ? items.slice() : items.filter((item) => item.type === filter);
   }
 
+  function shouldAutoFillCurrentProduct({ active, added, nearBottom, loadingState }) {
+    return Boolean(active && added && nearBottom && loadingState !== 'loading' && loadingState !== 'exhausted');
+  }
+
   const STORAGE_KEYS = {
     cardSize: 'reviewMediaWall.cardSize',
     contextWidth: 'reviewMediaWall.contextWidth'
@@ -121,7 +125,7 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.16';
+  const SCRIPT_VERSION = '0.5.17';
   const WHEEL_SHIFT_COOLDOWN = 320;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;
@@ -485,7 +489,7 @@
     function visit(item) {
       if (!item || typeof item !== 'object') return;
       Object.keys(item).forEach((key) => {
-        if (/^(?:page|pageNum|pageNo|pageIndex|currentPage)$/.test(key)) {
+        if (/^(?:page|pageNum|pageNo|pageIndex|currentPage|offset)$/.test(key)) {
           item[key] = String(nextPage);
           replaced = true;
         } else {
@@ -524,6 +528,36 @@
     return '';
   }
 
+  function buildNextJdRequest(lastRequest, nextPage) {
+    if (!lastRequest?.url) return null;
+    const body = buildNextJdBody(lastRequest.body, nextPage);
+    if (body) {
+      return {
+        url: lastRequest.url,
+        options: {
+          method: 'POST',
+          body,
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        }
+      };
+    }
+    try {
+      const url = new URL(lastRequest.url, root.location?.href || 'https://item.jd.com/');
+      const encodedBody = url.searchParams.get('body');
+      if (!encodedBody) return null;
+      const parsed = JSON.parse(encodedBody);
+      replacePageFields(parsed, nextPage);
+      url.searchParams.set('body', JSON.stringify(parsed));
+      return {
+        url: url.toString(),
+        options: { method: lastRequest.method || 'GET', credentials: 'include' }
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
   function installJdResponseCapture(host, onMedia) {
     if (!host || !onMedia) return () => {};
     const captureKey = '__reviewMediaWallJdResponseCapture';
@@ -546,14 +580,9 @@
       if (!capture.lastRequest || pageInfo.hasNextPage === false || (pageInfo.maxPage && nextPage > pageInfo.maxPage)) {
         return Promise.resolve(false);
       }
-      const body = buildNextJdBody(capture.lastRequest.body, nextPage);
-      if (!body) return Promise.resolve(false);
-      return host.fetch(capture.lastRequest.url, {
-        method: 'POST',
-        body,
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-      }).then((response) => {
+      const request = buildNextJdRequest(capture.lastRequest, nextPage);
+      if (!request) return Promise.resolve(false);
+      return host.fetch(request.url, request.options).then((response) => {
         if (!response.ok) return false;
         return response.clone().json().then((payload) => {
           const items = collectJdPayloadMedia(payload);
@@ -570,11 +599,16 @@
       const originalSend = XHR.prototype.send;
       XHR.prototype.open = function open(method, url, ...args) {
         this.__rmwJdResponseUrl = String(url || '');
+        this.__rmwJdResponseMethod = String(method || 'GET').toUpperCase();
         return originalOpen.call(this, method, url, ...args);
       };
       XHR.prototype.send = function send(...args) {
         if (/api\.m\.jd\.com\/client\.action/.test(this.__rmwJdResponseUrl || '')) {
-          capture.lastRequest = { url: this.__rmwJdResponseUrl, body: serializeRequestBody(args[0]) };
+          capture.lastRequest = {
+            url: this.__rmwJdResponseUrl,
+            method: this.__rmwJdResponseMethod || 'GET',
+            body: serializeRequestBody(args[0])
+          };
           this.addEventListener('load', () => {
             try {
               capture.emit(JSON.parse(this.responseText));
@@ -595,7 +629,11 @@
         const url = String(typeof input === 'string' ? input : input?.url || '');
         const body = args[0]?.body || input?.body || '';
         if (/api\.m\.jd\.com\/client\.action/.test(url)) {
-          capture.lastRequest = { url, body: serializeRequestBody(body) };
+          capture.lastRequest = {
+            url,
+            method: String(args[0]?.method || input?.method || 'GET').toUpperCase(),
+            body: serializeRequestBody(body)
+          };
         }
         return originalFetch.call(this, input, ...args).then((response) => {
           if (/api\.m\.jd\.com\/client\.action/.test(url)) {
@@ -825,6 +863,11 @@
       },
       items() {
         return store.items();
+      },
+      beginFilterChange() {
+        const previous = store.items();
+        store.replace([]);
+        return previous;
       },
       onFilterChanged(nativeRoot) {
         store.replace(adapter.collectMedia(nativeRoot));
@@ -1443,10 +1486,21 @@
       stopCapture = adapter.observeResponses((items) => {
         const before = controller.items().length;
         controller.append(items);
+        const added = controller.items().length > before;
         mediaStats.lastAdded = Math.max(0, controller.items().length - before);
-        wallSession.finishLoad(controller.items().length > before);
+        wallSession.finishLoad(added);
         renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
-        if (controller.items().length > before && userRequestedMore && isGridNearBottom()) scheduleAutoLoad(false);
+        const nearBottom = isGridNearBottom();
+        if (shouldAutoFillCurrentProduct({
+          active: currentProductActive,
+          added,
+          nearBottom,
+          loadingState: wallSession.snapshot().loadingState
+        })) {
+          requestMore();
+        } else if (added && userRequestedMore && nearBottom) {
+          scheduleAutoLoad(false);
+        }
       });
     }
     adapter.openNativeReviews(doc);
@@ -1605,14 +1659,23 @@
       currentProductActive = !currentProductActive;
       currentProduct.classList.toggle('is-active', currentProductActive);
       if (currentProductActive) {
-        allProductItems = controller.items();
         const behavior = adapter.openCurrentProductFilter(nativeRoot);
         if (behavior === 'interactive') {
+          allProductItems = controller.items();
           backdrop.style.display = 'none';
           waitForCurrentProductFilter();
           return;
         }
-        if (behavior === 'immediate') root.setTimeout(() => syncMedia(true), 180);
+        if (behavior === 'immediate') {
+          allProductItems = controller.beginFilterChange();
+          mediaStats.lastAdded = 0;
+          userRequestedMore = false;
+          autoLoadRounds = 0;
+          autoLoadIdleRounds = 0;
+          wallSession.retryLoad();
+          renderWall('正在加载当前商品评价...');
+          root.setTimeout(() => syncMedia(false), 180);
+        }
       } else {
         adapter.openAllReviewsFilter?.(nativeRoot);
         if (allProductItems.length) {
@@ -1681,6 +1744,7 @@
     detectSite,
     createMediaStore,
     filterMedia,
+    shouldAutoFillCurrentProduct,
     createWallSession,
     adapters,
     IDS,
