@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.18
+// @version      0.5.19
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -125,7 +125,7 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.18';
+  const SCRIPT_VERSION = '0.5.19';
   const WHEEL_SHIFT_COOLDOWN = 320;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;
@@ -1347,9 +1347,11 @@
       seen.add(node);
       const style = root.getComputedStyle ? root.getComputedStyle(node) : null;
       const className = String(node.className || '');
+      const overflowY = String(style?.overflowY || node.style?.overflowY || '');
       const canScroll = node.scrollHeight > node.clientHeight + 10;
-      const looksScrollable = /auto|scroll/i.test(style?.overflowY || '') || /(?:list|container|scroll|drawer|rate)/i.test(className);
-      if (canScroll || looksScrollable) candidates.push(node);
+      const isClipped = /hidden|clip/i.test(overflowY);
+      const looksScrollable = /auto|scroll/i.test(overflowY) || /(?:list|container|scroll|drawer|rate)/i.test(className);
+      if (!isClipped && (canScroll || looksScrollable)) candidates.push(node);
     }
     const nested = element?.querySelectorAll
       ? Array.from(element.querySelectorAll('*'))

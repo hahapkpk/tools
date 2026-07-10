@@ -372,6 +372,32 @@ test('继续加载时优先驱动原生评价列表内部的滚动容器', () =>
   assert.equal(api.findScrollable(root), child);
 });
 
+test('继续加载会跳过高度很大但 overflow hidden 的骨架占位块', () => {
+  const skeleton = {
+    className: 'item-ske skeleton',
+    style: { overflowY: 'hidden' },
+    clientHeight: 200,
+    scrollHeight: 1400,
+    parentElement: null
+  };
+  const list = {
+    className: 'review-list',
+    style: { overflowY: 'auto' },
+    clientHeight: 200,
+    scrollHeight: 600,
+    parentElement: null
+  };
+  const root = {
+    clientHeight: 800,
+    scrollHeight: 800,
+    parentElement: null,
+    querySelectorAll() {
+      return [skeleton, list];
+    }
+  };
+  assert.equal(api.findScrollable(root), list);
+});
+
 test('预览打开时点击外层只退回图片墙，再次点击才关闭图片墙', () => {
   const state = api.createWallState();
   state.openWall();
@@ -816,7 +842,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.18/);
+  assert.match(source, /@version\s+0\.5\.19/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
