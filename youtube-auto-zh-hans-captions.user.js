@@ -2252,10 +2252,13 @@
         continue;
       }
       const gap = normalizedCue.start - current.end;
-      const shouldSplit = /[。！？.!?]\s*$/.test(current.text) ||
+      const combinedLen = countTextUnits(`${current.text}${normalizedCue.text}`);
+      const shouldSplit = /[。！？.!?？…」』」）)]\s*$/.test(current.text) ||
         gap > VOICE_SENTENCE_MAX_GAP_SECONDS ||
         countTextUnits(current.text) >= VOICE_SENTENCE_MAX_UNITS ||
-        countTextUnits(`${current.text}${normalizedCue.text}`) > VOICE_SENTENCE_MAX_UNITS;
+        combinedLen > VOICE_SENTENCE_MAX_UNITS ||
+        // Always split if gap > 0.5s even mid-sentence (avoids long awkward pauses)
+        (gap > 0.5 && combinedLen > 40);
       if (shouldSplit) {
         merged.push(current);
         current = normalizedCue;
@@ -2787,11 +2790,28 @@
   }
 
   function handleVideoSeeking() {
-    const activeVoiceIndex = Number.isInteger(state.remoteVoiceCurrent?.index) ? state.remoteVoiceCurrent.index : state.spokenCueIndex;
-    cancelSpeech();
-    const targetVoiceIndex = findVoiceCueIndex(getVideoEl()?.currentTime || 0);
-    state.seekVoiceSuppressUntil = targetVoiceIndex >= 0 && targetVoiceIndex === activeVoiceIndex ? targetVoiceIndex : -1;
-    state.spokenCueIndex = state.seekVoiceSuppressUntil;
+    const video = getVideoEl();
+    if (!video) return;
+    if (isRemoteVoiceEngine()) {
+      // Remote voice: use voiceCues array for index comparison
+      const activeVoiceIndex = Number.isInteger(state.remoteVoiceCurrent?.index)
+        ? state.remoteVoiceCurrent.index
+        : findVoiceCueIndex(state.spokenCueIndex >= 0 ? state.cues[state.spokenCueIndex]?.start : -1);
+      cancelSpeech();
+      const targetVoiceIndex = findVoiceCueIndex(video.currentTime);
+      state.seekVoiceSuppressUntil = targetVoiceIndex >= 0 && targetVoiceIndex === activeVoiceIndex ? targetVoiceIndex : -1;
+      state.spokenCueIndex = state.seekVoiceSuppressUntil;
+    } else {
+      // Browser speech: use cues array indices directly
+      const wasSpeaking = state.spokenCueIndex >= 0;
+      cancelSpeech();
+      if (wasSpeaking) {
+        const newIndex = findCueIndex(video.currentTime);
+        // Only suppress if landing on the same cue after seek
+        state.seekVoiceSuppressUntil = newIndex >= 0 && newIndex === state.spokenCueIndex ? newIndex : -1;
+        state.spokenCueIndex = state.seekVoiceSuppressUntil;
+      }
+    }
   }
 
   function syncVoice(cue, index, video) {
