@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube / X 英文视频简体中文字幕与 AI 配音
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.6.1
+// @version      0.7.0
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube and X. X videos can be transcribed from the player audio, translated locally, and dubbed in Chinese.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -10,7 +10,7 @@
 // @match        https://twitter.com/*
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/youtube-auto-zh-hans-captions.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/youtube-auto-zh-hans-captions.user.js
-// @run-at       document-idle
+// @run-at       document-start
 // @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
@@ -20,6 +20,7 @@
 // @connect      127.0.0.1
 // @connect      localhost
 // @connect      api.openai.com
+// @connect      111.46.161.132
 // @connect      *
 // ==/UserScript==
 
@@ -42,6 +43,7 @@
   const TENCENT_SECRET_ID_STORAGE_KEY = `${SCRIPT_ID}:tencent-secret-id`;
   const TENCENT_SECRET_KEY_STORAGE_KEY = `${SCRIPT_ID}:tencent-secret-key`;
   const OPENAI_TRANSCRIPTION_KEY_STORAGE_KEY = `${SCRIPT_ID}:openai-transcription-key`;
+  const X_CLOUD_TOKEN_STORAGE_KEY = `${SCRIPT_ID}:x-cloud-token`;
   const OPENAI_TRANSCRIPTION_URL = 'https://api.openai.com/v1/audio/transcriptions';
   const VOLC_TTS_URL = 'https://openspeech.bytedance.com/api/v3/tts/unidirectional';
   const VOLC_RESOURCE_ID = 'seed-tts-2.0';
@@ -277,7 +279,8 @@
     voiceSyncMode: 'natural',
     terminologyMap: '',
     originalVolume: 0.25,
-    xTranscriptionMaxSeconds: 600
+    xTranscriptionMaxSeconds: 600,
+    xCloudApiBase: 'http://111.46.161.132:8788'
   };
 
   const state = {
@@ -306,6 +309,8 @@
     voiceProgressNoticeUntil: 0,
     localTranslators: new Map(),
     xCapture: null,
+    xCloudMediaUrl: '',
+    xCloudPoll: null,
     settings: loadSettings(),
     // DOM cache for video element
     _cachedVideoEl: null,
@@ -387,6 +392,16 @@
   function saveOpenAiTranscriptionKey(value) {
     if (typeof GM_setValue !== 'function') return;
     GM_setValue(OPENAI_TRANSCRIPTION_KEY_STORAGE_KEY, String(value || '').trim());
+  }
+
+  function getXCloudToken() {
+    try { return typeof GM_getValue === 'function' ? String(GM_getValue(X_CLOUD_TOKEN_STORAGE_KEY, '') || '') : ''; }
+    catch { return ''; }
+  }
+
+  function saveXCloudToken(value) {
+    if (typeof GM_setValue !== 'function') return;
+    GM_setValue(X_CLOUD_TOKEN_STORAGE_KEY, String(value || '').trim());
   }
 
   function injectStyle() {
@@ -1467,6 +1482,46 @@
         makeRow('X 音轨转写', xTranscribeButton),
         makeRow('X 转写说明', xNote)
       );
+
+      // X 云端转写 (cloud caption service)
+      const cloudWrap = document.createElement('span');
+      cloudWrap.className = `${SCRIPT_ID}-api-key`;
+      const cloudUrl = document.createElement('input');
+      cloudUrl.type = 'text';
+      cloudUrl.value = state.settings.xCloudApiBase;
+      cloudUrl.placeholder = 'http://111.46.161.132:8788';
+      cloudUrl.style.width = '140px';
+      const cloudToken = document.createElement('input');
+      cloudToken.type = 'password';
+      cloudToken.value = getXCloudToken();
+      cloudToken.placeholder = 'API Token';
+      cloudToken.style.width = '120px';
+      const cloudSaveBtn = makeButton('保存', '保存本机云端设置', () => {
+        updateSetting('xCloudApiBase', cloudUrl.value.trim());
+        saveXCloudToken(cloudToken.value);
+        showStatus('云端设置已保存');
+      });
+      cloudWrap.append(cloudUrl, cloudToken, cloudSaveBtn);
+
+      const cloudButton = makeButton('云端转写当前视频', '通过 GM_xmlhttpRequest 调用云端 API', () => {
+        transcribeCurrentXVideoCloud().catch(e => showStatus(e.message || '云端转写失败', 8000));
+      });
+
+      const cancelButton = makeButton('取消云端任务轮询', '停止轮询', () => {
+        cancelXCloudPolling();
+        showStatus('已取消云端任务轮询');
+      });
+
+      const cloudNote = document.createElement('span');
+      cloudNote.className = `${SCRIPT_ID}-credential-note`;
+      cloudNote.textContent = '当前使用 HTTP，API Token、媒体地址和请求内容不加密，仅适合个人受控网络。';
+
+      xTranscriptionRows.push(
+        makeRow('X 云端服务', cloudWrap),
+        makeRow('X 云端转写', cloudButton),
+        makeRow('云端任务', cancelButton),
+        makeRow('HTTP 风险', cloudNote)
+      );
     }
 
     const fontSize = document.createElement('input');
@@ -2496,6 +2551,56 @@
     });
   }
 
+  function cancelXCloudPolling() {
+    if (state.xCloudPoll) { clearTimeout(state.xCloudPoll); state.xCloudPoll = null; }
+  }
+
+  async function transcribeCurrentXVideoCloud() {
+    if (!isXPage()) throw new Error('仅能在 X 页面使用云端转写。');
+    const base = String(state.settings.xCloudApiBase || '').replace(/\/$/, '');
+    const token = getXCloudToken();
+    if (!/^http:\/\/111\.46\.161\.132:8788$/.test(base)) throw new Error('云端地址必须是指定 HTTP 服务地址。');
+    if (!token) throw new Error('请先保存云端 API Token。');
+    const video = getVideoEl();
+    if (!video) throw new Error('未找到当前 X 视频播放器。');
+    if (!state.xCloudMediaUrl) throw new Error('未捕获媒体地址，请刷新当前 X 页面后重试。');
+    const sourceId = `${getVideoId() || 'x'}-${state.xCloudMediaUrl.split('/').pop().split('?')[0]}`.replace(/[^A-Za-z0-9_:-]/g, '_');
+    showStatus('创建云端任务中...', 120000);
+    const created = await gmRequest({
+      method: 'POST', url: `${base}/v1/transcriptions`,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      data: JSON.stringify({ mediaUrl: state.xCloudMediaUrl, sourceId, sourceLanguage: 'en' }),
+      responseType: 'json', timeout: 30000
+    });
+    const body = created.response || JSON.parse(created.responseText || '{}');
+    if (created.status < 200 || created.status >= 300) throw new Error(body.message || '云端任务创建失败');
+    const jobId = body.jobId;
+    const started = Date.now();
+    cancelXCloudPolling();
+    const poll = async () => {
+      if (Date.now() - started > 1800000) throw new Error('云端任务轮询超时');
+      const response = await gmRequest({
+        method: 'GET', url: `${base}/v1/jobs/${encodeURIComponent(jobId)}`,
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'json', timeout: 30000
+      });
+      const job = response.response || JSON.parse(response.responseText || '{}');
+      if (job.status === 'failed') throw new Error(job.message || '云端转写失败');
+      if (job.status !== 'completed') {
+        showStatus(job.progress < 60 ? '云端下载中...' : '转写中...', 3500);
+        state.xCloudPoll = setTimeout(() => poll().catch(e => showStatus(e.message, 8000)), 3000);
+        return;
+      }
+      const raw = job.segments.map(s => ({
+        start: Number(s.start), end: Number(s.end), text: cleanCaptionText(s.text)
+      })).filter(c => c.text && c.end > c.start);
+      const data = await makeXCaptionData(raw, job.language || 'en');
+      writeCachedCues(`${CACHE_PREFIX}${sourceId}:x-cloud:v1`, data);
+      applyCues(getVideoId(), data, state.loadToken, 'X 云端字幕已完成');
+    };
+    await poll();
+  }
+
   async function waitForXAudioTrack(stream, timeout = 2500) {
     const startedAt = Date.now();
     while (Date.now() - startedAt < timeout) {
@@ -3514,6 +3619,8 @@
       if (video) video.volume = clamp(state.originalVolumeBeforeVoice, 0, 1);
       state.originalVolumeBeforeVoice = null;
     }
+    cancelXCloudPolling();
+    state.xCloudMediaUrl = '';
     stopXCapture();
     cancelSpeech();
     state.loadToken += 1;
@@ -3687,6 +3794,11 @@
     document.addEventListener('click', handleDocumentClickForControls, true);
     registerTampermonkeyMenu();
     hookYouTubeNavigation();
+    // Capture X video media URLs from the page
+    window.addEventListener('codex-x-media-url', event => {
+      const url = String(event.detail || '');
+      if (/^https:\/\/video\.twimg\.com\//i.test(url)) state.xCloudMediaUrl = url;
+    });
     checkRoute();
   }
 
