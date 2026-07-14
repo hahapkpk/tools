@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube / X 英文视频简体中文字幕与 AI 配音
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.6.0
+// @version      0.6.1
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube and X. X videos can be transcribed from the player audio, translated locally, and dubbed in Chinese.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -306,7 +306,10 @@
     voiceProgressNoticeUntil: 0,
     localTranslators: new Map(),
     xCapture: null,
-    settings: loadSettings()
+    settings: loadSettings(),
+    // DOM cache for video element
+    _cachedVideoEl: null,
+    _cachedVideoElAt: 0
   };
 
   const memoryCache = new Map();
@@ -718,7 +721,16 @@
 
   function getVideoEl() {
     if (isXPage()) return getXVideoEl();
-    return document.querySelector('video.html5-main-video') || document.querySelector('video');
+    const now = Date.now();
+    if (state._cachedVideoEl && now - state._cachedVideoElAt < 2000) return state._cachedVideoEl;
+    const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
+    if (video) { state._cachedVideoEl = video; state._cachedVideoElAt = now; }
+    return video || state._cachedVideoEl;
+  }
+
+  function invalidateVideoCache() {
+    state._cachedVideoEl = null;
+    state._cachedVideoElAt = 0;
   }
 
   function ensureOverlay() {
@@ -2735,6 +2747,13 @@
     syncCaption();
   }
 
+  function stopSyncLoop() {
+    if (state.rafId) {
+      window.clearTimeout(state.rafId);
+      state.rafId = 0;
+    }
+  }
+
   function hookVideoEvents(video) {
     if (!video || state.videoHooked === video) return;
     if (state.videoHooked) {
@@ -3225,7 +3244,13 @@
 
   function getRemoteAudioUrl(text, reportStatus = true) {
     const key = getRemoteAudioCacheKey(text);
-    if (volcAudioCache.has(key)) return Promise.resolve(volcAudioCache.get(key));
+    if (volcAudioCache.has(key)) {
+      // Move to end for LRU
+      const val = volcAudioCache.get(key);
+      volcAudioCache.delete(key);
+      volcAudioCache.set(key, val);
+      return Promise.resolve(val);
+    }
     if (volcPendingCache.has(key)) return volcPendingCache.get(key);
     const pending = requestRemoteAudioWithRetry(text, reportStatus).then(url => {
       if (volcAudioCache.size >= 80) {
@@ -3454,6 +3479,8 @@
   function reloadCurrentVideo(force = false) {
     const videoId = getVideoId();
     if (!videoId) return;
+    stopSyncLoop();
+    invalidateVideoCache();
     state.videoId = videoId;
     state.cues = [];
     state.voiceCues = [];
@@ -3462,10 +3489,16 @@
     state.cueIndex = -1;
     state.spokenCueIndex = -1;
     state.seekVoiceSuppressUntil = -1;
+    if (state.originalVolumeBeforeVoice !== null) {
+      const video = getVideoEl();
+      if (video) video.volume = clamp(state.originalVolumeBeforeVoice, 0, 1);
+      state.originalVolumeBeforeVoice = null;
+    }
     stopXCapture();
     cancelSpeech();
     state.loadToken += 1;
     setCaption(null);
+    state._lastRouteKey = '';
     const token = state.loadToken;
     loadCaptions(videoId, token, force).catch(error => {
       if (token !== state.loadToken) return;
