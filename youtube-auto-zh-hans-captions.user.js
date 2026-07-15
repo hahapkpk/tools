@@ -808,13 +808,14 @@
     if (!button.querySelector('svg')) button.replaceChildren(createToggleIcon());
     const toolbar = player.querySelector('.ytp-right-controls');
     if (toolbar) {
-      const settingsButton = toolbar.querySelector('.ytp-settings-button');
-      const targetGroup = settingsButton?.parentElement || toolbar.querySelector('.ytp-right-controls-right') || toolbar;
-      const insertBeforeNode = settingsButton?.parentElement === targetGroup ? settingsButton : targetGroup.firstChild;
+      // Insert before the fullscreen button to avoid overlapping it
+      const fullscreenButton = toolbar.querySelector('.ytp-fullscreen-button');
+      const insertTarget = fullscreenButton || toolbar.querySelector('.ytp-settings-button');
+      const targetGroup = insertTarget?.parentElement || toolbar;
       if (button.parentElement !== targetGroup) {
-        targetGroup.insertBefore(button, insertBeforeNode);
-      } else if (settingsButton?.parentElement === targetGroup && button.nextElementSibling !== settingsButton) {
-        targetGroup.insertBefore(button, settingsButton);
+        targetGroup.insertBefore(button, insertTarget);
+      } else if (insertTarget && button.nextElementSibling !== insertTarget) {
+        targetGroup.insertBefore(button, insertTarget);
       }
     } else if (button.parentElement !== player) {
       player.appendChild(button);

@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Script Test Page</title></head><body>
+<h1>YouTube / X 字幕脚本 - 控制台测试</h1>
+<p>打开 DevTools 控制台 (F12) 查看脚本输出</p>
+<div id="movie_player" style="width:640px;height:360px;background:#000;position:relative">
+  <video class="html5-main-video" style="width:100%;height:100%" src="about:blank"></video>
+</div>
+<div id="primary">Primary content area</div>
+
+<script>
+// Mock GM_* API using plain objects (no sessionStorage)
+window.GM_getValue = function(k, d) { 
+  try { var v = JSON.parse(localStorage.getItem('gm_test_'+k)); return v !== null ? v : d; } catch(e) { return d; }
+};
+window.GM_setValue = function(k, v) { localStorage.setItem('gm_test_'+k, JSON.stringify(v)); };
+window.GM_registerMenuCommand = function(n, fn) { console.log('[TEST] GM menu:', n); };
+window.GM_deleteValue = function(k) { localStorage.removeItem('gm_test_'+k); };
+window.GM_xmlhttpRequest = function(opts) {
+  console.log('[TEST] GM XHR:', opts.method, opts.url);
+  fetch(opts.url, { method: opts.method, headers: opts.headers, body: opts.data, mode: 'cors' })
+    .then(r => r.text().then(t => {
+      var resp = { status: r.status, responseText: t, response: null };
+      if (opts.responseType === 'json') resp.response = JSON.parse(t);
+      opts.onload(resp);
+    }))
+    .catch(e => { if (opts.onerror) opts.onerror(e); });
+};
+
+console.log('[TEST] GM mocks ready');
+</script>
+
+<!-- 注入用户脚本 -->
+<script><?php
+// We'll inject the script content directly
+?></script>
+</body></html>
