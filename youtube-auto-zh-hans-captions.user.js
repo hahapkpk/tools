@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube / X 英文视频简体中文字幕与 AI 配音
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.7.0
+// @version      0.7.1
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube and X. X videos can be transcribed from the player audio, translated locally, and dubbed in Chinese.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
