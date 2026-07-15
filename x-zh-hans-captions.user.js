@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X 视频简体中文字幕
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.0.0
+// @version      1.0.1
 // @description  X (Twitter) 视频自动转写 + 翻译 + 简体中文字幕叠加显示，无需配音
 // @author       hahapkpk
 // @match        https://x.com/*
@@ -189,7 +189,59 @@
   window.addEventListener('popstate', checkRoute);
 
   // ═══════════════════════════════════════════════════════
-  // 3. CLOUD API
+  // 3. FRESH VIDEO URL FETCHER — fetch from X API on demand
+  // ═══════════════════════════════════════════════════════
+  async function fetchFreshVideoUrl(tweetId) {
+    const csrf = (document.cookie.match(/ct0=([^;]+)/) || ['', ''])[1];
+    if (!csrf) throw new Error('无法获取 X 认证信息，请刷新页面后重试');
+
+    const graphqlHash = '0h6HC0GBNRjGqIudVmBwLQ'; // TweetDetail query ID
+    const vars = JSON.stringify({
+      focalTweetId: tweetId,
+      includePromotedContent: false,
+      withBirdwatchNotes: false,
+    });
+
+    const url = `/i/api/graphql/${graphqlHash}/TweetDetail?variables=${encodeURIComponent(vars)}`;
+
+    const resp = await fetch(url, {
+      headers: {
+        'x-csrf-token': csrf,
+        'content-type': 'application/json',
+      },
+      credentials: 'include',
+    });
+
+    if (!resp.ok) throw new Error('X API 请求失败: ' + resp.status);
+    const data = await resp.json();
+
+    // Navigate the X API response structure
+    const instructions = data?.data?.threaded_conversation_with_injections_v2?.instructions
+      || data?.data?.threaded_conversation_with_injections?.instructions || [];
+
+    for (const inst of instructions) {
+      const entries = inst.entries || [];
+      for (const entry of entries) {
+        const result = entry?.content?.itemContent?.tweet_results?.result
+          || entry?.content?.itemContent?.tweet?.result;
+        if (!result) continue;
+        const media = result?.legacy?.extended_entities?.media || result?.extended_entities?.media || [];
+        for (const m of media) {
+          const variants = (m.video_info || {}).variants || [];
+          if (variants.length === 0) continue;
+          // Filter MP4, pick highest bitrate
+          const mp4s = variants.filter(v => v.content_type === 'video/mp4');
+          if (mp4s.length === 0) continue;
+          mp4s.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+          return mp4s[0].url;
+        }
+      }
+    }
+    throw new Error('未在推文中找到视频');
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // 4. CLOUD API
   // ═══════════════════════════════════════════════════════
   function apiRequest(method, path, body) {
     return new Promise((resolve, reject) => {
@@ -447,7 +499,6 @@
 
     const st = tweetState.get(tid);
     if (st && st.status === 'completed') {
-      // Toggle subtitle visibility
       if (subtitleContainer) {
         subtitleContainer.style.display = subtitleContainer.style.display === 'none' ? 'block' : 'none';
       }
@@ -459,34 +510,26 @@
       return;
     }
 
-    // Check if we have a media URL
-    const mediaUrl = st?.mediaUrl;
-    if (!mediaUrl) {
-      showToast('⏳ 正在等待视频地址捕获，请稍后重试...');
-      // Try to trigger video playback to force network requests
-      const video = document.querySelector('video');
-      if (video) {
-        video.muted = true;
-        video.play().catch(() => {});
-      }
-      return;
-    }
-
-    // Check config
     if (!config.apiUrl || !config.apiToken) {
       openControlPanel();
       showToast('请先配置 API 地址和 Token');
       return;
     }
 
-    // Start transcription
-    showToast('🔄 开始云端转写...');
+    // Fetch a fresh video URL from X API immediately
+    showToast('🔍 获取视频地址...');
     try {
-      await startTranscription(tid, mediaUrl);
+      const freshUrl = await fetchFreshVideoUrl(tid);
+      console.log('[X-Captions] Fresh URL:', freshUrl.substring(0, 80));
+      if (!tweetState.has(tid)) tweetState.set(tid, {});
+      tweetState.get(tid).mediaUrl = freshUrl;
+
+      showToast('🔄 开始云端转写...');
+      await startTranscription(tid, freshUrl);
       showToast('✅ 转写完成！字幕已加载');
       updateFloatingButton();
     } catch(e) {
-      showToast('❌ 转写失败: ' + e.message);
+      showToast('❌ ' + e.message);
       updateFloatingButton();
     }
   }
@@ -590,20 +633,17 @@
       return;
     }
 
-    const st = tweetState.get(tid);
-    if (!st || !st.mediaUrl) {
-      panel.querySelector('#xcp-status').textContent = '⏳ 视频地址未捕获，请播放视频后重试';
-      const video = document.querySelector('video');
-      if (video) { video.muted = true; video.play().catch(() => {}); }
-      return;
-    }
-
     saveConfig();
     const statusEl = panel.querySelector('#xcp-status');
-    statusEl.textContent = '🔄 正在转写...';
+    statusEl.textContent = '🔍 获取视频地址...';
 
     try {
-      const result = await startTranscription(tid, st.mediaUrl);
+      const freshUrl = await fetchFreshVideoUrl(tid);
+      statusEl.textContent = '🔄 正在转写...';
+      if (!tweetState.has(tid)) tweetState.set(tid, {});
+      tweetState.get(tid).mediaUrl = freshUrl;
+
+      const result = await startTranscription(tid, freshUrl);
       const segCount = (result.segments || []).length;
       statusEl.textContent = `✅ 转写完成！共 ${segCount} 段字幕`;
       updateFloatingButton();
