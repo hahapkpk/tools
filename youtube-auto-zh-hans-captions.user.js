@@ -311,6 +311,7 @@
     xCapture: null,
     xCloudMediaUrl: '',
     xCloudPoll: null,
+    _xNoCaptionShown: false,
     settings: loadSettings(),
     // DOM cache for video element
     _cachedVideoEl: null,
@@ -808,14 +809,11 @@
     if (!button.querySelector('svg')) button.replaceChildren(createToggleIcon());
     const toolbar = player.querySelector('.ytp-right-controls');
     if (toolbar) {
-      // Insert before the fullscreen button to avoid overlapping it
-      const fullscreenButton = toolbar.querySelector('.ytp-fullscreen-button');
-      const insertTarget = fullscreenButton || toolbar.querySelector('.ytp-settings-button');
-      const targetGroup = insertTarget?.parentElement || toolbar;
-      if (button.parentElement !== targetGroup) {
-        targetGroup.insertBefore(button, insertTarget);
-      } else if (insertTarget && button.nextElementSibling !== insertTarget) {
-        targetGroup.insertBefore(button, insertTarget);
+      // Insert at the far left of right controls, well away from fullscreen
+      if (button.parentElement !== toolbar) {
+        toolbar.insertBefore(button, toolbar.firstChild);
+      } else if (toolbar.firstChild !== button) {
+        toolbar.insertBefore(button, toolbar.firstChild);
       }
     } else if (button.parentElement !== player) {
       player.appendChild(button);
@@ -3627,11 +3625,17 @@
     state.loadToken += 1;
     setCaption(null);
     state._lastRouteKey = '';
+    state._xNoCaptionShown = false;
     const token = state.loadToken;
     loadCaptions(videoId, token, force).catch(error => {
       if (token !== state.loadToken) return;
       console.warn(`[${SCRIPT_ID}]`, error);
-      showStatus(error?.message || '简体中文字幕生成失败，请刷新或稍后重试。', 7000);
+      // On X pages, "no captions" is expected — show briefly, not as an error
+      const duration = isXPage() ? 2000 : 7000;
+      if (!isXPage() || !state._xNoCaptionShown) {
+        showStatus(error?.message || '简体中文字幕生成失败，请刷新或稍后重试。', duration);
+        if (isXPage()) state._xNoCaptionShown = true;
+      }
     });
   }
 
