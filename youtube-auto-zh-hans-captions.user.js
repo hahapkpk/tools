@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube / X 英文视频简体中文字幕与 AI 配音
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.7.2
+// @version      0.7.3
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube and X. X videos can be transcribed from the player audio, translated locally, and dubbed in Chinese.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -3804,6 +3804,32 @@
       const url = String(event.detail || '');
       if (/^https:\/\/video\.twimg\.com\//i.test(url)) state.xCloudMediaUrl = url;
     });
+    // X video URL capture — intercept XHR/fetch responses that contain video URLs
+    const _origFetch = window.fetch;
+    window.fetch = function(url, opts) {
+      const p = _origFetch.apply(this, arguments);
+      (opts && opts.method && opts.method.toUpperCase() !== 'GET') && p.then(function(r) {
+        if (r && r.status === 200) {
+          var ct = r.headers && r.headers.get('content-type') || '';
+          if (ct.includes('json')) {
+            r.clone().text().then(function(t) {
+              var m = t.match(/https:\/\/video\.twimg\.com\/[^"'\s<>]+\.(?:mp4|m3u8)/g);
+              if (m) window.dispatchEvent(new CustomEvent('codex-x-media-url', {detail: m[0]}));
+            }).catch(function(){});
+          }
+        }
+      }).catch(function(){});
+      return p;
+    };
+
+    const _origXHROpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function(method, url) {
+      if (typeof url === 'string' && url.indexOf('video.twimg.com') >= 0) {
+        window.dispatchEvent(new CustomEvent('codex-x-media-url', {detail: url}));
+      }
+      return _origXHROpen.apply(this, arguments);
+    };
+
     checkRoute();
   }
 
