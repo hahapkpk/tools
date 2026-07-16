@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X 视频简体中文字幕
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.0.1
+// @version      1.0.2
 // @description  X (Twitter) 视频自动转写 + 翻译 + 简体中文字幕叠加显示，无需配音
 // @author       hahapkpk
 // @match        https://x.com/*
@@ -195,14 +195,15 @@
     const csrf = (document.cookie.match(/ct0=([^;]+)/) || ['', ''])[1];
     if (!csrf) throw new Error('无法获取 X 认证信息，请刷新页面后重试');
 
-    const graphqlHash = '0h6HC0GBNRjGqIudVmBwLQ'; // TweetDetail query ID
+    // Use TweetResultByRestId — simpler, single-tweet, doesn't need conversation threading
+    const graphqlHash = '4hhGRbehkcUVTKf8n0f0xw';
     const vars = JSON.stringify({
-      focalTweetId: tweetId,
+      tweetId: tweetId,
       includePromotedContent: false,
       withBirdwatchNotes: false,
     });
 
-    const url = `/i/api/graphql/${graphqlHash}/TweetDetail?variables=${encodeURIComponent(vars)}`;
+    const url = `/i/api/graphql/${graphqlHash}/TweetResultByRestId?variables=${encodeURIComponent(vars)}`;
 
     const resp = await fetch(url, {
       headers: {
@@ -215,26 +216,21 @@
     if (!resp.ok) throw new Error('X API 请求失败: ' + resp.status);
     const data = await resp.json();
 
-    // Navigate the X API response structure
-    const instructions = data?.data?.threaded_conversation_with_injections_v2?.instructions
-      || data?.data?.threaded_conversation_with_injections?.instructions || [];
+    // TweetResultByRestId: data.tweetResult.result
+    const result = data?.data?.tweetResult?.result;
+    if (!result) throw new Error('未在推文中找到视频');
 
-    for (const inst of instructions) {
-      const entries = inst.entries || [];
-      for (const entry of entries) {
-        const result = entry?.content?.itemContent?.tweet_results?.result
-          || entry?.content?.itemContent?.tweet?.result;
-        if (!result) continue;
-        const media = result?.legacy?.extended_entities?.media || result?.extended_entities?.media || [];
-        for (const m of media) {
-          const variants = (m.video_info || {}).variants || [];
-          if (variants.length === 0) continue;
-          // Filter MP4, pick highest bitrate
-          const mp4s = variants.filter(v => v.content_type === 'video/mp4');
-          if (mp4s.length === 0) continue;
-          mp4s.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-          return mp4s[0].url;
-        }
+    const media = result?.legacy?.extended_entities?.media || result?.extended_entities?.media || [];
+    for (const m of media) {
+      const variants = (m.video_info || {}).variants || [];
+      if (variants.length === 0) continue;
+
+      // X now serves HLS (.m3u8). Pick highest bitrate variant.
+      // Priority: m3u8 > mp4, both fall under bitrate sorting.
+      variants.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+      for (const v of variants) {
+        const u = v.url || '';
+        if (u && u.includes('video.twimg.com')) return u;
       }
     }
     throw new Error('未在推文中找到视频');
