@@ -3,7 +3,8 @@
 // @namespace    local.codex
 // @version      0.6.5
 // @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。支持从 GitHub 公共白名单文件自动读取启动地址，并在非白名单页面快速退出。
-// @match        *://*/*
+// @match        https://ocr.wdku.net/*
+// @match        https://www.wdku.net/*
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
 // @connect      drive-h.quark.cn
