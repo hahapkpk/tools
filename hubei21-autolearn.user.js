@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         湖北21世纪学习平台 - 自动刷课
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.1.0
+// @version      1.1.1
 // @description  自动完成 hubei21.com 学习平台的所有课程视频学习进度（支持普通课程和水课程）
 // @author       Flywind
 // @match        https://www.hubei21.com/*
@@ -13,6 +13,8 @@
 
 (function () {
   'use strict';
+
+  console.log('[自动刷课] 脚本已加载 v1.1.1', 'hash:', location.hash);
 
   const API_BASE = 'https://api.hubei21.com/api';
 
@@ -394,8 +396,15 @@
   }
 
   function init() {
-    if (!isOnSupportedPage()) return;
-    if (document.getElementById('autolearn-panel')) return;
+    console.log('[自动刷课] init() 被调用, hash:', location.hash);
+    if (!isOnSupportedPage()) {
+      console.log('[自动刷课] 不支持的页面, 跳过');
+      return;
+    }
+    if (document.getElementById('autolearn-panel')) {
+      console.log('[自动刷课] 面板已存在, 跳过');
+      return;
+    }
 
     createPanel();
 
@@ -412,6 +421,7 @@
 
   // 监听 hash 变化（SPA 路由）
   window.addEventListener('hashchange', () => {
+    console.log('[自动刷课] hashchange:', location.hash);
     if (isOnSupportedPage()) {
       if (!document.getElementById('autolearn-panel')) init();
     } else {
@@ -420,6 +430,19 @@
     }
   });
 
-  // 页面加载后延迟初始化
-  setTimeout(init, 1500);
+  // 页面加载后多次尝试初始化（SPA 懒加载可能需要更长时间）
+  let initAttempts = 0;
+  const MAX_INIT_ATTEMPTS = 20;
+  const INIT_INTERVAL = 500;
+
+  function tryInit() {
+    initAttempts++;
+    console.log('[自动刷课] 尝试初始化 ' + initAttempts + '/' + MAX_INIT_ATTEMPTS + ', hash:', location.hash);
+    init();
+    if (initAttempts < MAX_INIT_ATTEMPTS && !document.getElementById('autolearn-panel')) {
+      setTimeout(tryInit, INIT_INTERVAL);
+    }
+  }
+
+  setTimeout(tryInit, 1000);
 })();
