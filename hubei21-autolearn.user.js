@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         湖北21世纪学习平台 - 自动刷课
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.0.1
-// @description  自动完成 hubei21.com 学习平台的所有课程视频学习进度
+// @version      1.1.0
+// @description  自动完成 hubei21.com 学习平台的所有课程视频学习进度（支持普通课程和水课程）
 // @author       Flywind
 // @match        https://www.hubei21.com/*
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/hubei21-autolearn.user.js
@@ -22,9 +22,22 @@
     return localStorage.getItem('token');
   }
 
+  /** 检测当前页面是否为水课程页面 */
+  function isWaterCourse() {
+    return /\/waterCourse\//.test(location.hash);
+  }
+
+  /** 普通课程 ID */
   function getCourseId() {
-    const hash = location.hash; // e.g. #/course/368?year=2026
+    const hash = location.hash;
     const m = hash.match(/\/course\/(\d+)/);
+    return m ? parseInt(m[1]) : null;
+  }
+
+  /** 水课程 ID */
+  function getWaterPlanId() {
+    const hash = location.hash;
+    const m = hash.match(/\/waterCourse\/(\d+)/);
     return m ? parseInt(m[1]) : null;
   }
 
@@ -89,7 +102,7 @@
     return resp.json();
   }
 
-  // ========== 获取课程详情 ==========
+  // ========== 普通课程 ==========
 
   async function fetchCourseDetail(videoId, year) {
     const data = await apiGet(`/video_detail?video_id=${videoId}&year=${year}`);
@@ -97,10 +110,7 @@
     return data.data;
   }
 
-  // ========== 模拟学习进度上报 ==========
-
   async function studyOneLesson(videoId, detailId, year, durationSeconds, onProgress) {
-    // 分 2 次上报（50% 和 100%），间隔 2 秒
     const steps = 2;
     for (let i = 1; i <= steps; i++) {
       if (stopFlag) return;
@@ -124,12 +134,46 @@
     }
   }
 
+  // ========== 水课程 ==========
+
+  async function fetchWaterPlanDetail(waterPlanId) {
+    const data = await apiPost('/water_plan_detail', {
+      water_plan_id: waterPlanId,
+      page: 1,
+    });
+    if (data.code !== 200) throw new Error('获取水课程详情失败: ' + data.msg);
+    return data.data;
+  }
+
+  async function studyOneWaterLesson(waterPlanId, detailId, durationSeconds, onProgress) {
+    const steps = 2;
+    for (let i = 1; i <= steps; i++) {
+      if (stopFlag) return;
+
+      const ratio = ((i / steps) * 100).toFixed(2);
+      const time = ((i / steps) * durationSeconds).toFixed(2);
+
+      const result = await apiPost('/video_detail_study_water', {
+        water_plan_id: waterPlanId,
+        water_plan_detail_id: detailId,
+        ratio: ratio,
+        time: parseFloat(time),
+      });
+
+      if (onProgress) onProgress(i, steps, result);
+      if (result.code !== 200) {
+        throw new Error(`水课程学习进度上报失败: ${result.msg || result.message || '未知错误'}`);
+      }
+      if (i < steps) await sleep(2000);
+    }
+  }
 
   // ========== UI 面板 ==========
 
   function createPanel() {
     const panel = document.createElement('div');
     panel.id = 'autolearn-panel';
+    const courseLabel = isWaterCourse() ? '水课程' : '普通课程';
     panel.innerHTML = `
       <div style="
         position: fixed; top: 80px; right: 20px; z-index: 99999;
@@ -138,7 +182,7 @@
         font-family: 'Microsoft YaHei', sans-serif; font-size: 14px; color: #333;
       ">
         <div style="font-size: 16px; font-weight: bold; color: #c0392b; margin-bottom: 12px;">
-          自动刷课助手
+          自动刷课助手<span style="font-size:12px;color:#888;font-weight:normal;"> - ${courseLabel}</span>
         </div>
         <div id="al-status" style="margin-bottom: 10px; color: #666;">等待开始...</div>
         <div style="background: #eee; border-radius: 6px; height: 20px; overflow: hidden; margin-bottom: 10px;">
@@ -197,11 +241,13 @@
 
   async function startAutoLearn() {
     stopFlag = false;
-    const videoId = getCourseId();
+
+    const waterMode = isWaterCourse();
+    const courseId = waterMode ? getWaterPlanId() : getCourseId();
     const year = getYear();
 
-    if (!videoId) {
-      updateStatus('请先打开一个课程页面');
+    if (!courseId) {
+      updateStatus('请先打开一个课程页面（普通课程或水课程）');
       return;
     }
     if (!getToken()) {
@@ -216,20 +262,49 @@
 
     try {
       updateStatus('获取课程信息...');
-      addLog(`课程ID: ${videoId}, 年份: ${year}`);
+      const label = waterMode ? '水课程' : '课程';
+      addLog(`${label}ID: ${courseId}${waterMode ? '' : ', 年份: ' + year}`);
 
-      const courseData = await fetchCourseDetail(videoId, year);
-      const lessons = courseData.list;
-      const studyDetail = courseData.study_detail || {};
-      const totalStudyTime = courseData.total_studytime;
-      const gotStudyTime = courseData.get_studytime;
+      let lessons, studyDetail, totalStudyTime, gotStudyTime;
+
+      if (waterMode) {
+        // 水课程
+        const courseData = await fetchWaterPlanDetail(courseId);
+        lessons = courseData.data || [];
+        studyDetail = courseData.study_detail || {};
+
+        // 水课程将 study_detail 合并到 lesson 数据中
+        lessons = lessons.map((lesson) => {
+          const detail = studyDetail[lesson.id];
+          if (detail) {
+            return { ...lesson, ...detail, time: detail.time };
+          }
+          return lesson;
+        });
+
+        // 水课程从 detail 中获取总学时信息
+        const detail = courseData.detail || {};
+        totalStudyTime = detail.study_time || 0;
+        gotStudyTime = 0;
+        // 已完成的累计学时
+        lessons.forEach((l) => {
+          if (l.status === 1) gotStudyTime += parseFloat(l.study_time || l.time || 0);
+        });
+        gotStudyTime = gotStudyTime.toFixed(2);
+      } else {
+        // 普通课程
+        const courseData = await fetchCourseDetail(courseId, year);
+        lessons = courseData.list;
+        studyDetail = courseData.study_detail || {};
+        totalStudyTime = courseData.total_studytime;
+        gotStudyTime = courseData.get_studytime;
+      }
 
       addLog(`共 ${lessons.length} 节课, 已获学时: ${gotStudyTime}/${totalStudyTime}`);
 
       // 过滤已完成的课程 (status === 1)
       const todoLessons = lessons.filter((lesson) => {
-        const detail = studyDetail[lesson.id];
-        return !detail || detail.status !== 1;
+        return lesson.status !== 1;
       });
 
       if (todoLessons.length === 0) {
@@ -256,21 +331,38 @@
 
         const duration = getLessonDuration(lesson);
 
-        await studyOneLesson(
-          videoId,
-          lesson.id,
-          year,
-          duration,
-          (step, total, result) => {
-            const overallNow = Math.round(
-              ((i + step / total) / todoLessons.length) * 100
-            );
-            updateProgress(overallNow);
-            if (result.code !== 200) {
-              addLog(`上报异常: ${result.msg}`);
+        if (waterMode) {
+          await studyOneWaterLesson(
+            courseId,
+            lesson.id,
+            duration,
+            (step, total, result) => {
+              const overallNow = Math.round(
+                ((i + step / total) / todoLessons.length) * 100
+              );
+              updateProgress(overallNow);
+              if (result.code !== 200) {
+                addLog(`上报异常: ${result.msg}`);
+              }
             }
-          }
-        );
+          );
+        } else {
+          await studyOneLesson(
+            courseId,
+            lesson.id,
+            year,
+            duration,
+            (step, total, result) => {
+              const overallNow = Math.round(
+                ((i + step / total) / todoLessons.length) * 100
+              );
+              updateProgress(overallNow);
+              if (result.code !== 200) {
+                addLog(`上报异常: ${result.msg}`);
+              }
+            }
+          );
+        }
 
         addLog(`完成: ${lesson.title}`);
 
@@ -297,8 +389,12 @@
 
   // ========== 初始化 ==========
 
+  function isOnSupportedPage() {
+    return /\/course\//.test(location.hash) || /\/waterCourse\//.test(location.hash);
+  }
+
   function init() {
-    if (!location.hash.includes('/course/')) return;
+    if (!isOnSupportedPage()) return;
     if (document.getElementById('autolearn-panel')) return;
 
     createPanel();
@@ -316,7 +412,7 @@
 
   // 监听 hash 变化（SPA 路由）
   window.addEventListener('hashchange', () => {
-    if (location.hash.includes('/course/')) {
+    if (isOnSupportedPage()) {
       if (!document.getElementById('autolearn-panel')) init();
     } else {
       const existing = document.getElementById('autolearn-panel');
