@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         知乎 · Paper Press 阅读模式
 // @namespace    https://github.com/hahapkpk/tools
-// @version      2.4.0
+// @version      2.4.1
 // @description  知乎专栏 / 问答页 → 杂志风格沉浸阅读：悬浮目录 · 代码高亮 · 图片灯箱 · 深色模式 · 阅读进度 · 字号/宽度调节 · 代码复制 · 键盘快捷键
 // @author       hahapkpk
 // @match        https://zhuanlan.zhihu.com/p/*
@@ -198,11 +198,14 @@
       '.Question-mainColumn{width:100%!important;max-width:860px!important;margin:0 auto!important;padding:72px 40px 120px!important;box-sizing:border-box!important;float:none!important;transition:max-width 0.3s ease!important;}',
       '.Question-sideColumn,.QuestionHeader-side,.QuestionHeaderActions,.QuestionRelatedCard{display:none!important;}',
       /* 问题标题卡 */
-      '.QuestionHeader{position:relative!important;background:' + T.surface + '!important;border-radius:4px!important;box-shadow:' + T.cardShadow + '!important;padding:48px 56px!important;margin-bottom:24px!important;border:none!important;}',
-      '.QuestionHeader-content,.QuestionHeader-main{display:block!important;width:100%!important;}',
-      '.QuestionHeader-title{font-family:' + FONTS.displayCN + '!important;font-weight:700!important;font-size:2rem!important;line-height:1.35!important;color:' + T.text + '!important;letter-spacing:-0.01em!important;margin:0 0 16px 0!important;}',
-      '.QuestionRichText,.QuestionHeader-detail{font-family:' + FONTS.body + '!important;color:' + T.textMute + '!important;line-height:1.7!important;}',
-      '.QuestionHeader-footer,.NumberBoard{background:transparent!important;border-top:1px solid ' + T.rule + '!important;margin-top:16px!important;padding-top:12px!important;}',
+      /* 问题标题卡：与回答同宽居中，收紧上下留白 */
+      '.QuestionHeader{position:relative!important;width:100%!important;max-width:860px!important;margin:0 auto 24px!important;box-sizing:border-box!important;background:' + T.surface + '!important;border-radius:4px!important;box-shadow:' + T.cardShadow + '!important;padding:36px 48px!important;border:none!important;}',
+      '.QuestionHeader-content{display:block!important;width:100%!important;}',
+      '.QuestionHeader-main{width:100%!important;padding:0!important;}',
+      '.QuestionHeader-title{font-family:' + FONTS.displayCN + '!important;font-weight:700!important;font-size:1.9rem!important;line-height:1.3!important;color:' + T.text + '!important;letter-spacing:-0.01em!important;margin:0.4em 0 0.5em 0!important;}',
+      '.QuestionRichText,.QuestionHeader-detail{font-family:' + FONTS.body + '!important;color:' + T.textMute + '!important;line-height:1.7!important;margin:0!important;}',
+      /* 隐藏头部的写回答/操作/统计栏，去掉分割线与多余空白 */
+      '.QuestionHeader-footer,.NumberBoard,.QuestionHeaderActions,.QuestionHeader-actions,.QuestionButtonGroup{display:none!important;}',
       /* 回答列表标题栏 */
       '.List-header,.Card.ListShortcut,.QuestionAnswers-answers{background:transparent!important;box-shadow:none!important;border:none!important;}',
       '.List-headerText,.List-headerText span{font-family:' + FONTS.body + '!important;color:' + T.textMute + '!important;font-size:0.9rem!important;}',
@@ -240,12 +243,12 @@
       /* 隐藏杂项：举报 / 操作栏 / 页脚 / 大家都在搜 / 相关 / 关于 */
       '.ContentItem-actions,.RichContent-actions,.QuestionAnswers-answerButton,.AnswerAdd{display:none!important;}',
       '[class*="Footer"],.AppFooter,.Pc-word,.Pc-feedOpr{display:none!important;}',
-      /* 宽度模式 */
-      '.pp-width-narrow .Question-mainColumn{max-width:620px!important;}',
-      '.pp-width-wide .Question-mainColumn{max-width:1100px!important;}',
+      /* 宽度模式（标题卡与回答同步） */
+      '.pp-width-narrow .Question-mainColumn,.pp-width-narrow .QuestionHeader{max-width:620px!important;}',
+      '.pp-width-wide .Question-mainColumn,.pp-width-wide .QuestionHeader{max-width:1100px!important;}',
       /* 响应式 */
-      '@media (max-width:768px){.Question-mainColumn{padding:24px 16px 80px!important;max-width:100%!important;}.QuestionHeader{padding:28px 22px!important;}.List-item{padding:28px 22px!important;border-radius:2px!important;}.QuestionHeader-title{font-size:1.5rem!important;}}',
-      '@media (min-width:769px) and (max-width:1024px){.Question-mainColumn{padding:48px 24px 100px!important;max-width:720px!important;}.QuestionHeader{padding:40px 36px!important;}.List-item{padding:32px 36px!important;}}',
+      '@media (max-width:768px){.Question-mainColumn{padding:24px 16px 80px!important;max-width:100%!important;}.QuestionHeader{padding:24px 18px!important;margin-bottom:16px!important;}.List-item{padding:28px 22px!important;border-radius:2px!important;}.QuestionHeader-title{font-size:1.5rem!important;}}',
+      '@media (min-width:769px) and (max-width:1024px){.Question-mainColumn{padding:48px 24px 100px!important;max-width:720px!important;}.QuestionHeader{max-width:720px!important;padding:32px 36px!important;}.List-item{padding:32px 36px!important;}}',
     ].join('\n');
   }
 
@@ -885,12 +888,13 @@
   // 问答页杂项清理：举报 / 大家都在搜 / 相关帮助 / 关于（CSS 已处理主体，此处为动态兵底）
   // ═══════════════════════════════════════════════════════════════
 
-  var JUNK_TEXTS = ['举报', '大家都在搜', '相关问题', '相关的帮助', '相关帮助', '关于', '关于知乎', '申请转载', '联系我们', '内容中心'];
+  var JUNK_TEXTS = ['举报', '写回答', '大家都在搜', '相关问题', '相关的帮助', '相关帮助', '关于', '关于知乎', '申请转载', '联系我们', '内容中心'];
 
   function pruneQuestionJunk() {
-    // 隐藏侧栏/页脚/操作栏（包含大家都在搜、相关、关于、举报）
-    ['.Question-sideColumn', '.QuestionHeader-side', '.ContentItem-actions',
-      '.RichContent-actions', '.AppFooter', '[class*="Footer"]', '.Pc-word',
+    // 隐藏侧栏/页脚/操作栏/头部写回答栏（包含大家都在搜、相关、关于、举报、写回答）
+    ['.Question-sideColumn', '.QuestionHeader-side', '.QuestionHeader-footer',
+      '.QuestionHeaderActions', '.ContentItem-actions', '.RichContent-actions',
+      '.AppFooter', '[class*="Footer"]', '.Pc-word',
       '.QuestionAnswers-answerButton', '.AnswerAdd'].forEach(function (sel) {
       $$(sel).forEach(function (el) { el.style.display = 'none'; });
     });
