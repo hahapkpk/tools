@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X 视频自动简体中文字幕与 AI 配音
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.1.0
+// @version      0.1.1
 // @description  Reads or transcribes X videos, translates them to Simplified Chinese, and optionally provides Chinese AI dubbing.
 // @match        https://x.com/*
 // @match        https://twitter.com/*
@@ -31,6 +31,7 @@
   const STATUS_ID = `${SCRIPT_ID}-status`;
   const CONTROL_ID = `${SCRIPT_ID}-controls`;
   const TOGGLE_ID = `${SCRIPT_ID}-toggle`;
+  const TOGGLE_SLOT_ID = `${SCRIPT_ID}-toggle-slot`;
   const CACHE_PREFIX = `${SCRIPT_ID}:cache:`;
   const SETTINGS_KEY = `${SCRIPT_ID}:settings`;
   const VOLC_API_KEY_STORAGE_KEY = `${SCRIPT_ID}:volc-api-key`;
@@ -708,9 +709,14 @@
         flex: 1 1 0;
       }
       #${TOGGLE_ID} {
-        width: 48px;
-        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        height: 40px;
+        padding: 0;
         border: 0;
+        border-radius: 999px;
         background: transparent;
         color: #fff;
         cursor: pointer;
@@ -721,9 +727,12 @@
       #${TOGGLE_ID}.${SCRIPT_ID}-active {
         opacity: 1;
       }
+      #${TOGGLE_ID}:hover {
+        background: rgba(255,255,255,0.14);
+      }
       #${TOGGLE_ID} svg {
-        width: 26px;
-        height: 26px;
+        width: 23px;
+        height: 23px;
         display: block;
         margin: 0 auto;
         fill: currentColor;
@@ -732,16 +741,13 @@
         filter: drop-shadow(0 0 5px rgba(62,166,255,0.85));
         color: #3ea6ff;
       }
-      #${TOGGLE_ID}.${SCRIPT_ID}-x-button {
-        position: absolute;
-        right: 8px;
-        bottom: 8px;
-        z-index: 2147483002;
-        width: 34px;
-        height: 34px;
-        border-radius: 50%;
-        background: rgba(0,0,0,0.72);
-        box-shadow: 0 1px 5px rgba(0,0,0,0.45);
+      #${TOGGLE_SLOT_ID}.${SCRIPT_ID}-control-slot {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 40px;
+        width: 40px;
+        height: 40px;
       }
     `;
     document.head.appendChild(style);
@@ -752,10 +758,22 @@
   }
 
   function getXVideoEl() {
-    const mainArticle = document.querySelector('main article[data-testid="tweet"]');
-    return mainArticle?.querySelector('[data-testid="videoComponent"] video') ||
-      document.querySelector('article[data-testid="tweet"] [data-testid="videoComponent"] video') ||
-      document.querySelector('[data-testid="videoComponent"] video');
+    const videos = Array.from(document.querySelectorAll('[data-testid="videoComponent"] video'));
+    if (!videos.length) return null;
+    const measure = video => {
+      const rect = video.getBoundingClientRect();
+      const width = Math.max(0, Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0));
+      const height = Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0));
+      const distance = rect.bottom < 0 ? -rect.bottom : rect.top > window.innerHeight ? rect.top - window.innerHeight : 0;
+      return { video, area: width * height, distance, rendered: rect.width > 0 && rect.height > 0 };
+    };
+    const candidates = videos.map(measure);
+    const playing = candidates.filter(item => !item.video.paused && !item.video.ended && item.area > 0);
+    if (playing.length) return playing.sort((left, right) => right.area - left.area)[0].video;
+    const visible = candidates.filter(item => item.area > 0);
+    if (visible.length) return visible.sort((left, right) => right.area - left.area)[0].video;
+    const nearest = candidates.filter(item => item.rendered).sort((left, right) => left.distance - right.distance)[0];
+    return nearest?.video || videos[0];
   }
 
   function getXVideoIdentity(video) {
@@ -820,15 +838,53 @@
     return overlay;
   }
 
+  function findXControlsBar(player) {
+    const video = getXVideoEl();
+    const videoComponent = video?.closest('[data-testid="videoComponent"]');
+    const roots = [player, videoComponent, player?.closest('[role="dialog"]')].filter((root, index, items) =>
+      root && items.indexOf(root) === index
+    );
+
+    for (const root of roots) {
+      const anchor = root.querySelector('button[data-testid="captions"]') ||
+        Array.from(root.querySelectorAll('button[aria-label]')).find(button =>
+          /视频设置|settings|画中画|picture.in.picture|全屏|fullscreen|取消隐藏|静音|mute/i.test(button.getAttribute('aria-label') || '')
+        );
+      if (!anchor) continue;
+
+      let controlsBar = anchor.parentElement;
+      while (controlsBar && controlsBar !== root.parentElement) {
+        const rect = controlsBar.getBoundingClientRect();
+        const style = getComputedStyle(controlsBar);
+        const buttonCount = controlsBar.querySelectorAll('button, [role="button"]').length;
+        if (style.display === 'flex' && rect.height >= 36 && rect.height <= 72 && buttonCount >= 3) {
+          let anchorItem = anchor;
+          while (anchorItem.parentElement && anchorItem.parentElement !== controlsBar) {
+            anchorItem = anchorItem.parentElement;
+          }
+          return { controlsBar, anchorItem };
+        }
+        controlsBar = controlsBar.parentElement;
+      }
+    }
+    return null;
+  }
+
   function ensureToggleButton(player) {
+    let slot = document.getElementById(TOGGLE_SLOT_ID);
+    if (!slot) {
+      slot = document.createElement('div');
+      slot.id = TOGGLE_SLOT_ID;
+      slot.className = `${SCRIPT_ID}-control-slot`;
+    }
     let button = document.getElementById(TOGGLE_ID);
     if (!button) {
       button = document.createElement('button');
       button.id = TOGGLE_ID;
       button.type = 'button';
-      button.classList.add('ytp-button');
-      button.title = '字幕脚本设置';
-      button.setAttribute('aria-label', '字幕脚本设置');
+      button.classList.add(`${SCRIPT_ID}-x-button`);
+      button.title = 'X 视频字幕与配音设置';
+      button.setAttribute('aria-label', button.title);
       button.appendChild(createToggleIcon());
       button.addEventListener('click', event => {
         event.preventDefault();
@@ -836,21 +892,16 @@
         toggleControlPanel();
       });
     }
-    button.classList.remove('ytp-button');
-    button.classList.add(`${SCRIPT_ID}-x-button`);
-    button.title = 'X 视频字幕与配音设置';
-    button.setAttribute('aria-label', button.title);
+    if (button.parentElement !== slot) slot.appendChild(button);
     if (!button.querySelector('svg')) button.replaceChildren(createToggleIcon());
-    const toolbar = player.querySelector('.ytp-right-controls');
-    if (toolbar) {
-      // Insert at the far left of right controls, well away from fullscreen
-      if (button.parentElement !== toolbar) {
-        toolbar.insertBefore(button, toolbar.firstChild);
-      } else if (toolbar.firstChild !== button) {
-        toolbar.insertBefore(button, toolbar.firstChild);
+    const placement = findXControlsBar(player);
+    if (placement) {
+      const { controlsBar, anchorItem } = placement;
+      if (slot.parentElement !== controlsBar || slot.nextSibling !== anchorItem) {
+        controlsBar.insertBefore(slot, anchorItem);
       }
-    } else if (button.parentElement !== player) {
-      player.appendChild(button);
+    } else if (slot.parentElement && !player.contains(slot)) {
+      slot.remove();
     }
     syncToggleButtonState();
     return button;

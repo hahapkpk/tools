@@ -32,3 +32,16 @@ test('standalone X script owns X captions and transcription', () => {
   assert.doesNotMatch(xScript, /cloudUrl\.style\.width|cloudToken\.style\.width/);
   assert.doesNotMatch(xScript, /YouTube 自动翻译（备用/);
 });
+
+test('X script mounts its toggle inside the native video controls', () => {
+  const xScript = fs.readFileSync(path.join(root, 'x-video-auto-zh-hans-captions.user.js'), 'utf8');
+  assert.match(xScript, /const TOGGLE_SLOT_ID = `\$\{SCRIPT_ID\}-toggle-slot`/);
+  assert.match(xScript, /function findXControlsBar\(/);
+  assert.match(xScript, /button\[data-testid="captions"\]/);
+  assert.match(xScript, /closest\('\[data-testid="videoComponent"\]'\)/);
+  assert.match(xScript, /closest\('\[role="dialog"\]'\)/);
+  assert.match(xScript, /视频设置\|settings\|画中画/);
+  assert.match(xScript, /controlsBar\.insertBefore\(slot, anchorItem\)/);
+  assert.match(xScript, /-control-slot/);
+  assert.match(xScript, /flex:\s*0 0 40px/);
+});
