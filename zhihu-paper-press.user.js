@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         知乎 · Paper Press 阅读模式
 // @namespace    https://github.com/hahapkpk/tools
-// @version      2.2.2
-// @description  知乎专栏 → 杂志风格沉浸阅读：悬浮目录 · 代码高亮 · 图片灯箱 · 深色模式 · 阅读进度 · 字号/宽度调节 · 代码复制
+// @version      2.3.0
+// @description  知乎专栏 → 杂志风格沉浸阅读：悬浮目录 · 代码高亮 · 图片灯箱 · 深色模式 · 阅读进度 · 字号/宽度调节 · 代码复制 · 键盘快捷键
 // @author       hahapkpk
 // @match        https://zhuanlan.zhihu.com/p/*
 // @grant        GM_addStyle
@@ -104,7 +104,29 @@
 
   function $(sel, ctx) { return (ctx || document).querySelector(sel); }
   function $$(sel, ctx) { return (ctx || document).querySelectorAll(sel); }
-  function on(el, ev, fn) { el.addEventListener(ev, fn); }
+  function on(el, ev, fn, opts) { el.addEventListener(ev, fn, opts); }
+
+  // 优化：用 rAF 节流高频事件（滚动），避免每次 scroll 都同步执行布局读写
+  function rafThrottle(fn) {
+    var scheduled = false;
+    return function () {
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(function () {
+        scheduled = false;
+        fn();
+      });
+    };
+  }
+
+  // 优化：防抖，用于聚合知乎的异步渲染批次
+  function debounce(fn, wait) {
+    var timer = null;
+    return function () {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(fn, wait);
+    };
+  }
 
   // 修复：document-start 时 document.head 可能为 null
   function appendToHead(el) {
@@ -309,17 +331,44 @@
   // UI 组件构建
   // ═══════════════════════════════════════════════════════════════
 
+  // 优化：进度条 + TOC 高亮共用一个 rAF 节流的滚动处理器，避免重复监听与抖动
+  var _progressBar = null;
+  var _tocHeadings = [];
+  var _tocLinks = [];
+  var _scrollBound = false;
+
+  var onScroll = rafThrottle(function () {
+    // 阅读进度
+    if (_progressBar) {
+      var scrollTop = window.scrollY || document.documentElement.scrollTop;
+      var docHeight = document.documentElement.scrollHeight - window.innerHeight;
+      var pct = docHeight > 0 ? Math.min(100, (scrollTop / docHeight) * 100) : 0;
+      _progressBar.style.width = pct + '%';
+    }
+    // 目录当前项高亮
+    if (_tocLinks.length) {
+      var active = null;
+      for (var i = 0; i < _tocHeadings.length; i++) {
+        if (_tocHeadings[i].getBoundingClientRect().top <= 120) active = _tocHeadings[i].id;
+      }
+      for (var j = 0; j < _tocLinks.length; j++) {
+        _tocLinks[j].classList.toggle('active', _tocLinks[j].getAttribute('href') === '#' + active);
+      }
+    }
+  });
+
+  function bindScroll() {
+    if (_scrollBound) return;
+    _scrollBound = true;
+    on(window, 'scroll', onScroll, { passive: true });
+  }
+
   // ── 阅读进度条 ──
   function buildProgressBar() {
     var bar = document.createElement('div');
     bar.id = 'pp-progress';
     document.body.appendChild(bar);
-    on(window, 'scroll', function () {
-      var scrollTop = window.scrollY || document.documentElement.scrollTop;
-      var docHeight = document.documentElement.scrollHeight - window.innerHeight;
-      var pct = docHeight > 0 ? Math.min(100, (scrollTop / docHeight) * 100) : 0;
-      bar.style.width = pct + '%';
-    });
+    _progressBar = bar;
   }
 
   // ── 侧边按钮面板 ──
@@ -370,11 +419,11 @@
     var fsDown = btn('A-', '缩小', function () {
       var cur = PREF.fontSize;
       if (cur > 14) { PREF.fontSize = cur - 2; applyFontSize(); }
-    }, '缩小字号');
+    }, '缩小字号 ( - )');
     var fsUp = btn('A+', '放大', function () {
       var cur = PREF.fontSize;
       if (cur < 24) { PREF.fontSize = cur + 2; applyFontSize(); }
-    }, '放大字号');
+    }, '放大字号 ( + )');
     panel.appendChild(fsDown);
     panel.appendChild(fsUp);
 
@@ -386,7 +435,7 @@
       var next = PREF.mode === 'light' ? 'dark' : 'light';
       PREF.mode = next;
       applyTheme(next);
-    }, PREF.mode === 'dark' ? '切换日间模式' : '切换夜间模式');
+    }, PREF.mode === 'dark' ? '切换日间模式 ( d )' : '切换夜间模式 ( d )');
     panel.appendChild(dmBtn);
 
     var sep3 = document.createElement('div');
@@ -421,10 +470,13 @@
     function open(src) {
       img.src = src;
       lb.classList.add('open');
+      // 修复：加上 pp-lightbox-open 标记，让 cleanupDOM 的守卫真正生效，避免背景漏滚
+      document.body.classList.add('pp-lightbox-open');
       document.body.style.overflow = 'hidden';
     }
     function close() {
       lb.classList.remove('open');
+      document.body.classList.remove('pp-lightbox-open');
       document.body.style.overflow = '';
       img.src = '';
     }
@@ -470,13 +522,19 @@
     toc.id = 'pp-toc';
 
     var headings = $$('.Post-RichTextContainer h2, .Post-RichTextContainer h3');
-    if (headings.length < 2) { toc.style.display = 'none'; document.body.appendChild(toc); return; }
+    if (headings.length < 2) {
+      toc.style.display = 'none';
+      document.body.appendChild(toc);
+      _tocHeadings = [];
+      _tocLinks = [];
+      return;
+    }
 
     headings.forEach(function (h) {
-      var id = 'pp-' + Math.random().toString(36).slice(2, 8);
-      h.id = id;
+      // 优化：已有 id 就复用，避免每次重建 TOC 都刷新锚点
+      if (!h.id) h.id = 'pp-' + Math.random().toString(36).slice(2, 8);
       var a = document.createElement('a');
-      a.href = '#' + id;
+      a.href = '#' + h.id;
       a.textContent = h.textContent.trim();
       a.className = h.tagName === 'H3' ? 'pp-toc-h3' : 'pp-toc-h2';
       a.title = a.textContent;
@@ -489,17 +547,9 @@
 
     document.body.appendChild(toc);
 
-    var tocLinks = $$('#pp-toc a');
-    on(window, 'scroll', function () {
-      var active = null;
-      headings.forEach(function (h) {
-        var rect = h.getBoundingClientRect();
-        if (rect.top <= 120) active = h.id;
-      });
-      tocLinks.forEach(function (a) {
-        a.classList.toggle('active', a.getAttribute('href') === '#' + active);
-      });
-    });
+    // 优化：把当前标题/链接存入模块级状态，交给统一的 onScroll 处理，不再重复绑定监听器
+    _tocHeadings = Array.prototype.slice.call(headings);
+    _tocLinks = Array.prototype.slice.call($$('#pp-toc a'));
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -633,12 +683,44 @@
     appendToHead(_hljsThemeEl);
   }
 
+  // 优化：跳过已高亮的代码块，避免重复高亮与 hljs 的 "已高亮" 警告
   function highlightAll() {
-    if (window.hljs) {
-      $$('.Post-RichTextContainer pre code').forEach(function (block) {
-        window.hljs.highlightElement(block);
-      });
-    }
+    if (!window.hljs) return;
+    $$('.Post-RichTextContainer pre code').forEach(function (block) {
+      if (block.dataset.ppHighlighted === '1') return;
+      try { window.hljs.highlightElement(block); } catch (e) {}
+      block.dataset.ppHighlighted = '1';
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 键盘快捷键
+  // ═══════════════════════════════════════════════════════════════
+
+  function bindKeyboard() {
+    on(document, 'keydown', function (e) {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      var t = e.target;
+      var tag = (t && t.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || (t && t.isContentEditable)) return;
+
+      switch (e.key) {
+        case '-':
+        case '_':
+          if (PREF.fontSize > 14) { PREF.fontSize = PREF.fontSize - 2; applyFontSize(); }
+          break;
+        case '=':
+        case '+':
+          if (PREF.fontSize < 24) { PREF.fontSize = PREF.fontSize + 2; applyFontSize(); }
+          break;
+        case 'd':
+        case 'D':
+          var next = PREF.mode === 'light' ? 'dark' : 'light';
+          PREF.mode = next;
+          applyTheme(next);
+          break;
+      }
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -677,29 +759,46 @@
   // 修复：用 MutationObserver 持续监听动态内容，替代 setTimeout 猜测
   // ═══════════════════════════════════════════════════════════════
 
+  var _dynObserver = null;
+  var _observerTarget = null;
+
+  // 优化：处理期间先断开自身监听，避免我们自己的 DOM 写入再次触发 observer 造成重复处理
+  function processDynamicContent() {
+    if (_dynObserver) _dynObserver.disconnect();
+
+    addCopyButtons();
+    highlightAll();
+    bindImages();
+
+    // 如果新增了标题，重建 TOC
+    var headings = $$('.Post-RichTextContainer h2, .Post-RichTextContainer h3');
+    if (headings.length !== _tocLinks.length) {
+      buildTOC();
+    }
+
+    if (_dynObserver && _observerTarget) {
+      _dynObserver.observe(_observerTarget, { childList: true, subtree: true });
+    }
+  }
+
   function observeDynamicContent() {
     var container = $('.Post-RichTextContainer');
     if (!container) return;
+    _observerTarget = container;
 
-    var observer = new MutationObserver(function (mutations) {
-      var hasNewContent = false;
-      mutations.forEach(function (m) {
-        if (m.type === 'childList' && m.addedNodes.length > 0) hasNewContent = true;
-      });
-      if (hasNewContent) {
-        addCopyButtons();
-        highlightAll();
-        bindImages();
-        // 如果新增了标题，重建 TOC
-        var headings = $$('.Post-RichTextContainer h2, .Post-RichTextContainer h3');
-        var tocLinks = $$('#pp-toc a');
-        if (headings.length !== tocLinks.length) {
-          buildTOC();
+    // 优化：防抖聚合知乎的连续异步渲染，减少无谓的多次处理
+    var schedule = debounce(processDynamicContent, 200);
+
+    _dynObserver = new MutationObserver(function (mutations) {
+      for (var i = 0; i < mutations.length; i++) {
+        if (mutations[i].type === 'childList' && mutations[i].addedNodes.length > 0) {
+          schedule();
+          return;
         }
       }
     });
 
-    observer.observe(container, { childList: true, subtree: true });
+    _dynObserver.observe(container, { childList: true, subtree: true });
   }
 
   function bindImages() {
@@ -734,6 +833,10 @@
       _panelRef = buildPanel();
       lb = buildLightbox();
 
+      // 优化：只绑定一次滚动监听，进度条 + TOC 高亮共用
+      bindScroll();
+      bindKeyboard();
+
       // 绑定图片点击
       setTimeout(function () {
         bindImages();
@@ -747,7 +850,10 @@
       });
 
       // TOC
-      setTimeout(buildTOC, 500);
+      setTimeout(function () {
+        buildTOC();
+        onScroll(); // 立即刷新一次进度条/目录高亮
+      }, 500);
 
       // 应用偏好
       applyFontSize();
