@@ -22,6 +22,6 @@ test('compact panel prevents horizontal overflow on narrow players', () => {
   assert.match(source, /-settings-section/);
 });
 
-test('X transcription controls have their own secondary section', () => {
-  assert.match(source, /makeSettingsSection\('X 视频转写'/);
+test('YouTube settings stay focused on YouTube', () => {
+  assert.doesNotMatch(source, /makeSettingsSection\('X 视频转写'/);
 });

@@ -1,13 +1,12 @@
 // ==UserScript==
-// @name         YouTube 英文视频简体中文字幕与 AI 配音
+// @name         X 视频自动简体中文字幕与 AI 配音
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.8.0
-// @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube and optionally provides Chinese AI dubbing.
-// @match        https://www.youtube.com/watch*
-// @match        https://www.youtube.com/shorts/*
-// @match        https://www.youtube.com/embed/*
-// @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/youtube-auto-zh-hans-captions.user.js
-// @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/youtube-auto-zh-hans-captions.user.js
+// @version      0.1.0
+// @description  Reads or transcribes X videos, translates them to Simplified Chinese, and optionally provides Chinese AI dubbing.
+// @match        https://x.com/*
+// @match        https://twitter.com/*
+// @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/x-video-auto-zh-hans-captions.user.js
+// @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/x-video-auto-zh-hans-captions.user.js
 // @run-at       document-start
 // @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
@@ -17,15 +16,16 @@
 // @connect      tts.tencentcloudapi.com
 // @connect      127.0.0.1
 // @connect      localhost
+// @connect      api.openai.com
+// @connect      111.46.161.132
 // @connect      *
 // ==/UserScript==
 
 (function () {
   'use strict';
 
-  // Keep the original keys so existing YouTube settings and TTS credentials continue to work.
-  const SCRIPT_ID = 'codex-yt-auto-zh-hans-captions';
-  const SCRIPT_DATA_KEY = 'codexYtAutoZhHansCaptions';
+  const SCRIPT_ID = 'codex-x-video-auto-zh-hans-captions';
+  const SCRIPT_DATA_KEY = 'codexXVideoAutoZhHansCaptions';
   const STYLE_ID = `${SCRIPT_ID}-style`;
   const OVERLAY_ID = `${SCRIPT_ID}-overlay`;
   const STATUS_ID = `${SCRIPT_ID}-status`;
@@ -38,6 +38,9 @@
   const VOLC_ACCESS_TOKEN_STORAGE_KEY = `${SCRIPT_ID}:volc-access-token`;
   const TENCENT_SECRET_ID_STORAGE_KEY = `${SCRIPT_ID}:tencent-secret-id`;
   const TENCENT_SECRET_KEY_STORAGE_KEY = `${SCRIPT_ID}:tencent-secret-key`;
+  const OPENAI_TRANSCRIPTION_KEY_STORAGE_KEY = `${SCRIPT_ID}:openai-transcription-key`;
+  const X_CLOUD_TOKEN_STORAGE_KEY = `${SCRIPT_ID}:x-cloud-token`;
+  const OPENAI_TRANSCRIPTION_URL = 'https://api.openai.com/v1/audio/transcriptions';
   const VOLC_TTS_URL = 'https://openspeech.bytedance.com/api/v3/tts/unidirectional';
   const VOLC_RESOURCE_ID = 'seed-tts-2.0';
   const TENCENT_TTS_URL = 'https://tts.tencentcloudapi.com';
@@ -271,7 +274,9 @@
     voiceRate: 1.08,
     voiceSyncMode: 'natural',
     terminologyMap: '',
-    originalVolume: 0.25
+    originalVolume: 0.25,
+    xTranscriptionMaxSeconds: 600,
+    xCloudApiBase: 'http://111.46.161.132:8788'
   };
 
   const state = {
@@ -299,6 +304,10 @@
     voiceProgressNotice: '',
     voiceProgressNoticeUntil: 0,
     localTranslators: new Map(),
+    xCapture: null,
+    xCloudMediaUrl: '',
+    xCloudPoll: null,
+    _xNoCaptionShown: false,
     settings: loadSettings(),
     // DOM cache for video element
     _cachedVideoEl: null,
@@ -367,6 +376,29 @@
     if (typeof GM_setValue !== 'function') return;
     GM_setValue(TENCENT_SECRET_ID_STORAGE_KEY, String(secretId || '').trim());
     GM_setValue(TENCENT_SECRET_KEY_STORAGE_KEY, String(secretKey || '').trim());
+  }
+
+  function getOpenAiTranscriptionKey() {
+    try {
+      return typeof GM_getValue === 'function' ? String(GM_getValue(OPENAI_TRANSCRIPTION_KEY_STORAGE_KEY, '') || '') : '';
+    } catch {
+      return '';
+    }
+  }
+
+  function saveOpenAiTranscriptionKey(value) {
+    if (typeof GM_setValue !== 'function') return;
+    GM_setValue(OPENAI_TRANSCRIPTION_KEY_STORAGE_KEY, String(value || '').trim());
+  }
+
+  function getXCloudToken() {
+    try { return typeof GM_getValue === 'function' ? String(GM_getValue(X_CLOUD_TOKEN_STORAGE_KEY, '') || '') : ''; }
+    catch { return ''; }
+  }
+
+  function saveXCloudToken(value) {
+    if (typeof GM_setValue !== 'function') return;
+    GM_setValue(X_CLOUD_TOKEN_STORAGE_KEY, String(value || '').trim());
   }
 
   function injectStyle() {
@@ -626,6 +658,20 @@
         padding: 3px 6px;
       }
       #${CONTROL_ID} .${SCRIPT_ID}-api-key button { padding: 3px 4px; }
+      #${CONTROL_ID} .${SCRIPT_ID}-x-cloud-settings {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 48px;
+        gap: 6px;
+        min-width: 0;
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-x-cloud-settings input {
+        width: 100%;
+        height: 26px;
+        padding: 3px 6px;
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-x-cloud-url {
+        grid-column: 1 / -1;
+      }
       #${CONTROL_ID} .${SCRIPT_ID}-volc-hidden { display: none; }
       #${CONTROL_ID} .${SCRIPT_ID}-local-translation {
         display: flex;
@@ -661,10 +707,6 @@
       #${CONTROL_ID} .${SCRIPT_ID}-quick-buttons button {
         flex: 1 1 0;
       }
-      .${SCRIPT_ID}-hide-native .ytp-caption-window-container,
-      .${SCRIPT_ID}-hide-native .ytp-caption-segment {
-        display: none !important;
-      }
       #${TOGGLE_ID} {
         width: 48px;
         height: 100%;
@@ -690,32 +732,50 @@
         filter: drop-shadow(0 0 5px rgba(62,166,255,0.85));
         color: #3ea6ff;
       }
+      #${TOGGLE_ID}.${SCRIPT_ID}-x-button {
+        position: absolute;
+        right: 8px;
+        bottom: 8px;
+        z-index: 2147483002;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        background: rgba(0,0,0,0.72);
+        box-shadow: 0 1px 5px rgba(0,0,0,0.45);
+      }
     `;
     document.head.appendChild(style);
   }
 
+  function isXPage() {
+    return /^(?:x\.com|(?:www\.)?twitter\.com)$/i.test(location.hostname);
+  }
+
+  function getXVideoEl() {
+    const mainArticle = document.querySelector('main article[data-testid="tweet"]');
+    return mainArticle?.querySelector('[data-testid="videoComponent"] video') ||
+      document.querySelector('article[data-testid="tweet"] [data-testid="videoComponent"] video') ||
+      document.querySelector('[data-testid="videoComponent"] video');
+  }
+
+  function getXVideoIdentity(video) {
+    const poster = video?.poster || '';
+    const posterId = poster.match(/(?:media|amplify_video_thumb)\/([^/?]+)/i)?.[1] || '';
+    return posterId || 'video';
+  }
+
   function getVideoId() {
-    const url = new URL(location.href);
-    if (url.pathname.startsWith('/shorts/') || url.pathname.startsWith('/embed/')) {
-      return url.pathname.split('/').filter(Boolean)[1] || '';
-    }
-    return url.searchParams.get('v') || '';
+    const statusId = location.pathname.match(/\/status\/(\d+)/)?.[1] || location.pathname.replace(/\W+/g, '-');
+    return `x-${statusId}-${getXVideoIdentity(getXVideoEl())}`;
   }
 
   function getPlayerRoot() {
-    return document.querySelector('.html5-video-player') ||
-      document.querySelector('#movie_player') ||
-      document.querySelector('ytd-player') ||
-      document.querySelector('#shorts-player') ||
-      document.body;
+    const video = getXVideoEl();
+    return video?.closest('[data-testid="videoPlayer"]') || video?.closest('[data-testid="videoComponent"]') || video?.parentElement || document.body;
   }
 
   function getVideoEl() {
-    const now = Date.now();
-    if (state._cachedVideoEl && now - state._cachedVideoElAt < 2000) return state._cachedVideoEl;
-    const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
-    if (video) { state._cachedVideoEl = video; state._cachedVideoElAt = now; }
-    return video || state._cachedVideoEl;
+    return getXVideoEl();
   }
 
   function invalidateVideoCache() {
@@ -776,9 +836,10 @@
         toggleControlPanel();
       });
     }
-    button.classList.add('ytp-button');
-    button.title = '字幕脚本设置';
-    button.setAttribute('aria-label', '字幕脚本设置');
+    button.classList.remove('ytp-button');
+    button.classList.add(`${SCRIPT_ID}-x-button`);
+    button.title = 'X 视频字幕与配音设置';
+    button.setAttribute('aria-label', button.title);
     if (!button.querySelector('svg')) button.replaceChildren(createToggleIcon());
     const toolbar = player.querySelector('.ytp-right-controls');
     if (toolbar) {
@@ -1440,8 +1501,7 @@
     const mode = createDarkSelect('mode', [{ value: 'zh', label: '中文' }, { value: 'bilingual', label: '双语' }], state.settings.mode, value => updateSetting('mode', value), '选择字幕模式');
 
     const translationEngine = createDarkSelect('translationEngine', [
-      { value: 'local', label: 'Chrome 本地翻译（推荐）' },
-      { value: 'youtube', label: 'YouTube 自动翻译（备用，可能限流）' }
+      { value: 'local', label: 'Chrome 本地翻译' }
     ], state.settings.translationEngine, value => updateSetting('translationEngine', value), '选择字幕翻译方式');
 
     const localTranslationWrap = document.createElement('span');
@@ -1453,6 +1513,75 @@
     localTranslationWrap.appendChild(prepareTranslationButton);
     const localTranslationRow = makeRow('本地翻译', localTranslationWrap);
     localTranslationRow.dataset.role = 'localTranslationRow';
+
+    const xTranscriptionRows = [];
+    if (isXPage()) {
+      const openAiKeyWrap = document.createElement('span');
+      openAiKeyWrap.className = `${SCRIPT_ID}-api-key`;
+      const openAiKey = document.createElement('input');
+      openAiKey.type = 'password';
+      openAiKey.dataset.role = 'openAiTranscriptionKey';
+      openAiKey.placeholder = 'OpenAI API Key（仅本机）';
+      openAiKey.autocomplete = 'off';
+      openAiKey.value = getOpenAiTranscriptionKey();
+      const saveOpenAiKey = makeButton('保存', '仅保存到本机 Tampermonkey 存储', () => {
+        saveOpenAiTranscriptionKey(openAiKey.value);
+        showStatus(openAiKey.value.trim() ? 'OpenAI 转写 Key 已保存到本机' : 'OpenAI 转写 Key 已清除');
+      });
+      openAiKeyWrap.append(openAiKey, saveOpenAiKey);
+
+      const xTranscribeButton = makeButton('转写当前视频', '从当前播放位置采集音轨，调用 OpenAI Whisper 生成带时间戳的字幕', () => {
+        transcribeCurrentXVideo().catch(error => showStatus(error.message || 'X 视频转写失败', 8000));
+      });
+      xTranscribeButton.dataset.role = 'xTranscribeCurrentVideo';
+      const xNote = document.createElement('span');
+      xNote.className = `${SCRIPT_ID}-credential-note`;
+      xNote.textContent = '转写时视频会从当前位置播放至结束；音频仅上传到你配置的 OpenAI 账户，随后自动翻成简中并可开启中文配音。';
+      xTranscriptionRows.push(
+        makeRow('X 转写 Key', openAiKeyWrap),
+        makeRow('X 音轨转写', xTranscribeButton),
+        makeRow('X 转写说明', xNote)
+      );
+
+      // X 云端转写 (cloud caption service)
+      const cloudWrap = document.createElement('span');
+      cloudWrap.className = `${SCRIPT_ID}-x-cloud-settings`;
+      const cloudUrl = document.createElement('input');
+      cloudUrl.type = 'text';
+      cloudUrl.className = `${SCRIPT_ID}-x-cloud-url`;
+      cloudUrl.value = state.settings.xCloudApiBase;
+      cloudUrl.placeholder = 'http://111.46.161.132:8788';
+      const cloudToken = document.createElement('input');
+      cloudToken.type = 'password';
+      cloudToken.value = getXCloudToken();
+      cloudToken.placeholder = 'API Token';
+      const cloudSaveBtn = makeButton('保存', '保存本机云端设置', () => {
+        updateSetting('xCloudApiBase', cloudUrl.value.trim());
+        saveXCloudToken(cloudToken.value);
+        showStatus('云端设置已保存');
+      });
+      cloudWrap.append(cloudUrl, cloudToken, cloudSaveBtn);
+
+      const cloudButton = makeButton('云端转写当前视频', '通过 GM_xmlhttpRequest 调用云端 API', () => {
+        transcribeCurrentXVideoCloud().catch(e => showStatus(e.message || '云端转写失败', 8000));
+      });
+
+      const cancelButton = makeButton('取消云端任务轮询', '停止轮询', () => {
+        cancelXCloudPolling();
+        showStatus('已取消云端任务轮询');
+      });
+
+      const cloudNote = document.createElement('span');
+      cloudNote.className = `${SCRIPT_ID}-credential-note`;
+      cloudNote.textContent = '当前使用 HTTP，API Token、媒体地址和请求内容不加密，仅适合个人受控网络。';
+
+      xTranscriptionRows.push(
+        makeRow('X 云端服务', cloudWrap),
+        makeRow('X 云端转写', cloudButton),
+        makeRow('云端任务', cancelButton),
+        makeRow('HTTP 风险', cloudNote)
+      );
+    }
 
     const fontSize = document.createElement('input');
     fontSize.type = 'range';
@@ -1710,6 +1839,7 @@
       makeRow('原声音量', originalVolumeWrap),
       subtitleSection,
       voiceServiceSection,
+      ...(xTranscriptionRows.length ? [makeSettingsSection('X 视频转写', xTranscriptionRows, true)] : []),
       syncSection,
       buttons
     );
@@ -1850,349 +1980,12 @@
     overlay.classList.add(`${SCRIPT_ID}-visible`);
   }
 
-  function getPlayerResponse(videoId) {
-    const player = document.getElementById('movie_player');
-    try {
-      const liveResponse = player?.getPlayerResponse?.();
-      if (!videoId || liveResponse?.videoDetails?.videoId === videoId) return liveResponse;
-    } catch (error) {
-      log('movie player response failed', error);
-    }
-    if (window.ytInitialPlayerResponse?.videoDetails?.videoId === videoId) return window.ytInitialPlayerResponse;
-    const playerResponse = window.ytplayer?.config?.args?.player_response;
-    if (playerResponse) {
-      try {
-        const parsed = typeof playerResponse === 'string' ? JSON.parse(playerResponse) : playerResponse;
-        if (!videoId || parsed?.videoDetails?.videoId === videoId) return parsed;
-      } catch (error) {
-        log('ytplayer parse failed', error);
-      }
-    }
-    return getPlayerResponseFromScripts(videoId);
-  }
-
-  function getPlayerResponseFromScripts(videoId) {
-    for (const script of Array.from(document.scripts).reverse()) {
-      const text = script.textContent || '';
-      const markerIndex = text.indexOf('ytInitialPlayerResponse');
-      if (markerIndex === -1) continue;
-      const start = text.indexOf('{', markerIndex);
-      if (start === -1) continue;
-      const jsonText = extractBalancedJson(text, start);
-      if (!jsonText) continue;
-      try {
-        const parsed = JSON.parse(jsonText);
-        if (!videoId || parsed?.videoDetails?.videoId === videoId) return parsed;
-      } catch (error) {
-        log('script parse failed', error);
-      }
-    }
-    return null;
-  }
-
-  function extractBalancedJson(text, start) {
-    let depth = 0;
-    let inString = false;
-    let escape = false;
-    for (let i = start; i < text.length; i += 1) {
-      const char = text[i];
-      if (inString) {
-        if (escape) escape = false;
-        else if (char === '\\') escape = true;
-        else if (char === '"') inString = false;
-        continue;
-      }
-      if (char === '"') inString = true;
-      else if (char === '{') depth += 1;
-      else if (char === '}') {
-        depth -= 1;
-        if (depth === 0) return text.slice(start, i + 1);
-      }
-    }
-    return '';
-  }
-
-  function selectBestCaptionSource(playerResponse) {
-    const tracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
-    const directChinese = tracks.find(track => CHINESE_LANG_RE.test(track.languageCode || '') && track.baseUrl);
-    if (directChinese) {
-      return { kind: 'youtube-native-zh', targetTrack: directChinese, sourceTrack: null, translationMode: 'none', sourceLanguage: 'zh' };
-    }
-
-    const sourceTrack = tracks.find(track => SOURCE_LANG_RE.test(track.languageCode || '') && track.baseUrl && track.isTranslatable !== false) ||
-      tracks.find(track => SOURCE_LANG_RE.test(track.languageCode || '') && track.baseUrl) ||
-      tracks.find(track => track.baseUrl && track.isTranslatable !== false);
-
-    if (!sourceTrack) return null;
-    const sourceLanguage = normalizeTranslatorLanguage(sourceTrack.languageCode || 'en');
-    if (state.settings.translationEngine === 'youtube') {
-      return { kind: 'youtube-auto-translate-zh', targetTrack: sourceTrack, sourceTrack, translationMode: 'youtube', sourceLanguage };
-    }
-    return { kind: 'chrome-local-zh', targetTrack: sourceTrack, sourceTrack, translationMode: 'local', sourceLanguage };
-  }
-
   function normalizeTranslatorLanguage(languageCode) {
     return String(languageCode || 'en').split('-')[0].toLowerCase();
   }
 
-  function getClientContextParams() {
-    const client = window.ytcfg?.data_?.INNERTUBE_CONTEXT?.client || {};
-    return {
-      xorb: '2',
-      xobt: '3',
-      xovt: '3',
-      cbr: client.browserName || 'Chrome',
-      cbrver: client.browserVersion || '',
-      c: client.clientName || 'WEB',
-      cver: client.clientVersion || window.ytcfg?.data_?.INNERTUBE_CONTEXT_CLIENT_VERSION || '',
-      cplayer: 'UNIPLAYER',
-      cos: client.osName || 'Windows',
-      cosver: client.osVersion || '',
-      cplatform: 'DESKTOP'
-    };
-  }
-
-  function makeCaptionUrl(track, options = {}) {
-    const url = new URL(track.baseUrl, location.origin);
-    url.searchParams.set('fmt', 'json3');
-    if (options.translate) url.searchParams.set('tlang', TARGET_LANG);
-    else url.searchParams.delete('tlang');
-    if (track.kind && !url.searchParams.has('kind')) url.searchParams.set('kind', track.kind);
-    if (track.languageCode && !url.searchParams.has('lang')) url.searchParams.set('lang', track.languageCode);
-    for (const [key, value] of Object.entries(getClientContextParams())) {
-      if (value) url.searchParams.set(key, value);
-    }
-    return url.toString();
-  }
-
-  async function fetchCaptionJson(url) {
-    const response = await fetch(url, { credentials: 'include', cache: 'force-cache' });
-    if (!response.ok) {
-      const isTranslated = new URL(url, location.origin).searchParams.has('tlang');
-      throw classifyCaptionError(response.status, isTranslated);
-    }
-    const text = await response.text();
-    if (!text.trim()) throw new Error('YouTube 当前返回空字幕内容。');
-    try {
-      return JSON.parse(text);
-    } catch {
-      return parseTimedTextXml(text);
-    }
-  }
-
-  async function fetchCaptionJsonWithFallback(videoId, track, options = {}) {
-    const tried = new Set();
-    let lastError = null;
-    const tryUrl = async url => {
-      if (!url || tried.has(url)) return null;
-      tried.add(url);
-      try {
-        return await fetchCaptionJson(url);
-      } catch (error) {
-        if (error.rateLimited) throw error;
-        lastError = error;
-        return null;
-      }
-    };
-
-    for (const url of findPerformanceCaptionUrls(videoId, options.translate)) {
-      const json = await tryUrl(url);
-      if (json) return json;
-    }
-
-    const json = await tryUrl(makeCaptionUrl(track, options));
-    if (json) return json;
-
-    await primeNativeCaptionRequest(track, options.translate);
-    for (const url of findPerformanceCaptionUrls(videoId, options.translate)) {
-      const jsonFromNativeUrl = await tryUrl(url);
-      if (jsonFromNativeUrl) return jsonFromNativeUrl;
-    }
-
-    throw lastError || new Error('字幕接口没有返回可用内容。');
-  }
-
-  function findPerformanceCaptionUrls(videoId, translate) {
-    return performance.getEntriesByType('resource')
-      .map(entry => entry.name)
-      .filter(name => {
-        if (!name.includes('/api/timedtext')) return false;
-        try {
-          const url = new URL(name);
-          if (url.searchParams.get('v') !== videoId) return false;
-          const tlang = url.searchParams.get('tlang');
-          return translate ? tlang === TARGET_LANG : !tlang;
-        } catch {
-          return false;
-        }
-      })
-      .reverse();
-  }
-
-  async function primeNativeCaptionRequest(track, translate) {
-    const player = document.getElementById('movie_player');
-    if (!player || typeof player.setOption !== 'function') return;
-    const nativeTrack = {
-      languageCode: track.languageCode || 'en',
-      languageName: getTrackName(track) || 'English',
-      displayName: translate ? `${getTrackName(track) || 'English'} >> 中文（简体）` : getTrackName(track) || 'English',
-      kind: track.kind || '',
-      name: track.name?.simpleText || '',
-      id: null,
-      is_servable: false,
-      is_default: false,
-      is_translateable: track.isTranslatable !== false,
-      vss_id: track.vssId || track.vss_id || ''
-    };
-    if (translate) {
-      nativeTrack.translationLanguage = { languageCode: TARGET_LANG, languageName: '中文（简体）' };
-    }
-
-    try {
-      player.setOption('captions', 'track', nativeTrack);
-      await sleep(1200);
-    } catch (error) {
-      log('native caption priming failed', error);
-    }
-  }
-
-  function getTrackName(track) {
-    return track?.name?.simpleText || track?.name?.runs?.map(run => run.text).join('') || track?.languageCode || '';
-  }
-
   function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  function classifyCaptionError(status, isTranslated = false) {
-    if (status === 401 || status === 403) return new Error('字幕接口被权限或地区限制拦截。');
-    if (status === 404) return new Error('当前视频没有可用字幕轨道。');
-    if (status === 429) {
-      const error = new Error(isTranslated ? 'YouTube 自动翻译字幕已被限流，请切换到 Chrome 本地翻译。' : 'YouTube 原始字幕请求暂时被限流，请稍后重试。');
-      error.rateLimited = true;
-      return error;
-    }
-    return new Error(`字幕接口请求失败：${status}`);
-  }
-
-  function parseTimedTextXml(text) {
-    const xml = new DOMParser().parseFromString(text, 'text/xml');
-    const nodes = Array.from(xml.querySelectorAll('text'));
-    return {
-      events: nodes.map(node => ({
-        tStartMs: Math.round(Number(node.getAttribute('start') || 0) * 1000),
-        dDurationMs: Math.round(Number(node.getAttribute('dur') || 2) * 1000),
-        segs: [{ utf8: node.textContent || '' }]
-      }))
-    };
-  }
-
-  function parseTranscriptTimestamp(text) {
-    const parts = String(text || '').trim().split(':').map(Number);
-    if (!parts.length || parts.some(part => !Number.isFinite(part))) return NaN;
-    return parts.reduce((seconds, part) => (seconds * 60) + part, 0);
-  }
-
-  function readTranscriptCuesFromPanel() {
-    const nodes = Array.from(document.querySelectorAll('ytd-transcript-segment-renderer'));
-    const legacyCues = nodes.map((node, index) => {
-      const start = parseTranscriptTimestamp(node.querySelector('.segment-timestamp')?.textContent);
-      const nextStart = parseTranscriptTimestamp(nodes[index + 1]?.querySelector('.segment-timestamp')?.textContent);
-      const text = cleanCaptionText(node.querySelector('.segment-text')?.textContent || '');
-      return {
-        start,
-        end: Number.isFinite(nextStart) && nextStart > start ? nextStart : start + 2.5,
-        text
-      };
-    }).filter(cue => Number.isFinite(cue.start) && cue.text && !isErrorCaptionText(cue.text));
-    return legacyCues.length ? legacyCues : readModernTranscriptCuesFromPanel();
-  }
-
-  function readModernTranscriptCuesFromPanel() {
-    const panel = Array.from(document.querySelectorAll('ytd-engagement-panel-section-list-renderer'))
-      .find(node => node.offsetParent && /转写文稿|Transcript|搜索转写内容|Search transcript/i.test(node.textContent || ''));
-    if (!panel) return [];
-    const nodes = Array.from(panel.querySelectorAll('transcript-segment-view-model, TRANSCRIPT-SEGMENT-VIEW-MODEL'));
-    return nodes.map((node, index) => {
-      const start = parseTranscriptTimestamp(node.querySelector('.ytwTranscriptSegmentViewModelTimestamp')?.textContent);
-      const nextStart = parseTranscriptTimestamp(nodes[index + 1]?.querySelector('.ytwTranscriptSegmentViewModelTimestamp')?.textContent);
-      const text = cleanCaptionText(node.querySelector('span[role="text"]')?.textContent || '');
-      return {
-        start,
-        end: Number.isFinite(nextStart) && nextStart > start ? nextStart : start + 2.5,
-        text
-      };
-    }).filter(cue => Number.isFinite(cue.start) && cue.text && !isErrorCaptionText(cue.text));
-  }
-
-  function findTranscriptTrigger() {
-    const panel = document.querySelector('ytd-video-description-transcript-section-renderer');
-    return Array.from(panel?.querySelectorAll('button, tp-yt-paper-button') || [])
-      .find(button => /内容转文字|显示文字记录|show transcript/i.test(button.textContent || ''));
-  }
-
-  function findTranscriptLanguageOption(sourceTrack, sourceLanguage) {
-    const normalizedName = getTrackName(sourceTrack).replace(/\s+/g, ' ').trim();
-    const languageLabels = {
-      en: ['英语', 'English'],
-      de: ['德语', 'German', 'Deutsch'],
-      fr: ['法语', 'French', 'Francais'],
-      es: ['西班牙语', 'Spanish', 'Espanol'],
-      ja: ['日语', 'Japanese'],
-      ko: ['韩语', 'Korean'],
-      pt: ['葡萄牙语', 'Portuguese'],
-      it: ['意大利语', 'Italian'],
-      ru: ['俄语', 'Russian']
-    };
-    const labels = [normalizedName, ...(languageLabels[sourceLanguage] || [])].filter(Boolean);
-    return Array.from(document.querySelectorAll('ytd-transcript-footer-renderer tp-yt-paper-item[role="option"], ytd-transcript-footer-renderer tp-yt-paper-item'))
-      .find(option => {
-        const text = option.textContent.replace(/\s+/g, ' ').trim();
-        return labels.some(label => text === label || text.startsWith(`${label} (`) || text.includes(label));
-      });
-  }
-
-  async function selectTranscriptSourceLanguage(sourceTrack, sourceLanguage) {
-    if (readTranscriptCuesFromPanel().length) return;
-    const option = findTranscriptLanguageOption(sourceTrack, sourceLanguage);
-    if (!option) throw new Error('转写文稿中没有找到原始字幕语言，请换一个字幕来源。');
-    option.click();
-    await sleep(500);
-  }
-
-  async function fetchTranscriptCuesFromPanel(sourceTrack, sourceLanguage) {
-    if (!readTranscriptCuesFromPanel().length) {
-      let trigger = findTranscriptTrigger();
-      if (!trigger) {
-        document.querySelector('#description-inline-expander #expand')?.click();
-        await sleep(250);
-        trigger = findTranscriptTrigger();
-      }
-      if (!trigger) throw new Error('字幕接口受限，且当前视频没有可读取的转写文稿。');
-      showStatus('原始字幕读取被 YouTube 暂时限制，正在改用内容转文字...', 120000);
-      trigger.click();
-      for (let attempt = 0; attempt < 30 && !readTranscriptCuesFromPanel().length; attempt += 1) await sleep(250);
-    }
-    await selectTranscriptSourceLanguage(sourceTrack, sourceLanguage);
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      const cues = readTranscriptCuesFromPanel();
-      if (cues.length) return cues;
-      await sleep(250);
-    }
-    throw new Error('视频转写文稿读取失败，请稍后重试。');
-  }
-
-  function normalizeRawCues(captionJson) {
-    return (captionJson?.events || [])
-      .filter(event => Array.isArray(event.segs))
-      .map(event => {
-        const start = Number(event.tStartMs || 0) / 1000;
-        const duration = Number(event.dDurationMs || 0) / 1000;
-        const text = cleanCaptionText(event.segs.map(seg => seg.utf8 || '').join(''));
-        return { start, end: start + Math.max(duration, 0.7), text };
-      })
-      .filter(cue => cue.text && !isErrorCaptionText(cue.text))
-      .sort((a, b) => a.start - b.start);
   }
 
   function cleanCaptionText(text) {
@@ -2205,7 +1998,7 @@
   }
 
   function isErrorCaptionText(text) {
-    return /(?:429\s*错误|YouTube\s*(?:限制|limit).*(?:字幕|caption)|当前设备.*(?:机翻|字幕).*(?:请求|限制)|不要使用\s*\[?\s*自动翻译)/i.test(String(text || ''));
+    return /(?:429\s*错误|当前设备.*字幕.*限制|字幕生成失败)/i.test(String(text || ''));
   }
 
   function mergeSentenceCues(rawCues) {
@@ -2335,17 +2128,8 @@
   }
 
   async function prepareLocalTranslationForCurrentVideo() {
-    const videoId = getVideoId();
-    const source = await waitForCaptionSource(videoId);
-    if (!source) throw new Error('当前视频没有可用的字幕轨道。');
-    if (source.translationMode === 'none') {
-      showStatus('当前视频已有中文字幕，无需本地翻译。');
-      return;
-    }
-    if (source.translationMode !== 'local') throw new Error('请先将字幕翻译切换为 Chrome 本地翻译。');
-    await getLocalTranslator(source.sourceLanguage, true);
-    showStatus('本地翻译已准备，正在生成中文字幕...');
-    reloadCurrentVideo(true);
+    await getLocalTranslator('en', true);
+    showStatus('X 视频本地翻译已准备。转写完成后会自动生成中文字幕。');
   }
 
   async function translateCuesLocally(rawSourceCues, sourceLanguage) {
@@ -2360,32 +2144,6 @@
       if (text) translated.push(limitLines({ ...cue, text, sourceText: cue.text }));
     }
     return translated;
-  }
-
-  async function waitForCaptionSource(videoId, attempts = 20) {
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      const source = selectBestCaptionSource(getPlayerResponse(videoId));
-      if (source?.targetTrack?.baseUrl) return source;
-      if (attempt === 0) showStatus('字幕轨道仍在加载，正在等待...', 7000);
-      await sleep(250);
-    }
-    return null;
-  }
-
-  function getSourceCacheFingerprint(source) {
-    const track = source.sourceTrack || source.targetTrack || {};
-    const language = source.sourceLanguage || track.languageCode || 'unknown';
-    const kind = track.kind || 'manual';
-    const trackId = track.vssId || track.vss_id || '';
-    return `${source.kind}:${language}:${kind}:${trackId}`;
-  }
-
-  function getCacheKey(videoId, source) {
-    return `${CACHE_PREFIX}${videoId}:${getSourceCacheFingerprint(source)}:${TARGET_LANG}:v6`;
-  }
-
-  function getLegacyTranslatedCacheKey(videoId) {
-    return `${CACHE_PREFIX}${videoId}:translated-en:${TARGET_LANG}:v3`;
   }
 
   function readCachedCues(key) {
@@ -2413,102 +2171,228 @@
     }
   }
 
-  async function loadCaptions(videoId, token, force = false) {
-    if (!videoId) return;
-    const source = await waitForCaptionSource(videoId);
-    if (!source?.targetTrack?.baseUrl) throw new Error('没有找到可翻译的字幕轨道。');
+  function getXCaptionCacheKey(videoId) {
+    return `${CACHE_PREFIX}${videoId}:x-whisper:zh-Hans:v1`;
+  }
 
-    const cacheKey = getCacheKey(videoId, source);
+  function readXNativeCaptionCues(video) {
+    const tracks = Array.from(video?.textTracks || []);
+    for (const track of tracks) {
+      try { track.mode = 'hidden'; } catch { /* X may expose a read-only track. */ }
+      const cues = Array.from(track.cues || []).map(cue => ({
+        start: Number(cue.startTime || 0),
+        end: Number(cue.endTime || 0),
+        text: cleanCaptionText(cue.text || '')
+      })).filter(cue => cue.text && cue.end > cue.start);
+      if (cues.length) return { cues, language: normalizeXLanguage(track.language || track.srclang || 'en') };
+    }
+    return null;
+  }
+
+  function normalizeXLanguage(language) {
+    const value = String(language || 'en').toLowerCase();
+    if (/^(english|en\b)/.test(value)) return 'en';
+    if (/^(chinese|mandarin|zh\b)/.test(value)) return 'zh';
+    if (/^(japanese|ja\b)/.test(value)) return 'ja';
+    if (/^(korean|ko\b)/.test(value)) return 'ko';
+    if (/^(spanish|es\b)/.test(value)) return 'es';
+    if (/^(french|fr\b)/.test(value)) return 'fr';
+    if (/^(german|de\b)/.test(value)) return 'de';
+    return normalizeTranslatorLanguage(value);
+  }
+
+  async function makeXCaptionData(sourceRaw, sourceLanguage) {
+    const language = normalizeXLanguage(sourceLanguage);
+    if (CHINESE_LANG_RE.test(language)) {
+      const cues = mergeSentenceCues(sourceRaw).map(cue => ({ ...cue, sourceText: '' }));
+      return { cues, rawTargetCues: sourceRaw, rawSourceCues: sourceRaw, sourceKind: 'x-native-zh' };
+    }
+    await getLocalTranslator(language, true);
+    showStatus('正在将 X 视频转写翻译为简体中文...', 120000);
+    const cues = await translateCuesLocally(sourceRaw, language);
+    if (!cues.length) throw new Error('X 视频转写未生成可用字幕。');
+    return { cues, rawTargetCues: cues, rawSourceCues: sourceRaw, sourceKind: 'x-local-zh' };
+  }
+
+  async function loadXCaptions(videoId, token, force = false) {
+    const cacheKey = getXCaptionCacheKey(videoId);
     if (!force) {
       const cached = readCachedCues(cacheKey);
       if (cached) {
-        applyCues(videoId, cached, token, '已从缓存加载字幕');
+        applyCues(videoId, cached, token, '已从缓存加载 X 中文字幕');
         return;
       }
-      if (source.translationMode === 'local') {
-        const legacyCached = readCachedCues(getLegacyTranslatedCacheKey(videoId));
-        if (legacyCached) {
-          applyCues(videoId, legacyCached, token, '已读取旧版中文字幕缓存');
-          return;
-        }
-      }
     }
-
-    if (source.translationMode === 'local') {
-      await loadChromeLocalCaptions(videoId, source, token, force);
-      return;
-    }
-
-    const isYouTubeTranslation = source.translationMode === 'youtube';
-    showStatus(isYouTubeTranslation ? '正在读取 YouTube 自动翻译字幕（可能被限流）...' : '正在读取 YouTube 中文字幕...');
-    let targetJson;
-    try {
-      targetJson = await fetchCaptionJsonWithFallback(videoId, source.targetTrack, { translate: isYouTubeTranslation });
-    } catch (error) {
-      if (isYouTubeTranslation && error.rateLimited) {
-        await switchToLocalTranslationAfterYouTubeRateLimit(videoId, source, token, force);
-        return;
-      }
-      throw error;
-    }
-    const targetRaw = normalizeRawCues(targetJson);
-    let sourceRaw = [];
-    if (source.sourceTrack?.baseUrl) {
-      try {
-        const sourceJson = await fetchCaptionJsonWithFallback(videoId, source.sourceTrack, { translate: false });
-        sourceRaw = normalizeRawCues(sourceJson);
-      } catch (error) {
-        log('source caption load failed', error);
-      }
-    }
-
-    const mergedTarget = attachSourceText(mergeSentenceCues(targetRaw), sourceRaw);
-    if (!mergedTarget.length) throw new Error('字幕接口返回了空字幕。');
-    const data = { cues: mergedTarget, rawTargetCues: targetRaw, rawSourceCues: sourceRaw, sourceKind: source.kind };
+    const native = readXNativeCaptionCues(getVideoEl());
+    if (!native) throw new Error('此 X 视频未提供可读取的字幕。打开字幕面板，填写 OpenAI Key 后点击“转写当前视频”。');
+    const data = await makeXCaptionData(native.cues, native.language);
     writeCachedCues(cacheKey, data);
-    applyCues(videoId, data, token, `中文字幕已加载：${mergedTarget.length} 句`);
+    applyCues(videoId, data, token, `X 中文字幕已加载：${data.cues.length} 句`);
   }
 
-  async function loadChromeLocalCaptions(videoId, source, token, force = false) {
-    const cacheKey = getCacheKey(videoId, source);
-    if (!force) {
-      const cached = readCachedCues(cacheKey);
-      if (cached) {
-        applyCues(videoId, cached, token, '已从缓存加载本地翻译字幕');
+  function gmRequest(details) {
+    return new Promise((resolve, reject) => {
+      if (typeof GM_xmlhttpRequest !== 'function') {
+        reject(new Error('当前脚本管理器不支持跨域转写请求，请使用 Tampermonkey。'));
         return;
       }
-    }
-    await getLocalTranslator(source.sourceLanguage, true);
-    showStatus('正在读取原始字幕，准备本地翻译...', 120000);
-    let sourceRaw;
-    try {
-      const sourceJson = await fetchCaptionJsonWithFallback(videoId, source.sourceTrack, { translate: false });
-      sourceRaw = normalizeRawCues(sourceJson);
-    } catch (error) {
-      if (!error.rateLimited) throw error;
-      sourceRaw = await fetchTranscriptCuesFromPanel(source.sourceTrack, source.sourceLanguage);
-    }
-    const translated = await translateCuesLocally(sourceRaw, source.sourceLanguage);
-    if (!translated.length) throw new Error('字幕接口返回了空字幕。');
-    const data = { cues: translated, rawTargetCues: translated, rawSourceCues: sourceRaw, sourceKind: source.kind };
-    writeCachedCues(cacheKey, data);
-    applyCues(videoId, data, token, `本地中文字幕已加载：${translated.length} 句`);
+      GM_xmlhttpRequest({
+        ...details,
+        onload: response => resolve(response),
+        onerror: () => reject(new Error('转写请求网络错误。')),
+        ontimeout: () => reject(new Error('转写请求超时。'))
+      });
+    });
   }
 
-  async function switchToLocalTranslationAfterYouTubeRateLimit(videoId, source, token, force) {
-    state.settings.translationEngine = 'local';
-    saveSettings();
-    syncControlValues();
-    syncTranslationEngineRows();
-    showStatus('YouTube 自动翻译已限流，正在切换到 Chrome 本地翻译...', 120000);
-    const localSource = {
-      ...source,
-      kind: 'chrome-local-zh',
-      targetTrack: source.sourceTrack || source.targetTrack,
-      sourceTrack: source.sourceTrack || source.targetTrack,
-      translationMode: 'local'
+  function cancelXCloudPolling() {
+    if (state.xCloudPoll) { clearTimeout(state.xCloudPoll); state.xCloudPoll = null; }
+  }
+
+  async function transcribeCurrentXVideoCloud() {
+    if (!isXPage()) throw new Error('仅能在 X 页面使用云端转写。');
+    const base = String(state.settings.xCloudApiBase || '').replace(/\/$/, '');
+    const token = getXCloudToken();
+    if (!/^http:\/\/111\.46\.161\.132:8788$/.test(base)) throw new Error('云端地址必须是指定 HTTP 服务地址。');
+    if (!token) throw new Error('请先保存云端 API Token。');
+    const video = getVideoEl();
+    if (!video) throw new Error('未找到当前 X 视频播放器。');
+    if (!state.xCloudMediaUrl) throw new Error('未捕获媒体地址，请刷新当前 X 页面后重试。');
+    const sourceId = `${getVideoId() || 'x'}-${state.xCloudMediaUrl.split('/').pop().split('?')[0]}`.replace(/[^A-Za-z0-9_:-]/g, '_');
+    showStatus('创建云端任务中...', 120000);
+    const created = await gmRequest({
+      method: 'POST', url: `${base}/v1/transcriptions`,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      data: JSON.stringify({ mediaUrl: state.xCloudMediaUrl, sourceId, sourceLanguage: 'en' }),
+      responseType: 'json', timeout: 30000
+    });
+    const body = created.response || JSON.parse(created.responseText || '{}');
+    if (created.status < 200 || created.status >= 300) throw new Error(body.message || '云端任务创建失败');
+    const jobId = body.jobId;
+    const started = Date.now();
+    cancelXCloudPolling();
+    const poll = async () => {
+      if (Date.now() - started > 1800000) throw new Error('云端任务轮询超时');
+      const response = await gmRequest({
+        method: 'GET', url: `${base}/v1/jobs/${encodeURIComponent(jobId)}`,
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'json', timeout: 30000
+      });
+      const job = response.response || JSON.parse(response.responseText || '{}');
+      if (job.status === 'failed') throw new Error(job.message || '云端转写失败');
+      if (job.status !== 'completed') {
+        showStatus(job.progress < 60 ? '云端下载中...' : '转写中...', 3500);
+        state.xCloudPoll = setTimeout(() => poll().catch(e => showStatus(e.message, 8000)), 3000);
+        return;
+      }
+      const raw = job.segments.map(s => ({
+        start: Number(s.start), end: Number(s.end), text: cleanCaptionText(s.text)
+      })).filter(c => c.text && c.end > c.start);
+      const data = await makeXCaptionData(raw, job.language || 'en');
+      writeCachedCues(`${CACHE_PREFIX}${sourceId}:x-cloud:v1`, data);
+      applyCues(getVideoId(), data, state.loadToken, 'X 云端字幕已完成');
     };
-    await loadChromeLocalCaptions(videoId, localSource, token, force);
+    await poll();
+  }
+
+  async function waitForXAudioTrack(stream, timeout = 2500) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeout) {
+      const audio = stream.getAudioTracks();
+      if (audio.length && audio.some(track => track.readyState === 'live')) return audio;
+      await sleep(100);
+    }
+    return [];
+  }
+
+  function stopXCapture() {
+    const capture = state.xCapture;
+    if (!capture) return;
+    capture.stop?.();
+  }
+
+  async function transcribeCurrentXVideo() {
+    if (!isXPage()) throw new Error('“转写当前视频”仅用于 X 页面。');
+    if (state.xCapture) throw new Error('X 视频音轨正在采集，请等待当前转写结束。');
+    const apiKey = getOpenAiTranscriptionKey();
+    if (!apiKey) throw new Error('请先在字幕面板保存 OpenAI 转写 API Key。');
+    const video = getVideoEl();
+    if (!video) throw new Error('没有找到当前 X 视频播放器。');
+    const captureStream = video.captureStream || video.mozCaptureStream;
+    if (typeof captureStream !== 'function') throw new Error('当前 Chrome 不支持从此 X 播放器采集音轨。');
+
+    const startOffset = Number(video.currentTime || 0);
+    const stream = captureStream.call(video);
+    try {
+      await video.play();
+    } catch {
+      throw new Error('X 阻止了自动播放。请先手动播放视频后，再点击“转写当前视频”。');
+    }
+    const audioTracks = await waitForXAudioTrack(stream);
+    if (!audioTracks.length) {
+      throw new Error('X 播放器还没有可采集的音轨。请确认视频有声音、已开始播放后重试。');
+    }
+    const audioStream = new MediaStream(audioTracks);
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+    const recorder = new MediaRecorder(audioStream, { mimeType });
+    const chunks = [];
+    const maxMs = Math.max(30, Number(state.settings.xTranscriptionMaxSeconds || 600)) * 1000;
+    let settled = false;
+    let statusTimer = 0;
+    let timeout = 0;
+    let resolveDone;
+    const done = new Promise(resolve => { resolveDone = resolve; });
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      window.clearInterval(statusTimer);
+      window.clearTimeout(timeout);
+      if (recorder.state !== 'inactive') recorder.stop();
+    };
+    recorder.addEventListener('dataavailable', event => { if (event.data?.size) chunks.push(event.data); });
+    recorder.addEventListener('stop', () => resolveDone(), { once: true });
+    video.addEventListener('ended', finish, { once: true });
+    state.xCapture = { stop: finish };
+    recorder.start(1000);
+    statusTimer = window.setInterval(() => {
+      const elapsed = Math.max(0, video.currentTime - startOffset);
+      showStatus(`正在采集 X 视频音轨：${formatTime(elapsed, '.')}`, 1600);
+    }, 1000);
+    timeout = window.setTimeout(finish, maxMs);
+    await done;
+    state.xCapture = null;
+    const audioBlob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+    if (audioBlob.size < 1024) throw new Error('没有采集到可转写的音频数据。请确认视频带有声音后重试。');
+    showStatus('音轨采集完成，正在发送到 OpenAI Whisper 转写...', 120000);
+    const form = new FormData();
+    form.append('file', new File([audioBlob], `x-video-${Date.now()}.webm`, { type: audioBlob.type || 'audio/webm' }));
+    form.append('model', 'whisper-1');
+    form.append('response_format', 'verbose_json');
+    form.append('timestamp_granularities[]', 'segment');
+    const response = await gmRequest({
+      method: 'POST',
+      url: OPENAI_TRANSCRIPTION_URL,
+      headers: { Authorization: `Bearer ${apiKey}` },
+      data: form,
+      responseType: 'json',
+      timeout: 180000
+    });
+    const body = response.response || JSON.parse(response.responseText || '{}');
+    if (response.status < 200 || response.status >= 300) throw new Error(`OpenAI 转写失败：${body?.error?.message || response.status || '未知错误'}`);
+    const sourceRaw = (body.segments || []).map(segment => ({
+      start: startOffset + Number(segment.start || 0),
+      end: startOffset + Number(segment.end || 0),
+      text: cleanCaptionText(segment.text || '')
+    })).filter(cue => cue.text && cue.end > cue.start);
+    if (!sourceRaw.length) throw new Error('OpenAI 未返回带时间戳的转写片段。');
+    const data = await makeXCaptionData(sourceRaw, body.language || 'en');
+    const videoId = getVideoId();
+    writeCachedCues(getXCaptionCacheKey(videoId), data);
+    applyCues(videoId, data, state.loadToken, `X 中文字幕已生成：${data.cues.length} 句`);
+  }
+
+  async function loadCaptions(videoId, token, force = false) {
+    return loadXCaptions(videoId, token, force);
   }
 
   function applyCues(videoId, data, token, statusText) {
@@ -2835,7 +2719,7 @@
     if (typeof GM_xmlhttpRequest !== 'function') return Promise.reject(new Error('当前脚本未获得跨域请求权限'));
     const speechRate = Math.round((clamp(Number(state.settings.voiceRate), 0.7, 1.6) - 1) * 100);
     const payload = {
-      user: { uid: 'youtube-userscript' },
+      user: { uid: 'x-video-userscript' },
       req_params: {
         text,
         speaker: state.settings.volcVoice,
@@ -3334,15 +3218,22 @@
       if (video) video.volume = clamp(state.originalVolumeBeforeVoice, 0, 1);
       state.originalVolumeBeforeVoice = null;
     }
+    cancelXCloudPolling();
+    state.xCloudMediaUrl = '';
+    stopXCapture();
     cancelSpeech();
     state.loadToken += 1;
     setCaption(null);
     state._lastRouteKey = '';
+    state._xNoCaptionShown = false;
     const token = state.loadToken;
     loadCaptions(videoId, token, force).catch(error => {
       if (token !== state.loadToken) return;
       console.warn(`[${SCRIPT_ID}]`, error);
-      showStatus(error?.message || '简体中文字幕生成失败，请刷新或稍后重试。', 7000);
+      if (!state._xNoCaptionShown) {
+        showStatus(error?.message || '简体中文字幕生成失败，请刷新或稍后重试。', 2000);
+        state._xNoCaptionShown = true;
+      }
     });
   }
 
@@ -3363,7 +3254,7 @@
       showStatus('当前没有可导出的字幕');
       return;
     }
-    const base = `youtube-${state.videoId || 'captions'}-zh-Hans`;
+    const base = `x-${state.videoId || 'captions'}-zh-Hans`;
     const content = format === 'srt' ? toSrt(state.cues) : format === 'vtt' ? toVtt(state.cues) : toText(state.cues);
     const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -3483,18 +3374,14 @@
     state.routeCheckTimer = window.setTimeout(checkRoute, delay);
   }
 
-  function handleYouTubeNavigation() {
+  function handleSiteNavigation() {
     scheduleRouteCheck(0);
     scheduleRouteCheck(350);
     scheduleRouteCheck(1200);
   }
 
-  function hookYouTubeNavigation() {
-    window.addEventListener('yt-navigate-start', handleYouTubeNavigation, true);
-    window.addEventListener('yt-navigate-finish', handleYouTubeNavigation, true);
-    window.addEventListener('yt-page-data-updated', handleYouTubeNavigation, true);
-    window.addEventListener('yt-player-updated', handleYouTubeNavigation, true);
-    window.addEventListener('popstate', handleYouTubeNavigation, true);
+  function hookSiteNavigation() {
+    window.addEventListener('popstate', handleSiteNavigation, true);
     state.routeTimer = window.setInterval(checkRoute, ROUTE_INTERVAL_MS);
   }
 
@@ -3505,7 +3392,38 @@
     hookKeyboard();
     document.addEventListener('click', handleDocumentClickForControls, true);
     registerTampermonkeyMenu();
-    hookYouTubeNavigation();
+    hookSiteNavigation();
+    // Capture X video media URLs from the page
+    window.addEventListener('codex-x-media-url', event => {
+      const url = String(event.detail || '');
+      if (/^https:\/\/video\.twimg\.com\//i.test(url)) state.xCloudMediaUrl = url;
+    });
+    // X video URL capture — intercept XHR/fetch responses that contain video URLs
+    const _origFetch = window.fetch;
+    window.fetch = function(url, opts) {
+      const p = _origFetch.apply(this, arguments);
+      (opts && opts.method && opts.method.toUpperCase() !== 'GET') && p.then(function(r) {
+        if (r && r.status === 200) {
+          var ct = r.headers && r.headers.get('content-type') || '';
+          if (ct.includes('json')) {
+            r.clone().text().then(function(t) {
+              var m = t.match(/https:\/\/video\.twimg\.com\/[^"'\s<>]+\.(?:mp4|m3u8)/g);
+              if (m) window.dispatchEvent(new CustomEvent('codex-x-media-url', {detail: m[0]}));
+            }).catch(function(){});
+          }
+        }
+      }).catch(function(){});
+      return p;
+    };
+
+    const _origXHROpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function(method, url) {
+      if (typeof url === 'string' && url.indexOf('video.twimg.com') >= 0) {
+        window.dispatchEvent(new CustomEvent('codex-x-media-url', {detail: url}));
+      }
+      return _origXHROpen.apply(this, arguments);
+    };
+
     checkRoute();
   }
 
