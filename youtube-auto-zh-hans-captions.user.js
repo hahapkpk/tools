@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube / X 英文视频简体中文字幕与 AI 配音
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.7.3
+// @version      0.7.4
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube and X. X videos can be transcribed from the player audio, translated locally, and dubbed in Chinese.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -473,13 +473,20 @@
         width: 340px;
         max-width: min(360px, calc(100% - 24px));
         max-height: calc(100% - 24px);
-        overflow: auto;
+        overflow-x: hidden;
+        overflow-y: auto;
         padding: 10px;
         font-size: 12px;
         line-height: 1.4;
         pointer-events: auto;
+        box-sizing: border-box;
       }
       #${CONTROL_ID}.${SCRIPT_ID}-visible { display: block; }
+      #${CONTROL_ID} *,
+      #${CONTROL_ID} *::before,
+      #${CONTROL_ID} *::after {
+        box-sizing: border-box;
+      }
       #${CONTROL_ID} .${SCRIPT_ID}-row {
         display: grid;
         grid-template-columns: 92px minmax(0, 1fr);
@@ -519,6 +526,46 @@
         grid-template-columns: repeat(3, 1fr);
         gap: 6px;
         margin-top: 8px;
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-settings-section {
+        margin: 4px -10px 0;
+        border-top: 1px solid rgba(255,255,255,0.12);
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-settings-section-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        min-height: 34px;
+        padding: 6px 10px;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        color: rgba(255,255,255,0.92);
+        font-weight: 600;
+        text-align: left;
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-settings-section-toggle:hover {
+        background: rgba(255,255,255,0.07);
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-settings-section-toggle::after {
+        content: "";
+        width: 7px;
+        height: 7px;
+        margin-right: 3px;
+        border-right: 2px solid rgba(255,255,255,0.72);
+        border-bottom: 2px solid rgba(255,255,255,0.72);
+        transform: rotate(45deg);
+        transition: transform 120ms ease;
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-settings-section-toggle[aria-expanded="true"]::after {
+        transform: rotate(225deg);
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-settings-section-content {
+        padding: 0 10px 5px;
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-settings-section-content[hidden] {
+        display: none;
       }
       #${CONTROL_ID} .${SCRIPT_ID}-voice-picker {
         display: block;
@@ -924,6 +971,34 @@
     label.textContent = labelText;
     row.append(label, control);
     return row;
+  }
+
+  function makeSettingsSection(title, rows, open = false) {
+    const section = document.createElement('section');
+    section.className = `${SCRIPT_ID}-settings-section`;
+    section.dataset.role = 'settingsSection';
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = `${SCRIPT_ID}-settings-section-toggle`;
+    toggle.textContent = title;
+    toggle.setAttribute('aria-expanded', String(open));
+
+    const content = document.createElement('div');
+    content.className = `${SCRIPT_ID}-settings-section-content`;
+    content.hidden = !open;
+    content.append(...rows);
+
+    toggle.addEventListener('click', event => {
+      event.stopPropagation();
+      closeAllDarkMenus();
+      const expanded = toggle.getAttribute('aria-expanded') === 'true';
+      toggle.setAttribute('aria-expanded', String(!expanded));
+      content.hidden = expanded;
+    });
+
+    section.append(toggle, content);
+    return section;
   }
 
   function makeVolcRow(labelText, control) {
@@ -1731,18 +1806,15 @@
 
     const browserVoiceRow = makeRow('语音人物', voicePicker);
     browserVoiceRow.dataset.role = 'browserVoiceRow';
-    panel.append(
-      makeRow('启用', enabled),
-      makeRow('模式', mode),
-      makeRow('字幕翻译', translationEngine),
+    const subtitleSection = makeSettingsSection('字幕显示', [
       localTranslationRow,
-      ...xTranscriptionRows,
       makeRow('字幕字号', fontSize),
       makeRow('字幕位置', position),
       makeRow('字幕延迟', offset),
-      makeRow('隐藏原生字幕', hideNative),
-      makeRow('中文配音', voiceEnabled),
-      makeRow('配音引擎', voiceEngine),
+      makeRow('隐藏原生字幕', hideNative)
+    ]);
+
+    const voiceServiceSection = makeSettingsSection('配音服务', [
       browserVoiceRow,
       makeVolcRow('鉴权方式', volcAuthMode),
       makeAuthRow('新版 Key', apiKeyWrap, 'apiKey'),
@@ -1763,12 +1835,27 @@
       makeTencentRow('腾讯音色', tencentVoiceType),
       makeTencentRow('资源包管理', tencentUsageButton),
       makeTencentRow('采样率', tencentSampleRate),
-      makeRow('测试语音', testVoiceButton),
+      makeRow('测试语音', testVoiceButton)
+    ]);
+
+    const syncSection = makeSettingsSection('同步与术语', [
       makeRow('配音语速', voiceRate),
       makeRemoteVoiceRow('配音同步', voiceSyncMode),
       makeRemoteVoiceRow('专有名词修正表', terminologyMap),
-      makeRemoteVoiceRow('配音状态', voiceProgressWrap),
+      makeRemoteVoiceRow('配音状态', voiceProgressWrap)
+    ]);
+
+    panel.append(
+      makeRow('启用', enabled),
+      makeRow('模式', mode),
+      makeRow('字幕翻译', translationEngine),
+      makeRow('中文配音', voiceEnabled),
+      makeRow('配音引擎', voiceEngine),
       makeRow('原声音量', originalVolumeWrap),
+      subtitleSection,
+      voiceServiceSection,
+      syncSection,
+      ...(xTranscriptionRows.length ? [makeSettingsSection('X 视频转写', xTranscriptionRows)] : []),
       buttons
     );
     player.appendChild(panel);
