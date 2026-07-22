@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         知乎 · Paper Press 阅读模式
 // @namespace    https://github.com/hahapkpk/tools
-// @version      2.3.0
-// @description  知乎专栏 → 杂志风格沉浸阅读：悬浮目录 · 代码高亮 · 图片灯箱 · 深色模式 · 阅读进度 · 字号/宽度调节 · 代码复制 · 键盘快捷键
+// @version      2.4.0
+// @description  知乎专栏 / 问答页 → 杂志风格沉浸阅读：悬浮目录 · 代码高亮 · 图片灯箱 · 深色模式 · 阅读进度 · 字号/宽度调节 · 代码复制 · 键盘快捷键
 // @author       hahapkpk
 // @match        https://zhuanlan.zhihu.com/p/*
+// @match        https://www.zhihu.com/question/*
 // @grant        GM_addStyle
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/zhihu-paper-press.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/zhihu-paper-press.user.js
@@ -13,6 +14,22 @@
 
 (function () {
   'use strict';
+
+  // ═══════════════════════════════════════════════════════════════
+  // 页面类型识别（专栏 / 问答页），非目标页面直接退出
+  // ═══════════════════════════════════════════════════════════════
+
+  var PAGE = (function () {
+    var h = location.href;
+    if (/^https?:\/\/zhuanlan\.zhihu\.com\/p\//.test(h)) return 'column';
+    if (/^https?:\/\/www\.zhihu\.com\/question\//.test(h)) return 'question';
+    return 'other';
+  })();
+  if (PAGE === 'other') return;
+
+  // 内容容器与标题选择器随页面类型切换
+  var SCOPE = PAGE === 'question' ? '.ztext' : '.Post-RichTextContainer';
+  var TITLE_SEL = PAGE === 'question' ? '.QuestionHeader-title' : '.Post-Title';
 
   // ═══════════════════════════════════════════════════════════════
   // 设计令牌
@@ -165,6 +182,72 @@
   // ═══════════════════════════════════════════════════════════════
   // CSS 构建
   // ═══════════════════════════════════════════════════════════════
+
+  // ═══════════════════════════════════════════════════════════════
+  // 问答页专属样式（选择器仅命中问答页，不影响专栏页）
+  // ═══════════════════════════════════════════════════════════════
+
+  function QUESTION_CSS(T) {
+    var grain = T.grain
+      ? '.QuestionHeader::before,.List-item::before{content:"";position:absolute;inset:0;z-index:0;background-image:url(' + PAPER_GRAIN + ');background-size:280px 280px;mix-blend-mode:multiply;opacity:0.28;pointer-events:none;border-radius:inherit}.QuestionHeader>*,.List-item>*{position:relative;z-index:1;}'
+      : '';
+    return [
+      '/* ══ 知乎问答页 ══ */',
+      /* 布局：隐藏右侧栏，主列居中成版心 */
+      '.Question-main{display:block!important;max-width:none!important;padding:0!important;background:transparent!important;}',
+      '.Question-mainColumn{width:100%!important;max-width:860px!important;margin:0 auto!important;padding:72px 40px 120px!important;box-sizing:border-box!important;float:none!important;transition:max-width 0.3s ease!important;}',
+      '.Question-sideColumn,.QuestionHeader-side,.QuestionHeaderActions,.QuestionRelatedCard{display:none!important;}',
+      /* 问题标题卡 */
+      '.QuestionHeader{position:relative!important;background:' + T.surface + '!important;border-radius:4px!important;box-shadow:' + T.cardShadow + '!important;padding:48px 56px!important;margin-bottom:24px!important;border:none!important;}',
+      '.QuestionHeader-content,.QuestionHeader-main{display:block!important;width:100%!important;}',
+      '.QuestionHeader-title{font-family:' + FONTS.displayCN + '!important;font-weight:700!important;font-size:2rem!important;line-height:1.35!important;color:' + T.text + '!important;letter-spacing:-0.01em!important;margin:0 0 16px 0!important;}',
+      '.QuestionRichText,.QuestionHeader-detail{font-family:' + FONTS.body + '!important;color:' + T.textMute + '!important;line-height:1.7!important;}',
+      '.QuestionHeader-footer,.NumberBoard{background:transparent!important;border-top:1px solid ' + T.rule + '!important;margin-top:16px!important;padding-top:12px!important;}',
+      /* 回答列表标题栏 */
+      '.List-header,.Card.ListShortcut,.QuestionAnswers-answers{background:transparent!important;box-shadow:none!important;border:none!important;}',
+      '.List-headerText,.List-headerText span{font-family:' + FONTS.body + '!important;color:' + T.textMute + '!important;font-size:0.9rem!important;}',
+      /* 单条回答卡片 */
+      '.List-item{position:relative!important;background:' + T.surface + '!important;border-radius:4px!important;box-shadow:' + T.cardShadow + '!important;padding:40px 48px!important;margin-bottom:24px!important;border:none!important;overflow:hidden!important;}',
+      '.AnswerItem,.ContentItem,.AnswerCard,.RichContent,.RichContent-inner{background:transparent!important;box-shadow:none!important;border:none!important;}',
+      grain,
+      /* 作者信息 */
+      '.List-item .AuthorInfo{margin-bottom:18px!important;padding-bottom:0!important;}',
+      '.List-item .AuthorInfo-avatar{width:40px!important;height:40px!important;border-radius:50%!important;border:2px solid ' + T.rule + '!important;}',
+      '.List-item .AuthorInfo-name,.List-item .AuthorInfo-name a{font-family:' + FONTS.body + '!important;font-weight:600!important;font-size:0.95rem!important;color:' + T.text + '!important;}',
+      '.List-item .AuthorInfo-detail,.List-item .AuthorInfo-badgeText{font-family:' + FONTS.body + '!important;font-size:0.8rem!important;color:' + T.textMute + '!important;}',
+      /* 回答正文 .ztext */
+      '.ztext{font-family:' + FONTS.body + '!important;line-height:1.85!important;color:' + T.text2 + '!important;}',
+      '.ztext p{font-family:' + FONTS.body + '!important;line-height:1.85!important;color:' + T.text2 + '!important;margin:0 0 1.4em 0!important;text-align:justify!important;}',
+      '.ztext h2{font-family:' + FONTS.displayCN + '!important;font-weight:700!important;line-height:1.4!important;color:' + T.text + '!important;margin:2em 0 0.7em 0!important;padding-top:8px!important;border-top:1px solid ' + T.rule + '!important;}',
+      '.ztext h3{font-family:' + FONTS.displayCN + '!important;font-weight:600!important;line-height:1.4!important;color:' + T.text + '!important;margin:1.6em 0 0.5em 0!important;}',
+      '.ztext h4,.ztext h5,.ztext h6{font-family:' + FONTS.body + '!important;font-weight:600!important;color:' + T.text + '!important;margin:1.3em 0 0.4em 0!important;}',
+      '.ztext ul,.ztext ol{padding-left:1.5em!important;margin:0 0 1.4em 0!important;}',
+      '.ztext li{font-family:' + FONTS.body + '!important;line-height:1.75!important;color:' + T.text2 + '!important;margin-bottom:0.4em!important;}',
+      '.ztext li::marker{color:' + T.accent + '!important;}',
+      '.ztext a{color:' + T.accent + '!important;text-decoration:none!important;border-bottom:1px solid ' + T.accentSoft + '!important;transition:border-color 0.3s ease!important;}',
+      '.ztext a:hover{border-bottom-color:' + T.accent + '!important;background:' + T.accentSoft + '!important;}',
+      '.ztext code:not(pre code){font-family:' + FONTS.mono + '!important;font-size:0.88em!important;background:' + T.surface3 + '!important;color:' + T.accent + '!important;padding:2px 7px!important;border-radius:3px!important;border:1px solid ' + T.rule + '!important;}',
+      '.ztext pre{position:relative!important;background:' + T.surface3 + '!important;border:1px solid ' + T.rule + '!important;border-radius:4px!important;padding:24px 28px!important;margin:1.6em 0!important;overflow-x:auto!important;box-shadow:0 1px 0 ' + T.rule + '!important;}',
+      '.ztext pre code{font-family:' + FONTS.mono + '!important;line-height:1.7!important;background:transparent!important;color:' + T.text2 + '!important;padding:0!important;border:none!important;white-space:pre!important;}',
+      '.ztext pre:hover .pp-copy-btn{opacity:1;}',
+      '.ztext blockquote{font-family:' + FONTS.displayEN + '!important;font-style:italic!important;line-height:1.7!important;color:' + T.textMute + '!important;border-left:3px solid ' + T.accent + '!important;padding:12px 0 12px 24px!important;margin:1.6em 0!important;background:' + T.surface2 + '!important;border-radius:0 4px 4px 0!important;}',
+      '.ztext figure{margin:1.6em auto!important;max-width:100%!important;cursor:zoom-in!important;}',
+      '.ztext figure img,.ztext img{max-width:100%!important;height:auto!important;border-radius:4px!important;box-shadow:0 1px 0 ' + T.rule + ',0 8px 24px rgba(40,30,15,0.08)!important;cursor:zoom-in!important;}',
+      '.ztext figure figcaption{font-family:' + FONTS.body + '!important;font-size:0.85rem!important;color:' + T.textFaint + '!important;text-align:center!important;margin-top:10px!important;}',
+      '.ztext hr{border:none!important;border-top:1px solid ' + T.rule + '!important;margin:2em 0!important;}',
+      '.ztext strong{font-weight:600!important;color:' + T.text + '!important;}',
+      '.ztext em{font-family:' + FONTS.displayEN + '!important;font-style:italic!important;}',
+      /* 隐藏杂项：举报 / 操作栏 / 页脚 / 大家都在搜 / 相关 / 关于 */
+      '.ContentItem-actions,.RichContent-actions,.QuestionAnswers-answerButton,.AnswerAdd{display:none!important;}',
+      '[class*="Footer"],.AppFooter,.Pc-word,.Pc-feedOpr{display:none!important;}',
+      /* 宽度模式 */
+      '.pp-width-narrow .Question-mainColumn{max-width:620px!important;}',
+      '.pp-width-wide .Question-mainColumn{max-width:1100px!important;}',
+      /* 响应式 */
+      '@media (max-width:768px){.Question-mainColumn{padding:24px 16px 80px!important;max-width:100%!important;}.QuestionHeader{padding:28px 22px!important;}.List-item{padding:28px 22px!important;border-radius:2px!important;}.QuestionHeader-title{font-size:1.5rem!important;}}',
+      '@media (min-width:769px) and (max-width:1024px){.Question-mainColumn{padding:48px 24px 100px!important;max-width:720px!important;}.QuestionHeader{padding:40px 36px!important;}.List-item{padding:32px 36px!important;}}',
+    ].join('\n');
+  }
 
   function buildCSS(mode) {
     var T = THEMES[mode];
@@ -323,6 +406,9 @@
       '#pp-progress,#pp-panel,#pp-toc,#pp-lightbox{display:none!important;}',
       '}',
     ];
+
+    // 问答页追加专属样式（仅在问答页注入）
+    if (PAGE === 'question') css.push(QUESTION_CSS(T));
 
     return css.join('\n');
   }
@@ -490,7 +576,7 @@
   // ── 代码块复制按钮 ──
   // 修复：只复制 code 标签内容，避免把按钮文字也复制进去
   function addCopyButtons() {
-    $$('.Post-RichTextContainer pre').forEach(function (pre) {
+    $$(SCOPE + ' pre').forEach(function (pre) {
       if ($('.pp-copy-btn', pre)) return;
       var code = pre.querySelector('code');
       if (!code) return; // 没有 code 标签就不加按钮
@@ -521,6 +607,12 @@
     var toc = document.createElement('nav');
     toc.id = 'pp-toc';
 
+    // 问答页：以「各回答作者」作为目录条目
+    if (PAGE === 'question') {
+      buildQuestionTOC(toc);
+      return;
+    }
+
     var headings = $$('.Post-RichTextContainer h2, .Post-RichTextContainer h3');
     if (headings.length < 2) {
       toc.style.display = 'none';
@@ -549,6 +641,40 @@
 
     // 优化：把当前标题/链接存入模块级状态，交给统一的 onScroll 处理，不再重复绑定监听器
     _tocHeadings = Array.prototype.slice.call(headings);
+    _tocLinks = Array.prototype.slice.call($$('#pp-toc a'));
+  }
+
+  // 问答页目录：每条回答一个锚点，标注作者名
+  function buildQuestionTOC(toc) {
+    var items = $$('.Question-mainColumn .List-item, .Question-main .List-item');
+    if (items.length < 2) {
+      toc.style.display = 'none';
+      document.body.appendChild(toc);
+      _tocHeadings = [];
+      _tocLinks = [];
+      return;
+    }
+
+    var heads = [];
+    Array.prototype.forEach.call(items, function (item, idx) {
+      if (!item.id) item.id = 'pp-ans-' + idx;
+      var nameEl = item.querySelector('.AuthorInfo-name');
+      var name = nameEl ? nameEl.textContent.trim() : '';
+      var a = document.createElement('a');
+      a.href = '#' + item.id;
+      a.textContent = name || ('回答 ' + (idx + 1));
+      a.className = 'pp-toc-h2';
+      a.title = a.textContent;
+      on(a, 'click', function (e) {
+        e.preventDefault();
+        item.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+      toc.appendChild(a);
+      heads.push(item);
+    });
+
+    document.body.appendChild(toc);
+    _tocHeadings = heads;
     _tocLinks = Array.prototype.slice.call($$('#pp-toc a'));
   }
 
@@ -593,10 +719,9 @@
   function applyFontSize() {
     var fs = PREF.fontSize;
     var ratio = fs / 16;
-    var article = $('.Post-RichTextContainer');
-    if (article) {
+    $$(SCOPE).forEach(function (article) {
       article.style.fontSize = (ratio * 1.1).toFixed(2) + 'rem';
-    }
+    });
 
     // 动态覆盖标题/列表的字号，让它们随用户设置一起缩放
     if (_fontSizeOverride) _fontSizeOverride.remove();
@@ -604,12 +729,13 @@
     _fontSizeOverride.id = 'pp-fontsize-override';
     _fontSizeOverride.textContent = [
       '.Post-Title{font-size:' + (ratio * 2.6).toFixed(2) + 'rem!important;}',
-      '.Post-RichTextContainer h2{font-size:' + (ratio * 1.65).toFixed(2) + 'rem!important;}',
-      '.Post-RichTextContainer h3{font-size:' + (ratio * 1.35).toFixed(2) + 'rem!important;}',
-      '.Post-RichTextContainer h4,.Post-RichTextContainer h5,.Post-RichTextContainer h6{font-size:' + (ratio * 1.15).toFixed(2) + 'rem!important;}',
-      '.Post-RichTextContainer li{font-size:' + (ratio * 1.05).toFixed(2) + 'rem!important;}',
-      '.Post-RichTextContainer blockquote{font-size:' + (ratio * 1.15).toFixed(2) + 'rem!important;}',
-      '.Post-RichTextContainer pre code{font-size:' + (ratio * 0.9).toFixed(2) + 'rem!important;}',
+      '.QuestionHeader-title{font-size:' + (ratio * 1.9).toFixed(2) + 'rem!important;}',
+      '.Post-RichTextContainer h2,.ztext h2{font-size:' + (ratio * 1.65).toFixed(2) + 'rem!important;}',
+      '.Post-RichTextContainer h3,.ztext h3{font-size:' + (ratio * 1.35).toFixed(2) + 'rem!important;}',
+      '.Post-RichTextContainer h4,.Post-RichTextContainer h5,.Post-RichTextContainer h6,.ztext h4,.ztext h5,.ztext h6{font-size:' + (ratio * 1.15).toFixed(2) + 'rem!important;}',
+      '.Post-RichTextContainer li,.ztext li{font-size:' + (ratio * 1.05).toFixed(2) + 'rem!important;}',
+      '.Post-RichTextContainer blockquote,.ztext blockquote{font-size:' + (ratio * 1.15).toFixed(2) + 'rem!important;}',
+      '.Post-RichTextContainer pre code,.ztext pre code{font-size:' + (ratio * 0.9).toFixed(2) + 'rem!important;}',
     ].join('\n');
     appendToHead(_fontSizeOverride);
   }
@@ -686,7 +812,7 @@
   // 优化：跳过已高亮的代码块，避免重复高亮与 hljs 的 "已高亮" 警告
   function highlightAll() {
     if (!window.hljs) return;
-    $$('.Post-RichTextContainer pre code').forEach(function (block) {
+    $$(SCOPE + ' pre code').forEach(function (block) {
       if (block.dataset.ppHighlighted === '1') return;
       try { window.hljs.highlightElement(block); } catch (e) {}
       block.dataset.ppHighlighted = '1';
@@ -756,6 +882,29 @@
   }
 
   // ═══════════════════════════════════════════════════════════════
+  // 问答页杂项清理：举报 / 大家都在搜 / 相关帮助 / 关于（CSS 已处理主体，此处为动态兵底）
+  // ═══════════════════════════════════════════════════════════════
+
+  var JUNK_TEXTS = ['举报', '大家都在搜', '相关问题', '相关的帮助', '相关帮助', '关于', '关于知乎', '申请转载', '联系我们', '内容中心'];
+
+  function pruneQuestionJunk() {
+    // 隐藏侧栏/页脚/操作栏（包含大家都在搜、相关、关于、举报）
+    ['.Question-sideColumn', '.QuestionHeader-side', '.ContentItem-actions',
+      '.RichContent-actions', '.AppFooter', '[class*="Footer"]', '.Pc-word',
+      '.QuestionAnswers-answerButton', '.AnswerAdd'].forEach(function (sel) {
+      $$(sel).forEach(function (el) { el.style.display = 'none'; });
+    });
+    // 文本兵底：清除仍残留的小按钮/菜单项（举报/关于 等）
+    $$('.Question-main button, .Question-main [role="menuitem"], .Question-main .Menu span').forEach(function (el) {
+      var t = (el.textContent || '').trim();
+      if (!t || t.length > 8) return;
+      for (var i = 0; i < JUNK_TEXTS.length; i++) {
+        if (t === JUNK_TEXTS[i]) { el.style.display = 'none'; return; }
+      }
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════
   // 修复：用 MutationObserver 持续监听动态内容，替代 setTimeout 猜测
   // ═══════════════════════════════════════════════════════════════
 
@@ -769,12 +918,10 @@
     addCopyButtons();
     highlightAll();
     bindImages();
+    if (PAGE === 'question') pruneQuestionJunk();
 
-    // 如果新增了标题，重建 TOC
-    var headings = $$('.Post-RichTextContainer h2, .Post-RichTextContainer h3');
-    if (headings.length !== _tocLinks.length) {
-      buildTOC();
-    }
+    // 重建目录（专栏：新增标题；问答：新加载的回答）
+    buildTOC();
 
     if (_dynObserver && _observerTarget) {
       _dynObserver.observe(_observerTarget, { childList: true, subtree: true });
@@ -782,12 +929,14 @@
   }
 
   function observeDynamicContent() {
-    var container = $('.Post-RichTextContainer');
+    var container = PAGE === 'question'
+      ? ($('.Question-mainColumn') || $('.Question-main') || $('.ListShortcut'))
+      : $('.Post-RichTextContainer');
     if (!container) return;
     _observerTarget = container;
 
     // 优化：防抖聚合知乎的连续异步渲染，减少无谓的多次处理
-    var schedule = debounce(processDynamicContent, 200);
+    var schedule = debounce(processDynamicContent, 250);
 
     _dynObserver = new MutationObserver(function (mutations) {
       for (var i = 0; i < mutations.length; i++) {
@@ -802,7 +951,7 @@
   }
 
   function bindImages() {
-    $$('.Post-RichTextContainer figure img, .Post-RichTextContainer img').forEach(function (img) {
+    $$(SCOPE + ' figure img, ' + SCOPE + ' img').forEach(function (img) {
       if (img._ppBound) return;
       img._ppBound = true;
       on(img, 'click', function () {
@@ -837,10 +986,15 @@
       bindScroll();
       bindKeyboard();
 
-      // 绑定图片点击
+      // 绑定图片点击 + 问答页杂项清理
       setTimeout(function () {
         bindImages();
+        if (PAGE === 'question') pruneQuestionJunk();
       }, 400);
+      if (PAGE === 'question') {
+        setTimeout(pruneQuestionJunk, 1200);
+        setTimeout(pruneQuestionJunk, 2500);
+      }
 
       // 代码高亮
       loadHighlightJS(function () {
