@@ -584,7 +584,7 @@ test('图片墙每次按网格列宽设置统一卡片高度避免京东行高�
   assert.match(source, /grid\.style\.setProperty\('--rmw-card-size', `\$\{cardHeight\}px`\)/);
   assert.match(source, /const columnTracks = template && template !== 'none'/);
   assert.match(source, /const paddingX = \(Number\.parseFloat\(style\?\.paddingLeft/);
-  assert.match(source, /if \(items\.length && !windowInfo\.virtualized\) getGridMetrics\(grid\)/);
+  assert.match(source, /if \(items\.length && !windowInfo\.virtualized\) windowInfo = \{ \.\.\.windowInfo, \.\.\.getGridMetrics\(grid\) \}/);
   assert.doesNotMatch(source, /function sizeGridCards/);
   assert.doesNotMatch(source, /getBoundingClientRect\(\)\.width[\s\S]{0,120}card\.style\.height/);
   assert.doesNotMatch(source, /ResizeObserver[\s\S]{0,160}sizeGridCards/);
@@ -625,13 +625,37 @@ test('图片墙滚动在虚拟窗口未变化时不清空重建卡片以避免�
   assert.match(source, /grid\.scrollTop = previousScrollTop/);
 });
 
-test('图片墙只预热视口附近缩略图并在预览时预热前后两张', () => {
-  assert.match(source, /const THUMB_PRELOAD_AHEAD = 18/);
-  assert.match(source, /function preloadVisibleThumbs/);
-  assert.match(source, /preloadVisibleThumbs\(items, windowInfo\.start, windowInfo\.end, scrollMode\)/);
-  assert.match(source, /media\.loading = shouldEagerLoadThumb\(index, windowInfo, scrollMode\) \? 'eager' : 'lazy'/);
+test('图片墙只提升当前屏和下方两屏真实卡片的加载优先级', () => {
+  assert.match(source, /const THUMB_PREFETCH_SCREENS = 2/);
+  assert.match(source, /function getThumbPriorityRange/);
+  assert.match(source, /function updateThumbPriorities/);
+  assert.match(source, /updateThumbPriorities\(grid, priorityRange\)/);
+  assert.match(source, /media\.loading = preload \? 'eager' : 'lazy'/);
+  assert.match(source, /media\.fetchPriority = eager \? 'high' : 'low'/);
+  assert.doesNotMatch(source, /preloadVisibleThumbs/);
+  assert.doesNotMatch(source, /preloadPreviewMedia\(items\[index\]\)/);
   assert.match(source, /\[index, index \+ 1, index - 1, index \+ 2, index - 2\]/);
-  assert.doesNotMatch(source, /items\.forEach[\s\S]{0,400}preloadPreviewMedia\(item\)/);
+});
+
+test('缩略图优先区覆盖当前屏并有界预取下方内容', () => {
+  const range = api.getThumbPriorityRange(
+    { scrollTop: 600, clientHeight: 600 },
+    { columns: 5, rowHeight: 200 },
+    200,
+    'normal'
+  );
+
+  assert.deepEqual(range, {
+    start: 10,
+    end: 65,
+    eagerStart: 15,
+    eagerEnd: 35
+  });
+  assert.equal(api.shouldEagerLoadThumb(15, range), true);
+  assert.equal(api.shouldEagerLoadThumb(34, range), true);
+  assert.equal(api.shouldEagerLoadThumb(35, range), false);
+  assert.equal(api.shouldPreloadThumb(64, range), true);
+  assert.equal(api.shouldPreloadThumb(65, range), false);
 });
 
 test('视频无封面时卡片使用 video 元素读取首帧避免 mp4 被当图片加载为空白', () => {
@@ -644,7 +668,7 @@ test('视频无封面时卡片使用 video 元素读取首帧避免 mp4 被当�
 
 test('图片卡片显示骨架占位并在加载完成后淡入', () => {
   assert.match(source, /\.rmw-card::before\s*\{/);
-  assert.match(source, /@keyframes rmw-skeleton/);
+  assert.match(source, /\.rmw-card\.rmw-priority::before\s*\{[^}]*animation:rmw-skeleton/s);
   assert.match(source, /\.rmw-card\.is-loaded::before/);
   assert.match(source, /\.rmw-card\.is-failed::after/);
   assert.match(source, /bindMediaLoadState\(media, card, item, onThumbFailure\)/);
@@ -663,11 +687,16 @@ test('缩略图加载失败会有限重试并回退到原图地址', () => {
 test('图片墙根据滚动速度调整缩略图预取距离和加载优先级', () => {
   assert.match(source, /const FAST_SCROLL_THRESHOLD = 1800/);
   assert.match(source, /function getScrollMode/);
-  assert.match(source, /function getThumbPreloadAhead/);
   assert.match(source, /function shouldEagerLoadThumb/);
   assert.match(source, /let scrollSpeed = 0/);
   assert.match(source, /scrollSpeed = Math\.abs\(grid\.scrollTop - lastScrollTop\)/);
   assert.match(source, /getScrollMode\(scrollSpeed\)/);
+});
+
+test('滚动速度模式变化不会单独触发整批卡片重建', () => {
+  assert.match(source, /function virtualRenderSignature\(grid, items, windowInfo, loadingState, highlightKey, emptyMessage\)/);
+  assert.doesNotMatch(source, /function virtualRenderSignature\([^)]*scrollMode/);
+  assert.doesNotMatch(source, /windowInfo\.bottomRows \|\| 0,\s*scrollMode,/);
 });
 
 test('视频预览才加载完整播放源，卡片阶段保持轻量 metadata', () => {
@@ -842,7 +871,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.19/);
+  assert.match(source, /@version\s+0\.5\.20/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });

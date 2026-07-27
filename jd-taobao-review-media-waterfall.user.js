@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.19
+// @version      0.5.20
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -125,7 +125,7 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.19';
+  const SCRIPT_VERSION = '0.5.20';
   const WHEEL_SHIFT_COOLDOWN = 320;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;
@@ -135,9 +135,8 @@
   const AUTO_LOAD_IDLE_LIMIT = 5;
   const VIRTUALIZE_THRESHOLD = 60;
   const VIRTUAL_BUFFER_SCREENS = 3;
-  const THUMB_PRELOAD_AHEAD = 18;
+  const THUMB_PREFETCH_SCREENS = 2;
   const FAST_SCROLL_THRESHOLD = 1800;
-  const FAST_SCROLL_PRELOAD_AHEAD = 8;
   const THUMB_RETRY_LIMIT = 2;
   const THUMB_RETRY_DELAY = 450;
   const preloadedPreviewMedia = new Set();
@@ -270,14 +269,39 @@
     return Math.abs(Number(scrollSpeed) || 0) >= FAST_SCROLL_THRESHOLD ? 'fast' : 'normal';
   }
 
-  function getThumbPreloadAhead(scrollMode) {
-    return scrollMode === 'fast' ? FAST_SCROLL_PRELOAD_AHEAD : THUMB_PRELOAD_AHEAD;
+  function getThumbPriorityRange(grid, windowInfo, total, scrollMode) {
+    const columns = Math.max(1, windowInfo.columns || 1);
+    const rowHeight = Math.max(1, windowInfo.rowHeight || 1);
+    const visibleStartRow = Math.max(0, Math.floor(grid.scrollTop / rowHeight));
+    const visibleRows = Math.max(1, Math.ceil((grid.clientHeight || rowHeight) / rowHeight));
+    const preloadScreens = scrollMode === 'fast' ? 1 : THUMB_PREFETCH_SCREENS;
+    return {
+      start: Math.max(0, (visibleStartRow - 1) * columns),
+      end: Math.min(total, (visibleStartRow + visibleRows * (1 + preloadScreens) + 1) * columns),
+      eagerStart: visibleStartRow * columns,
+      eagerEnd: Math.min(total, (visibleStartRow + visibleRows + 1) * columns)
+    };
   }
 
-  function shouldEagerLoadThumb(index, windowInfo, scrollMode) {
-    if (!windowInfo.virtualized) return false;
-    const eagerEnd = windowInfo.start + Math.max(windowInfo.columns || 1, 1) * (scrollMode === 'fast' ? 2 : 4);
-    return index < eagerEnd;
+  function shouldEagerLoadThumb(index, priorityRange) {
+    return index >= priorityRange.eagerStart && index < priorityRange.eagerEnd;
+  }
+
+  function shouldPreloadThumb(index, priorityRange) {
+    return index >= priorityRange.start && index < priorityRange.end;
+  }
+
+  function updateThumbPriorities(grid, priorityRange) {
+    grid.querySelectorAll('.rmw-card').forEach((card) => {
+      const index = Number(card.dataset.mediaIndex);
+      const eager = shouldEagerLoadThumb(index, priorityRange);
+      const preload = shouldPreloadThumb(index, priorityRange);
+      card.classList.toggle('rmw-priority', eager);
+      const media = card.querySelector('img');
+      if (!media) return;
+      media.loading = preload ? 'eager' : 'lazy';
+      media.fetchPriority = eager ? 'high' : 'low';
+    });
   }
 
   function buildThumbCandidates(item) {
@@ -908,7 +932,8 @@
 .rmw-size-medium { grid-template-columns:repeat(5,minmax(0,1fr)) !important; }
 .rmw-size-large { grid-template-columns:repeat(4,minmax(0,1fr)) !important; }
 .rmw-card { position:relative; height:var(--rmw-card-size, 180px); contain:paint; border-radius:18px; overflow:hidden; background:#f1f3f4; cursor:zoom-in; outline:none; transition:box-shadow .16s ease, transform .16s ease; }
-.rmw-card::before { content:''; position:absolute; inset:0; z-index:1; background:linear-gradient(100deg,#f1f3f4 0%,#f8fafd 42%,#edf2f7 74%); background-size:220% 100%; animation:rmw-skeleton 1.15s ease-in-out infinite; opacity:1; transition:opacity .18s ease; pointer-events:none; }
+.rmw-card::before { content:''; position:absolute; inset:0; z-index:1; background:linear-gradient(100deg,#f1f3f4 0%,#f8fafd 42%,#edf2f7 74%); background-size:220% 100%; opacity:1; transition:opacity .18s ease; pointer-events:none; }
+.rmw-card.rmw-priority::before { animation:rmw-skeleton 1.15s ease-in-out infinite; }
 .rmw-card::after { content:'加载失败'; position:absolute; inset:auto 12px 12px; z-index:3; display:none; padding:6px 10px; border-radius:999px; background:rgba(32,33,36,.72); color:#fff; font-size:12px; text-align:center; pointer-events:none; }
 .rmw-card.is-loaded::before { opacity:0; animation:none; }
 .rmw-card.is-failed::after { display:block; }
@@ -1196,13 +1221,6 @@
     };
   }
 
-  function preloadVisibleThumbs(items, start, end, scrollMode = 'normal') {
-    const preloadEnd = Math.min(items.length, end + getThumbPreloadAhead(scrollMode));
-    for (let index = start; index < preloadEnd; index += 1) {
-      preloadPreviewMedia(items[index]);
-    }
-  }
-
   function setVirtualWindowState(grid, windowInfo) {
     const rowHeight = Math.max(0, windowInfo.rowHeight || 0);
     const gap = Math.max(0, windowInfo.gap || 0);
@@ -1239,7 +1257,7 @@
     return `已加载 ${total} 项，继续向下滚动以加载更多`;
   }
 
-  function virtualRenderSignature(grid, items, windowInfo, loadingState, highlightKey, emptyMessage, scrollMode) {
+  function virtualRenderSignature(grid, items, windowInfo, loadingState, highlightKey, emptyMessage) {
     const first = items[windowInfo.start]?.src || '';
     const last = items[Math.max(windowInfo.start, windowInfo.end - 1)]?.src || '';
     return [
@@ -1249,7 +1267,6 @@
       items.length,
       windowInfo.topRows || 0,
       windowInfo.bottomRows || 0,
-      scrollMode,
       loadingState,
       highlightKey,
       emptyMessage,
@@ -1260,11 +1277,15 @@
 
   function renderCards(doc, grid, state, modal, items, emptyMessage, session, onReturn, onRetry, highlightKey, onDeselect, scrollSpeed = 0, onThumbFailure) {
     let windowInfo = items.length ? getVirtualWindow(grid, items.length) : { start: 0, end: items.length, virtualized: false };
-    if (items.length && !windowInfo.virtualized) getGridMetrics(grid);
+    if (items.length && !windowInfo.virtualized) windowInfo = { ...windowInfo, ...getGridMetrics(grid) };
     const loadingState = session.snapshot().loadingState;
     const scrollMode = getScrollMode(scrollSpeed);
+    const priorityRange = items.length
+      ? getThumbPriorityRange(grid, windowInfo, items.length, scrollMode)
+      : { start: 0, end: 0, eagerStart: 0, eagerEnd: 0 };
     setVirtualWindowState(grid, windowInfo);
-    const signature = virtualRenderSignature(grid, items, windowInfo, loadingState, highlightKey, emptyMessage, scrollMode);
+    updateThumbPriorities(grid, priorityRange);
+    const signature = virtualRenderSignature(grid, items, windowInfo, loadingState, highlightKey, emptyMessage);
     if (grid.dataset.renderSignature === signature) return;
     const previousScrollTop = grid.scrollTop;
     grid.dataset.renderSignature = signature;
@@ -1272,14 +1293,17 @@
     if (!items.length) {
       grid.appendChild(makeElement(doc, 'div', 'rmw-status', emptyMessage));
     } else {
-      preloadVisibleThumbs(items, windowInfo.start, windowInfo.end, scrollMode);
       appendVirtualSpacer(doc, grid, Number(grid.dataset.virtualTop) || 0, 'top');
       items.slice(windowInfo.start, windowInfo.end).forEach((item, offset) => {
       const index = windowInfo.start + offset;
       const card = makeElement(doc, 'div', 'rmw-card', '');
       card.tabIndex = 0;
       card.dataset.mediaKey = item.src;
+      card.dataset.mediaIndex = String(index);
       if (item.src === highlightKey) card.classList.add('rmw-current');
+      const eager = shouldEagerLoadThumb(index, priorityRange);
+      const preload = shouldPreloadThumb(index, priorityRange);
+      card.classList.toggle('rmw-priority', eager);
       const useVideoThumb = item.type === 'video' && !item.poster;
       const media = doc.createElement(useVideoThumb ? 'video' : 'img');
       if (useVideoThumb) {
@@ -1289,7 +1313,8 @@
         media.playsInline = true;
       } else {
         media.src = item.poster || item.src;
-        media.loading = shouldEagerLoadThumb(index, windowInfo, scrollMode) ? 'eager' : 'lazy';
+        media.loading = preload ? 'eager' : 'lazy';
+        media.fetchPriority = eager ? 'high' : 'low';
         media.decoding = 'async';
         media.alt = '用户评价图片';
       }
@@ -1763,6 +1788,9 @@
     collectWithFallback,
     findScrollable,
     scrollNativeContainerToEnd,
+    getThumbPriorityRange,
+    shouldEagerLoadThumb,
+    shouldPreloadThumb,
     ensureLauncher,
     init
   };
