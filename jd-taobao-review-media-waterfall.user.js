@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.20
+// @version      0.5.21
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -113,6 +113,38 @@
     return filter === 'all' ? items.slice() : items.filter((item) => item.type === filter);
   }
 
+  function mediaProgressFingerprint(items) {
+    const reviewKeys = new Set();
+    const mediaKeys = [];
+    items.forEach((item) => {
+      if (item.reviewKey) reviewKeys.add(String(item.reviewKey));
+      const key = normalizeMediaKey(item.src || item.poster || '');
+      if (key) mediaKeys.push(key);
+    });
+    return `${items.length}|${Array.from(reviewKeys).sort().join(',')}|${mediaKeys.slice(-12).join(',')}`;
+  }
+
+  function createLoadProgressTracker(repeatLimit = 3) {
+    let lastSignature = '';
+    let repeated = 0;
+    return {
+      record(signature, added) {
+        if (added) {
+          lastSignature = signature;
+          repeated = 0;
+          return { repeated, exhausted: false };
+        }
+        repeated = signature && signature === lastSignature ? repeated + 1 : 0;
+        lastSignature = signature;
+        return { repeated, exhausted: repeated >= repeatLimit };
+      },
+      reset() {
+        lastSignature = '';
+        repeated = 0;
+      }
+    };
+  }
+
   function shouldAutoFillCurrentProduct({ active, added, nearBottom, loadingState }) {
     return Boolean(active && added && nearBottom && loadingState !== 'loading' && loadingState !== 'exhausted');
   }
@@ -125,7 +157,7 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.20';
+  const SCRIPT_VERSION = '0.5.21';
   const WHEEL_SHIFT_COOLDOWN = 320;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;
@@ -139,7 +171,7 @@
   const FAST_SCROLL_THRESHOLD = 1800;
   const THUMB_RETRY_LIMIT = 2;
   const THUMB_RETRY_DELAY = 450;
-  const preloadedPreviewMedia = new Set();
+  const PREVIEW_CACHE_LIMIT = 12;
   let lastPreviewWheelShift = 0;
   let slideshowTimer = null;
   let slideshowActive = false;
@@ -196,7 +228,8 @@
       contextCollapsed: false,
       contextWidth: readStoredContextWidth(storage, site),
       loadingState: 'idle',
-      stagnantLoads: 0
+      stagnantLoads: 0,
+      loadingDetail: ''
     };
     return {
       setFilter(value) {
@@ -231,17 +264,24 @@
         if (added) {
           saved.stagnantLoads = 0;
           saved.loadingState = 'idle';
+          saved.loadingDetail = '';
           return;
         }
         saved.stagnantLoads += 1;
         saved.loadingState = saved.stagnantLoads >= AUTO_LOAD_IDLE_LIMIT ? 'exhausted' : 'idle';
       },
+      exhaustLoad(detail = '') {
+        saved.loadingState = 'exhausted';
+        saved.loadingDetail = detail;
+      },
       failLoad() {
         saved.loadingState = 'error';
+        saved.loadingDetail = '加载失败';
       },
       retryLoad() {
         saved.loadingState = 'idle';
         saved.stagnantLoads = 0;
+        saved.loadingDetail = '';
       },
       snapshot() {
         return { ...saved };
@@ -253,12 +293,38 @@
     return element.currentSrc || element.src || element.getAttribute?.('src') || '';
   }
 
+  function createPreviewImageCache(ImageConstructor, limit = PREVIEW_CACHE_LIMIT) {
+    const entries = new Map();
+    return {
+      preload(src) {
+        if (!src || !ImageConstructor) return null;
+        if (entries.has(src)) {
+          const cached = entries.get(src);
+          entries.delete(src);
+          entries.set(src, cached);
+          return cached;
+        }
+        const image = new ImageConstructor();
+        image.decoding = 'async';
+        image.src = src;
+        entries.set(src, image);
+        while (entries.size > limit) entries.delete(entries.keys().next().value);
+        return image;
+      },
+      size() {
+        return entries.size;
+      },
+      keys() {
+        return Array.from(entries.keys());
+      }
+    };
+  }
+
+  const previewImageCache = createPreviewImageCache(root.Image);
+
   function preloadPreviewMedia(item) {
-    if (!item?.src || item.type !== 'image' || preloadedPreviewMedia.has(item.src) || !root.Image) return;
-    preloadedPreviewMedia.add(item.src);
-    const image = new root.Image();
-    image.decoding = 'async';
-    image.src = item.src;
+    if (!item?.src || item.type !== 'image') return null;
+    return previewImageCache.preload(item.src);
   }
 
   function preloadPreviewAround(items, index) {
@@ -291,16 +357,29 @@
     return index >= priorityRange.start && index < priorityRange.end;
   }
 
+  function updateVideoThumbSource(media, preload) {
+    if (!media || String(media.tagName || '').toUpperCase() !== 'VIDEO') return;
+    const src = media.dataset?.videoSrc || '';
+    if (preload && src && !media.getAttribute('src')) {
+      media.src = src;
+      media.load?.();
+    }
+  }
+
   function updateThumbPriorities(grid, priorityRange) {
     grid.querySelectorAll('.rmw-card').forEach((card) => {
       const index = Number(card.dataset.mediaIndex);
       const eager = shouldEagerLoadThumb(index, priorityRange);
       const preload = shouldPreloadThumb(index, priorityRange);
       card.classList.toggle('rmw-priority', eager);
-      const media = card.querySelector('img');
+      const media = card.querySelector('img, video');
       if (!media) return;
-      media.loading = preload ? 'eager' : 'lazy';
-      media.fetchPriority = eager ? 'high' : 'low';
+      if (String(media.tagName || '').toUpperCase() === 'VIDEO') {
+        updateVideoThumbSource(media, preload);
+      } else {
+        media.loading = preload ? 'eager' : 'lazy';
+        media.fetchPriority = eager ? 'high' : 'low';
+      }
     });
   }
 
@@ -377,10 +456,11 @@
     if (!info) return;
     const text = (info.content || '').trim().replace(/\s+/g, ' ');
     const meta = getTaobaoMeta(review);
+    const reviewKey = String(review.id || review.rateId || info.id || info.reviewId || '');
     (info.picList || []).forEach((src) => {
-      items.push({ type: 'image', src: absoluteMediaUrl(src), poster: '', text, meta });
+      items.push({ type: 'image', src: absoluteMediaUrl(src), poster: '', text, meta, ...(reviewKey ? { reviewKey } : {}) });
     });
-    appendTaobaoVideos(items, info.videoList || [], text, meta);
+    appendTaobaoVideos(items, info.videoList || [], text, meta, reviewKey);
   }
 
   function usableVideoUrl(url) {
@@ -405,10 +485,10 @@
     return { src, poster };
   }
 
-  function appendTaobaoVideos(items, videos, text, meta) {
+  function appendTaobaoVideos(items, videos, text, meta, reviewKey = '') {
     videos.forEach((video) => {
       const { src, poster } = extractTaobaoVideo(video);
-      if (src) items.push({ type: 'video', src, poster, text, meta });
+      if (src) items.push({ type: 'video', src, poster, text, meta, ...(reviewKey ? { reviewKey } : {}) });
     });
   }
 
@@ -462,14 +542,15 @@
       processed.add(info);
       const text = String(info.commentData || '').trim().replace(/\s+/g, ' ');
       const meta = [info.newCommentDate, info.productSpecifications].filter(Boolean).join(' ');
+      const reviewKey = String(info.id || info.commentId || info.commentIdStr || info.orderId || '');
       info.pictureInfoList.forEach((media) => {
         const poster = absoluteMediaUrl(media.picURL || media.coverUrl || '');
         const videoSrc = absoluteMediaUrl(media.videoPlayUrl || media.videoUrl || media.playUrl || '');
         const imageSrc = absoluteMediaUrl(media.largePicURL || media.picURL || '');
         if (String(media.mediaType) === '2' && videoSrc) {
-          items.push({ type: 'video', src: videoSrc, poster, text, meta });
+          items.push({ type: 'video', src: videoSrc, poster, text, meta, ...(reviewKey ? { reviewKey } : {}) });
         } else if (imageSrc) {
-          items.push({ type: 'image', src: imageSrc, poster, text, meta });
+          items.push({ type: 'image', src: imageSrc, poster, text, meta, ...(reviewKey ? { reviewKey } : {}) });
         }
       });
     }
@@ -593,28 +674,55 @@
     if (!capture.listeners) capture.listeners = new Set();
     if (!('pageInfo' in capture)) capture.pageInfo = null;
     if (!('lastRequest' in capture)) capture.lastRequest = null;
+    if (!capture.pageFingerprints) capture.pageFingerprints = new Set();
+    if (!('requestInFlight' in capture)) capture.requestInFlight = false;
     capture.emit = (payload) => {
       const items = collectJdPayloadMedia(payload);
       capture.pageInfo = extractJdPageInfo(payload);
+      const fingerprint = mediaProgressFingerprint(items);
+      if (fingerprint && items.length) capture.pageFingerprints.add(fingerprint);
       if (items.length) capture.listeners.forEach((listener) => listener(items));
+      return { items, fingerprint };
     };
     capture.requestNextPage = () => {
       const pageInfo = capture.pageInfo || {};
       const nextPage = (Number(pageInfo.pageIndex) || 0) + 1;
-      if (!capture.lastRequest || pageInfo.hasNextPage === false || (pageInfo.maxPage && nextPage > pageInfo.maxPage)) {
+      if (
+        capture.requestInFlight ||
+        !capture.lastRequest ||
+        pageInfo.hasNextPage === false ||
+        (pageInfo.maxPage && nextPage > pageInfo.maxPage)
+      ) {
         return Promise.resolve(false);
       }
       const request = buildNextJdRequest(capture.lastRequest, nextPage);
       if (!request) return Promise.resolve(false);
-      return host.fetch(request.url, request.options).then((response) => {
+      capture.requestInFlight = true;
+      const fetchRequest = capture.originalFetch || host.fetch;
+      capture.internalRequest = true;
+      return fetchRequest.call(host, request.url, request.options).then((response) => {
         if (!response.ok) return false;
         return response.clone().json().then((payload) => {
           const items = collectJdPayloadMedia(payload);
+          const fingerprint = mediaProgressFingerprint(items);
+          if (fingerprint && capture.pageFingerprints.has(fingerprint)) {
+            capture.pageInfo = { ...extractJdPageInfo(payload), hasNextPage: false };
+            capture.exhaustedReason = '接口返回重复页';
+            return false;
+          }
           capture.emit(payload);
           return items.length > 0;
         }).catch(() => false);
-      }).catch(() => false);
+      }).catch(() => false).finally(() => {
+        capture.internalRequest = false;
+        capture.requestInFlight = false;
+      });
     };
+    capture.progress = () => ({
+      pageIndex: Number(capture.pageInfo?.pageIndex) || 0,
+      hasNextPage: capture.pageInfo?.hasNextPage !== false,
+      exhaustedReason: capture.exhaustedReason || ''
+    });
 
     const XHR = host.XMLHttpRequest;
     if (XHR?.prototype && !capture.xhrWrapped) {
@@ -649,10 +757,12 @@
     if (typeof host.fetch === 'function' && !capture.fetchWrapped) {
       capture.fetchWrapped = true;
       const originalFetch = host.fetch;
+      capture.originalFetch = originalFetch;
       host.fetch = function fetch(input, ...args) {
         const url = String(typeof input === 'string' ? input : input?.url || '');
         const body = args[0]?.body || input?.body || '';
-        if (/api\.m\.jd\.com\/client\.action/.test(url)) {
+        const shouldCapture = /api\.m\.jd\.com\/client\.action/.test(url) && !capture.internalRequest;
+        if (shouldCapture) {
           capture.lastRequest = {
             url,
             method: String(args[0]?.method || input?.method || 'GET').toUpperCase(),
@@ -660,7 +770,7 @@
           };
         }
         return originalFetch.call(this, input, ...args).then((response) => {
-          if (/api\.m\.jd\.com\/client\.action/.test(url)) {
+          if (shouldCapture) {
             response.clone().json().then((payload) => capture.emit(payload)).catch(() => {});
           }
           return response;
@@ -758,6 +868,9 @@
       },
       requestNextPage() {
         return root.__reviewMediaWallJdResponseCapture?.requestNextPage?.() || Promise.resolve(false);
+      },
+      getLoadProgress() {
+        return root.__reviewMediaWallJdResponseCapture?.progress?.() || {};
       },
       collectMedia: collectJdMedia
     },
@@ -997,11 +1110,13 @@
       const previewSrc = item.poster || item.src;
       media.decoding = 'async';
       media.src = previewSrc;
-      if (item.src && item.src !== previewSrc && root.Image) {
-        const fullImage = new root.Image();
-        fullImage.decoding = 'async';
-        fullImage.onload = () => { media.src = item.src; };
-        fullImage.src = item.src;
+      if (item.src && item.src !== previewSrc) {
+        const fullImage = preloadPreviewMedia(item);
+        if (fullImage?.complete && fullImage.naturalWidth) {
+          media.src = item.src;
+        } else {
+          fullImage?.addEventListener('load', () => { media.src = item.src; }, { once: true });
+        }
       }
     } else {
       media.src = item.src;
@@ -1307,7 +1422,8 @@
       const useVideoThumb = item.type === 'video' && !item.poster;
       const media = doc.createElement(useVideoThumb ? 'video' : 'img');
       if (useVideoThumb) {
-        media.src = item.src;
+        media.dataset.videoSrc = item.src;
+        if (preload) media.src = item.src;
         media.muted = true;
         media.preload = 'metadata';
         media.playsInline = true;
@@ -1459,10 +1575,56 @@
     let autoLoadIdleRounds = 0;
     let userRequestedMore = false;
     let virtualRenderFrame = null;
+    let layoutRenderFrame = null;
+    let layoutResizeObserver = null;
+    let layoutAnchor = null;
+    let lastGridWidth = 0;
+    let lastGridHeight = 0;
     let scrollSpeed = 0;
     let lastScrollTop = 0;
     let lastScrollTime = Date.now();
+    let taskGeneration = 0;
+    let dismissed = false;
+    const loadProgressTracker = createLoadProgressTracker();
     const mediaStats = { lastAdded: 0, thumbFailures: 0 };
+    function nextTaskGeneration() {
+      taskGeneration += 1;
+      stopAutoLoad();
+      loadProgressTracker.reset();
+      return taskGeneration;
+    }
+    function isCurrentTask(generation) {
+      return !dismissed && generation === taskGeneration;
+    }
+    function captureGridAnchor() {
+      const gridBounds = grid.getBoundingClientRect?.();
+      if (!gridBounds) return null;
+      const card = Array.from(grid.querySelectorAll('.rmw-card')).find((node) => {
+        const bounds = node.getBoundingClientRect?.();
+        return bounds && bounds.bottom > gridBounds.top + 1;
+      });
+      if (!card) return null;
+      const bounds = card.getBoundingClientRect();
+      return {
+        key: card.dataset.mediaKey || '',
+        index: Number(card.dataset.mediaIndex) || 0,
+        offset: bounds.top - gridBounds.top
+      };
+    }
+    function restoreGridAnchor(anchor) {
+      if (!anchor) return;
+      const card = Array.from(grid.querySelectorAll('.rmw-card')).find((node) => node.dataset.mediaKey === anchor.key)
+        || grid.querySelector(`.rmw-card[data-media-index="${anchor.index}"]`);
+      if (!card) return;
+      const gridBounds = grid.getBoundingClientRect();
+      const offset = card.getBoundingClientRect().top - gridBounds.top;
+      grid.scrollTop += offset - anchor.offset;
+    }
+    function rememberGridMetrics() {
+      lastGridWidth = grid.clientWidth;
+      lastGridHeight = grid.clientHeight;
+      layoutAnchor = captureGridAnchor();
+    }
     function revealCurrentCard() {
       modal.focus();
       const key = wallSession.snapshot().previewKey;
@@ -1498,16 +1660,23 @@
         grid.scrollTop = sessionSnapshot.scrollTop;
         restoredScroll = true;
       }
+      rememberGridMetrics();
     }
     function updateLoadedText(sessionSnapshot, visibleCount) {
       const statusText = {
-        idle: '空闲',
+        idle: '已就绪',
         loading: '加载中',
         exhausted: '已到底',
         error: '加载失败'
-      }[sessionSnapshot.loadingState] || '空闲';
-      const failureText = mediaStats.thumbFailures ? ` / 失败 ${mediaStats.thumbFailures} 项` : '';
-      loaded.textContent = `已收集 ${controller.items().length} 项 / 当前显示 ${visibleCount} 项 / 最近新增 ${mediaStats.lastAdded} 项 / ${statusText}${failureText}`;
+      }[sessionSnapshot.loadingState] || '已就绪';
+      const failureText = mediaStats.thumbFailures ? ` · ${mediaStats.thumbFailures} 项失败` : '';
+      loaded.textContent = `${visibleCount} 项 · ${statusText}${failureText}`;
+      loaded.title = [
+        `已收集 ${controller.items().length} 项`,
+        `当前显示 ${visibleCount} 项`,
+        `最近新增 ${mediaStats.lastAdded} 项`,
+        sessionSnapshot.loadingDetail || ''
+      ].filter(Boolean).join(' / ');
     }
     function onThumbFailure() {
       mediaStats.thumbFailures += 1;
@@ -1522,8 +1691,24 @@
         renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
       });
     }
+    function scheduleLayoutCalibration(anchor = layoutAnchor) {
+      if (layoutRenderFrame) return;
+      const scheduleFrame = root.requestAnimationFrame || ((callback) => root.setTimeout(callback, 16));
+      layoutRenderFrame = scheduleFrame(() => {
+        layoutRenderFrame = null;
+        if (dismissed) return;
+        const width = grid.clientWidth;
+        const height = grid.clientHeight;
+        if (Math.abs(width - lastGridWidth) < 2 && Math.abs(height - lastGridHeight) < 2) return;
+        delete grid.dataset.renderSignature;
+        renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
+        restoreGridAnchor(anchor);
+        rememberGridMetrics();
+      });
+    }
     if (adapter.observeResponses) {
       stopCapture = adapter.observeResponses((items) => {
+        if (dismissed) return;
         const before = controller.items().length;
         controller.append(items);
         const added = controller.items().length > before;
@@ -1544,7 +1729,8 @@
       });
     }
     adapter.openNativeReviews(doc);
-    function syncMedia(reset) {
+    function syncMedia(reset, generation = taskGeneration) {
+      if (!isCurrentTask(generation)) return false;
       nativeRoot = adapter.findNativeRoot(doc);
       if (!nativeRoot) {
         renderWall('正在等待原生评价窗口加载...');
@@ -1561,7 +1747,9 @@
       }
       renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
       if (!disconnect && root.MutationObserver) {
-        const observer = new root.MutationObserver(() => syncMedia(false));
+        const observer = new root.MutationObserver(() => {
+          if (!dismissed) syncMedia(false, taskGeneration);
+        });
         observer.observe(nativeRoot, { childList: true, subtree: true });
         disconnect = () => observer.disconnect();
       }
@@ -1583,6 +1771,18 @@
       if (!candidates.length) return false;
       return candidates.reduce((moved, scroller) => scrollOneNativeContainer(scroller) || moved, false);
     }
+    function loadProgressSignature() {
+      const nativeProgress = findScrollableCandidates(nativeRoot)
+        .map((scroller) => `${Math.round(scroller.scrollTop)}/${Math.round(scroller.scrollHeight)}`)
+        .join(',');
+      const pageProgress = adapter.getLoadProgress?.() || {};
+      return [
+        mediaProgressFingerprint(controller.items()),
+        nativeProgress,
+        pageProgress.pageIndex || 0,
+        pageProgress.hasNextPage === false ? 'end' : 'next'
+      ].join('|');
+    }
     function stopAutoLoad() {
       if (!autoLoadTimer) return;
       root.clearTimeout(autoLoadTimer);
@@ -1596,12 +1796,15 @@
         autoLoadRounds = 0;
         autoLoadIdleRounds = 0;
         wallSession.retryLoad();
+        loadProgressTracker.reset();
       }
       stopAutoLoad();
-      autoLoadTimer = root.setTimeout(runAutoLoad, AUTO_LOAD_DELAY);
+      const generation = taskGeneration;
+      autoLoadTimer = root.setTimeout(() => runAutoLoad(generation), AUTO_LOAD_DELAY);
     }
-    function runAutoLoad() {
+    function runAutoLoad(generation) {
       autoLoadTimer = null;
+      if (!isCurrentTask(generation)) return;
       if (!nativeRoot || autoLoadRounds >= AUTO_LOAD_MAX_ROUNDS || autoLoadIdleRounds >= AUTO_LOAD_IDLE_LIMIT) return;
       if (!wallSession.beginLoad()) return;
       autoLoadRounds += 1;
@@ -1618,30 +1821,48 @@
         ? Promise.resolve(false)
         : (adapter.requestNextPage?.() || Promise.resolve(false));
       root.Promise.resolve(pageRequest).then((requested) => {
+        if (!isCurrentTask(generation)) return;
         if (requested) moved = true;
       }).finally(() => root.setTimeout(() => {
+        if (!isCurrentTask(generation)) return;
         const before = controller.items().length;
-        syncMedia(false);
+        syncMedia(false, generation);
         const added = controller.items().length > before;
         autoLoadIdleRounds = added ? 0 : autoLoadIdleRounds + 1;
+        const pageProgress = adapter.getLoadProgress?.() || {};
+        const progress = loadProgressTracker.record(loadProgressSignature(), added);
+        if (pageProgress.hasNextPage === false || pageProgress.exhaustedReason || progress.exhausted) {
+          autoLoadIdleRounds = AUTO_LOAD_IDLE_LIMIT;
+          wallSession.exhaustLoad(pageProgress.exhaustedReason || (pageProgress.hasNextPage === false ? '接口已到最后一页' : '连续多轮未发现新评价'));
+          renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
+          return;
+        }
         if ((moved || added) && userRequestedMore && isGridNearBottom() && autoLoadRounds < AUTO_LOAD_MAX_ROUNDS && autoLoadIdleRounds < AUTO_LOAD_IDLE_LIMIT) {
           scheduleAutoLoad(false);
         }
       }, AUTO_LOAD_SETTLE_DELAY));
     }
-    function waitForNative() {
+    function waitForNative(generation) {
+      if (!isCurrentTask(generation)) return;
       attempts += 1;
-      if (!syncMedia(attempts === 1 && !controller.items().length) && attempts < 12) {
-        root.setTimeout(waitForNative, 250);
+      if (!syncMedia(attempts === 1 && !controller.items().length, generation) && attempts < 12) {
+        root.setTimeout(() => waitForNative(generation), 250);
         return;
       }
     }
-    waitForNative();
+    lastGridWidth = grid.clientWidth;
+    lastGridHeight = grid.clientHeight;
+    if (root.ResizeObserver) {
+      layoutResizeObserver = new root.ResizeObserver(() => scheduleLayoutCalibration(layoutAnchor));
+      layoutResizeObserver.observe(grid);
+    }
+    waitForNative(taskGeneration);
 
-    function waitForCurrentProductFilter() {
+    function waitForCurrentProductFilter(generation) {
       let sawFilter = false;
       let checks = 0;
       function checkFilter() {
+        if (!isCurrentTask(generation)) return;
         checks += 1;
         const filterOpen = adapter.isCurrentProductFilterOpen?.(doc);
         sawFilter ||= Boolean(filterOpen);
@@ -1650,7 +1871,7 @@
           return;
         }
         backdrop.style.display = 'flex';
-        syncMedia(true);
+        syncMedia(true, generation);
         modal.focus();
       }
       checkFilter();
@@ -1672,6 +1893,7 @@
       lastScrollTop = grid.scrollTop;
       lastScrollTime = now;
       wallSession.rememberView({ scrollTop: grid.scrollTop, previewKey: wallSession.snapshot().previewKey });
+      layoutAnchor = captureGridAnchor();
       scheduleVirtualRender();
       if (isGridNearBottom()) requestMore();
     });
@@ -1684,10 +1906,15 @@
     sizeGroup.addEventListener('click', (event) => {
       const button = event.target.closest?.('.rmw-size');
       if (!button) return;
+      const anchor = captureGridAnchor();
       wallSession.setCardSize(button.dataset.value);
+      delete grid.dataset.renderSignature;
       renderWall('当前类型暂无已加载媒体。');
+      restoreGridAnchor(anchor);
+      rememberGridMetrics();
     });
     currentProduct.addEventListener('click', () => {
+      const generation = nextTaskGeneration();
       nativeRoot = adapter.findNativeRoot(doc);
       currentProductActive = !currentProductActive;
       currentProduct.classList.toggle('is-active', currentProductActive);
@@ -1696,7 +1923,7 @@
         if (behavior === 'interactive') {
           allProductItems = controller.items();
           backdrop.style.display = 'none';
-          waitForCurrentProductFilter();
+          waitForCurrentProductFilter(generation);
           return;
         }
         if (behavior === 'immediate') {
@@ -1707,7 +1934,7 @@
           autoLoadIdleRounds = 0;
           wallSession.retryLoad();
           renderWall('正在加载当前商品评价...');
-          root.setTimeout(() => syncMedia(false), 180);
+          root.setTimeout(() => syncMedia(false, generation), 180);
         }
       } else {
         adapter.openAllReviewsFilter?.(nativeRoot);
@@ -1715,19 +1942,24 @@
           controller.replace(allProductItems);
           renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
         }
-        root.setTimeout(() => syncMedia(false), 450);
+        root.setTimeout(() => syncMedia(false, generation), 450);
       }
     });
     sync.addEventListener('click', () => {
+      const generation = nextTaskGeneration();
       wallSession.retryLoad();
-      syncMedia(true);
+      syncMedia(true, generation);
     });
     function dismissWall() {
+      dismissed = true;
+      nextTaskGeneration();
       stopAutoLoad();
       if (virtualRenderFrame) (root.cancelAnimationFrame?.(virtualRenderFrame) || root.clearTimeout(virtualRenderFrame));
+      if (layoutRenderFrame) (root.cancelAnimationFrame?.(layoutRenderFrame) || root.clearTimeout(layoutRenderFrame));
       if (slideshowTimer) { clearTimeout(slideshowTimer); slideshowTimer = null; }
       slideshowActive = false;
       disconnect?.();
+      layoutResizeObserver?.disconnect();
       stopCapture?.();
       wallSession.rememberView({ scrollTop: grid.scrollTop, previewKey: wallSession.snapshot().previewKey });
       state.closeWall();
@@ -1777,6 +2009,8 @@
     detectSite,
     createMediaStore,
     filterMedia,
+    mediaProgressFingerprint,
+    createLoadProgressTracker,
     shouldAutoFillCurrentProduct,
     createWallSession,
     adapters,
@@ -1791,6 +2025,8 @@
     getThumbPriorityRange,
     shouldEagerLoadThumb,
     shouldPreloadThumb,
+    updateVideoThumbSource,
+    createPreviewImageCache,
     ensureLauncher,
     init
   };

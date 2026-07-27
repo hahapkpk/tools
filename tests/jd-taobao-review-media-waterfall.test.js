@@ -441,7 +441,8 @@ test('会话状态仅在当前脚本实例内恢复筛选尺寸与浏览位置',
     contextCollapsed: false,
     contextWidth: 420,
     loadingState: 'idle',
-    stagnantLoads: 0
+    stagnantLoads: 0,
+    loadingDetail: ''
   });
 });
 
@@ -706,11 +707,29 @@ test('视频预览才加载完整播放源，卡片阶段保持轻量 metadata',
   assert.doesNotMatch(source, /useVideoThumb[\s\S]{0,160}media\.preload = 'auto'/);
 });
 
-test('工具栏显示更细的加载进度、最近新增和缩略图失败数量', () => {
+test('无封面视频卡片仅进入预取范围后才挂载媒体地址', () => {
+  let loads = 0;
+  const media = {
+    tagName: 'VIDEO',
+    dataset: { videoSrc: 'review.mp4' },
+    getAttribute: () => '',
+    load() { loads += 1; }
+  };
+  api.updateVideoThumbSource(media, false);
+  assert.equal(media.src, undefined);
+  api.updateVideoThumbSource(media, true);
+  assert.equal(media.src, 'review.mp4');
+  assert.equal(loads, 1);
+  assert.match(source, /media\.dataset\.videoSrc = item\.src/);
+  assert.match(source, /if \(preload\) media\.src = item\.src/);
+});
+
+test('工具栏默认只显示数量和状态并把加载细节放入提示', () => {
   assert.match(source, /const mediaStats = \{ lastAdded: 0, thumbFailures: 0 \}/);
   assert.match(source, /function updateLoadedText/);
+  assert.match(source, /loaded\.textContent = `\$\{visibleCount\} 项 · \$\{statusText\}\$\{failureText\}`/);
+  assert.match(source, /loaded\.title = \[/);
   assert.match(source, /最近新增 \$\{mediaStats\.lastAdded\} 项/);
-  assert.match(source, /失败 \$\{mediaStats\.thumbFailures\} 项/);
   assert.match(source, /onThumbFailure/);
 });
 
@@ -744,7 +763,7 @@ test('入口复用同一页面会话状态对象和媒体控制器', () => {
 });
 
 test('重新打开图片墙时不会清空本页已经加载的媒体', () => {
-  assert.match(source, /syncMedia\(attempts === 1 && !controller\.items\(\)\.length\)/);
+  assert.match(source, /syncMedia\(attempts === 1 && !controller\.items\(\)\.length, generation\)/);
 });
 
 test('媒体同步重新渲染不会覆盖恢复后的滚动位置', () => {
@@ -809,7 +828,7 @@ test('预览图片区域支持滚轮切换上一张和下一张并防止连续�
 
 test('淘宝天猫评价内容使用同一套预览阅读排版', () => {
   assert.match(source, /function appendTaobaoReviewMedia/);
-  assert.match(source, /items\.push\(\{ type: 'image', src: absoluteMediaUrl\(src\), poster: '', text, meta \}\)/);
+  assert.match(source, /items\.push\(\{ type: 'image', src: absoluteMediaUrl\(src\), poster: '', text, meta, \.\.\.\(reviewKey \? \{ reviewKey \} : \{\}\) \}\)/);
   assert.match(source, /function extractTaobaoVideo/);
   assert.match(source, /function appendTaobaoVideos/);
   assert.match(source, /context\.appendChild\(makeElement\(doc, 'p', 'rmw-context-text', item\.text \|\|/);
@@ -818,14 +837,28 @@ test('淘宝天猫评价内容使用同一套预览阅读排版', () => {
 
 test('打开预览前会提前预热原图以减少黑屏等待', () => {
   assert.match(source, /function preloadPreviewMedia/);
-  assert.match(source, /new root\.Image\(\)/);
+  assert.match(source, /createPreviewImageCache\(root\.Image\)/);
   assert.match(source, /preloadPreviewAround\(items, index\)/);
 });
 
 test('预览图片先显示缩略图并在原图加载后替换以提升打开速度', () => {
   assert.match(source, /const previewSrc = item\.poster \|\| item\.src/);
   assert.match(source, /media\.src = previewSrc/);
-  assert.match(source, /fullImage\.onload = \(\) => \{ media\.src = item\.src; \}/);
+  assert.match(source, /fullImage\?\.addEventListener\('load', \(\) => \{ media\.src = item\.src; \}, \{ once: true \}\)/);
+});
+
+test('预览原图缓存使用最多十二项的 LRU 淘汰', () => {
+  class FakeImage {}
+  const cache = api.createPreviewImageCache(FakeImage, 3);
+  cache.preload('1.jpg');
+  cache.preload('2.jpg');
+  cache.preload('3.jpg');
+  cache.preload('1.jpg');
+  cache.preload('4.jpg');
+
+  assert.equal(cache.size(), 3);
+  assert.deepEqual(cache.keys(), ['3.jpg', '1.jpg', '4.jpg']);
+  assert.match(source, /const PREVIEW_CACHE_LIMIT = 12/);
 });
 
 test('预览外层关闭使用 pointerdown 提前响应', () => {
@@ -871,7 +904,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.20/);
+  assert.match(source, /@version\s+0\.5\.21/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
@@ -903,7 +936,7 @@ test('即时当前商品筛选先清空旧集合且后续 DOM 同步只追加不
 
   assert.deepEqual(previous.map(item => item.src), ['all-products.jpg']);
   assert.deepEqual(controller.items().map(item => item.src), ['api-current.jpg', 'dom-current.jpg']);
-  assert.match(source, /if \(behavior === 'immediate'\)[\s\S]{0,500}controller\.beginFilterChange\(\)[\s\S]{0,500}syncMedia\(false\)/);
+  assert.match(source, /if \(behavior === 'immediate'\)[\s\S]{0,500}controller\.beginFilterChange\(\)[\s\S]{0,500}syncMedia\(false, generation\)/);
 });
 
 test('当前商品首批媒体不足一屏时自动请求下一页', () => {
@@ -1013,14 +1046,14 @@ test('图片墙工具栏提供当前商品筛选并在淘宝交互筛选后恢�
   assert.match(source, /adapter\.openCurrentProductFilter\(nativeRoot\)/);
   assert.match(source, /backdrop\.style\.display = 'none'/);
   assert.match(source, /waitForCurrentProductFilter/);
-  assert.match(source, /syncMedia\(true\)/);
+  assert.match(source, /syncMedia\(true, generation\)/);
 });
 
 test('京东取消当前商品筛选时先恢复全部商品媒体缓存避免清空图片墙', () => {
   assert.match(source, /let allProductItems = \[\]/);
   assert.match(source, /allProductItems = controller\.items\(\)/);
   assert.match(source, /controller\.replace\(allProductItems\)/);
-  assert.match(source, /syncMedia\(false\)/);
+  assert.match(source, /syncMedia\(false, generation\)/);
 });
 
 test('图片墙滚动接近底部时按需懒加载原生评价列表补齐更多图片', () => {
@@ -1035,7 +1068,7 @@ test('图片墙滚动接近底部时按需懒加载原生评价列表补齐更�
   assert.match(source, /findScrollableCandidates\(nativeRoot\)/);
   assert.match(source, /looksScrollable/);
   assert.match(source, /new root\.WheelEvent\('wheel'/);
-  assert.match(source, /syncMedia\(false\)/);
+  assert.match(source, /syncMedia\(false, generation\)/);
   assert.match(source, /grid\.addEventListener\('scroll'[\s\S]*if \(isGridNearBottom\(\)\) requestMore\(\)/);
   assert.doesNotMatch(source, /waitForNative[\s\S]{0,260}scheduleAutoLoad\(true\)/);
 });
@@ -1072,6 +1105,48 @@ test('京东自动加载会复用最近一次评论接口请求体拉取下一�
   assert.match(source, /capture\.requestNextPage/);
   assert.match(source, /if \(!response\.ok\) return false/);
   assert.match(source, /adapter\.requestNextPage/);
+});
+
+test('自动加载综合媒体评价和原生滚动进度识别重复终点', () => {
+  const tracker = api.createLoadProgressTracker(2);
+  assert.deepEqual(tracker.record('same', false), { repeated: 0, exhausted: false });
+  assert.deepEqual(tracker.record('same', false), { repeated: 1, exhausted: false });
+  assert.deepEqual(tracker.record('same', false), { repeated: 2, exhausted: true });
+  assert.deepEqual(tracker.record('advanced', true), { repeated: 0, exhausted: false });
+  assert.match(source, /function loadProgressSignature/);
+  assert.match(source, /mediaProgressFingerprint\(controller\.items\(\)\)/);
+  assert.match(source, /pageProgress\.hasNextPage === false \|\| pageProgress\.exhaustedReason \|\| progress\.exhausted/);
+});
+
+test('京东分页并发锁和响应指纹阻止重复页继续请求', () => {
+  assert.match(source, /capture\.requestInFlight/);
+  assert.match(source, /capture\.pageFingerprints/);
+  assert.match(source, /capture\.pageFingerprints\.has\(fingerprint\)/);
+  assert.match(source, /capture\.exhaustedReason = '接口返回重复页'/);
+  assert.match(source, /capture\.originalFetch \|\| host\.fetch/);
+  assert.match(source, /capture\.internalRequest = true/);
+  assert.match(source, /const shouldCapture = \/api\\\.m\\\.jd\\\.com/);
+});
+
+test('筛选同步和关闭会使迟到的定时加载任务失效', () => {
+  assert.match(source, /let taskGeneration = 0/);
+  assert.match(source, /function nextTaskGeneration/);
+  assert.match(source, /function isCurrentTask/);
+  assert.match(source, /function runAutoLoad\(generation\)/);
+  assert.match(source, /if \(!isCurrentTask\(generation\)\) return/);
+  assert.match(source, /currentProduct\.addEventListener\('click', \(\) => \{\s*const generation = nextTaskGeneration\(\)/);
+  assert.match(source, /sync\.addEventListener\('click', \(\) => \{\s*const generation = nextTaskGeneration\(\)/);
+  assert.match(source, /dismissed = true;\s*nextTaskGeneration\(\)/);
+});
+
+test('网格尺寸变化和卡片大小切换会按当前图片锚点校准滚动位置', () => {
+  assert.match(source, /function captureGridAnchor/);
+  assert.match(source, /function restoreGridAnchor/);
+  assert.match(source, /function scheduleLayoutCalibration/);
+  assert.match(source, /layoutResizeObserver = new root\.ResizeObserver/);
+  assert.match(source, /layoutResizeObserver\.observe\(grid\)/);
+  assert.match(source, /const anchor = captureGridAnchor\(\);[\s\S]{0,220}restoreGridAnchor\(anchor\)/);
+  assert.match(source, /layoutResizeObserver\?\.disconnect\(\)/);
 });
 
 test('京东原生列表已经成功滚动时不重复发送可能失效的签名分页请求', () => {
