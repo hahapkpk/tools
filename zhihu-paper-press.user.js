@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         知乎 · Paper Press 阅读模式
 // @namespace    https://github.com/hahapkpk/tools
-// @version      2.5.1
-// @description  知乎专栏 / 问答页 → 杂志风格沉浸阅读：悬浮目录 · 代码高亮 · 图片灯箱 · 深色模式 · 阅读进度 · 字号/宽度调节 · 代码复制 · 键盘快捷键 · 拖拽调宽
+// @version      2.6.0
+// @description  知乎专栏 / 问答页 → 杂志风格沉浸阅读：悬浮目录 · 代码高亮 · 图片灯箱 · 深色模式 · 阅读进度 · 字号/宽度调节 · 代码复制 · 键盘快捷键 · 拖拽调宽 · 适配知乎新版布局
 // @author       hahapkpk
 // @match        https://zhuanlan.zhihu.com/p/*
 // @match        https://www.zhihu.com/question/*
@@ -298,7 +298,11 @@
       '.App-main{max-width:none!important;padding:0!important;background:transparent!important;}',
       '.Post-content{background:transparent!important;padding:0!important;max-width:none!important;}',
       '.Post-Row-Content{display:block!important;max-width:none!important;}',
-      '.Post-Row-Content-left{float:none!important;width:100%!important;max-width:860px!important;margin:0 auto!important;padding:80px 40px 120px!important;box-sizing:border-box!important;transition:max-width 0.3s ease!important;}',
+      /* [v2.6] 知乎新版布局：列容器由 JS 动态标记 .pp-col，侧栏标记 .pp-side，祖先解除宽度限制 */
+      '.pp-uncap{max-width:none!important;width:100%!important;box-sizing:border-box!important;}',
+      '.pp-side{display:none!important;}',
+      '.Post-Row-Content-left,.pp-col{float:none!important;width:100%!important;max-width:860px!important;margin:0 auto!important;padding:80px 40px 120px!important;box-sizing:border-box!important;transition:max-width 0.3s ease!important;}',
+      '.pp-dragging .Post-Row-Content-left,.pp-dragging .pp-col{transition:none!important;}',
       '.Post-Row-Content-left-article{width:100%!important;}',
 
       '/* ── 文章卡片 ── */',
@@ -390,8 +394,8 @@
       '#pp-toc a.pp-toc-h3{padding-left:24px;font-size:11px;}',
 
       '/* 宽度模式（预设） */',
-      '.pp-width-narrow .Post-Row-Content-left{max-width:620px!important;}',
-      '.pp-width-wide .Post-Row-Content-left{max-width:1100px!important;}',
+      '.pp-width-narrow .Post-Row-Content-left,.pp-width-narrow .pp-col{max-width:620px!important;}',
+      '.pp-width-wide .Post-Row-Content-left,.pp-width-wide .pp-col{max-width:1100px!important;}',
 
       // ════════════════════════════════════════════════════════════
       // [新增] 拖拽调宽手柄
@@ -411,7 +415,7 @@
 
       '/* ── 响应式 ── */',
       '@media (max-width:768px){',
-      '.Post-Row-Content-left{padding:24px 16px 80px!important;max-width:100%!important;}',
+      '.Post-Row-Content-left,.pp-col{padding:24px 16px 80px!important;max-width:100%!important;}',
       '.Post-Main.Post-NormalMain{padding:32px 20px!important;border-radius:2px!important;}',
       '.Post-Title{line-height:1.35!important;}',
       '.Post-RichTextContainer h2{line-height:1.4!important;}',
@@ -426,7 +430,7 @@
       '}',
 
       '@media (min-width:769px) and (max-width:1024px){',
-      '.Post-Row-Content-left{padding:48px 24px 100px!important;max-width:700px!important;}',
+      '.Post-Row-Content-left,.pp-col{padding:48px 24px 100px!important;max-width:700px!important;}',
       '.Post-Main.Post-NormalMain{padding:48px 40px!important;}',
       '#pp-toc{max-width:160px;}',
       '}',
@@ -750,12 +754,122 @@
   var MIN_WIDTH = 420;
   var MAX_WIDTH = 1600;
 
+  // ═══════════════════════════════════════════════════════════════
+  // [v2.6] 列容器探测：知乎 2026.07 改版后 .Post-Row-Content-left 等旧类名失效，
+  // 以文章卡片为锚点向上查找"列容器"（第一个拥有侧栏兄弟的祖先），
+  // 动态标记 .pp-col / .pp-side / .pp-uncap，宽度预设与拖拽手柄全部作用于它
+  // ═══════════════════════════════════════════════════════════════
+
+  var _ppCol = null;
+
+  // 脚本自身 UI 与非内容元素（避免误隐藏面板/灯箱/手柄/目录）
+  // 注意：必须按 class 词元精确判断，不能用子串（"AppHeader" 等包含 "pp-" 子串会误判）
+  function isOurUI(el) {
+    if (!el || el.nodeType !== 1) return true;
+    var tag = el.tagName;
+    if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'LINK' || tag === 'NOSCRIPT' || tag === 'TEMPLATE') return true;
+    var id = el.id || '';
+    if (id.indexOf('pp-') === 0) return true;
+    var cls = el.className;
+    if (cls && typeof cls === 'string') {
+      var tokens = cls.split(/\s+/);
+      for (var i = 0; i < tokens.length; i++) {
+        if (tokens[i].indexOf('pp-') === 0) return true;
+      }
+    }
+    return false;
+  }
+
+  // 判断兄弟元素是否像侧栏：含知乎侧栏特征文本，或明显比主列窄
+  function looksLikeSidebar(sib, colWidth) {
+    var text = '';
+    try { text = sib.textContent || ''; } catch (e) {}
+    if (text.indexOf('关于作者') !== -1 || text.indexOf('大家都在搜') !== -1 ||
+        text.indexOf('相关阅读') !== -1 || text.indexOf('推荐阅读') !== -1) return true;
+    var w = sib.getBoundingClientRect().width;
+    return w > 0 && colWidth > 0 && w < colWidth * 0.75;
+  }
+
+  function detectColumn() {
+    // 旧版类名优先（向后兼容旧版布局 / 问答页）
+    var col = PAGE === 'question'
+      ? ($('.Question-mainColumn') || $('.Question-main'))
+      : $('.Post-Row-Content-left');
+
+    if (!col) {
+      // 新版布局：以文章卡片为锚点，向上找第一个"兄弟像侧栏"的祖先作为列容器
+      var anchor = PAGE === 'question'
+        ? ($('.QuestionHeader') || $('.List-item'))
+        : ($('.Post-Main.Post-NormalMain') || $('.Post-RichTextContainer') || $('.Post-Title'));
+      var el = anchor ? anchor.parentElement : null;
+      var depth = 0;
+      while (el && el !== document.body && el !== document.documentElement && depth < 8) {
+        var parent = el.parentElement;
+        if (!parent || parent === document.body || parent === document.documentElement) break;
+        var colW = el.getBoundingClientRect().width;
+        var sidebarSibs = [];
+        var kids = parent.children;
+        for (var i = 0; i < kids.length; i++) {
+          var sib = kids[i];
+          if (sib === el) continue;
+          // 已被我们标记隐藏的侧栏，直接认定（保证重复探测幂等稳定）
+          if (sib.classList && sib.classList.contains('pp-side')) { sidebarSibs.push(sib); continue; }
+          if (isOurUI(sib)) continue;
+          if (looksLikeSidebar(sib, colW)) sidebarSibs.push(sib);
+        }
+        if (sidebarSibs.length) {
+          col = el;
+          sidebarSibs.forEach(function (s) { s.classList.add('pp-side'); });
+          break;
+        }
+        el = parent;
+        depth++;
+      }
+      // 退化策略：没找到明确侧栏时，取第一个"有真实兄弟元素"的祖先作为列（只定列，不隐藏兄弟）
+      if (!col && anchor) {
+        el = anchor.parentElement;
+        depth = 0;
+        while (el && el !== document.body && el !== document.documentElement && depth < 8) {
+          var p = el.parentElement;
+          if (!p || p === document.body || p === document.documentElement) break;
+          var realSibs = 0;
+          for (var j = 0; j < p.children.length; j++) {
+            if (p.children[j] !== el && !isOurUI(p.children[j])) realSibs++;
+          }
+          if (realSibs > 0) { col = el; break; }
+          el = p;
+          depth++;
+        }
+      }
+      // 最终退路：直接用文章卡片本身
+      if (!col && anchor) col = anchor;
+    }
+
+    if (col) {
+      col.classList.add('pp-col');
+      // 解除祖先宽度限制，避免拖拽到宽档时被外层容器卡住
+      var up = col.parentElement;
+      var n = 0;
+      while (up && up !== document.body && n < 8) {
+        up.classList.add('pp-uncap');
+        up = up.parentElement;
+        n++;
+      }
+    }
+
+    // 清理过期标记（知乎 SPA 重渲染 / 之前探测路径不同导致的多余 .pp-col）
+    $$('.pp-col').forEach(function (el2) {
+      if (el2 !== col) el2.classList.remove('pp-col');
+    });
+
+    _ppCol = col || null;
+    return _ppCol;
+  }
+
   // 获取当前内容主元素（宽度由它决定）
   function getContentEl() {
-    if (PAGE === 'question') {
-      return $('.Question-mainColumn') || $('.Question-main');
-    }
-    return $('.Post-Row-Content-left');
+    if (_ppCol && document.contains(_ppCol)) return _ppCol;
+    return detectColumn();
   }
 
   function buildDragHandles() {
@@ -971,10 +1085,12 @@
       if (PAGE === 'question') {
         style.textContent =
           '.Question-mainColumn{max-width:' + w + 'px!important;}' +
-          '.QuestionHeader{max-width:' + w + 'px!important;}';
+          '.QuestionHeader{max-width:' + w + 'px!important;}' +
+          '.pp-col{max-width:' + w + 'px!important;}';
       } else {
         style.textContent =
-          '.Post-Row-Content-left{max-width:' + w + 'px!important;}';
+          '.Post-Row-Content-left{max-width:' + w + 'px!important;}' +
+          '.pp-col{max-width:' + w + 'px!important;}';
       }
       appendToHead(style);
     }
@@ -1161,6 +1277,9 @@
     // 重建目录（专栏：新增标题；问答：新加载的回答）
     buildTOC();
 
+    // [v2.6] 重新探测列容器（知乎可能异步渲染/改版）
+    detectColumn();
+
     // 重新定位拖拽手柄（内容可能已加载，宽高变化）
     if (_dragHandles) _dragHandles.reposition();
 
@@ -1226,12 +1345,17 @@
       // [新增] 构建拖拽手柄
       buildDragHandles();
 
+      // [v2.6] 立即探测一次列容器并定位手柄
+      detectColumn();
+      if (_dragHandles) _dragHandles.reposition();
+
       // 优化：只绑定一次滚动监听，进度条 + TOC 高亮共用
       bindScroll();
       bindKeyboard();
 
       // 绑定图片点击 + 问答页杂项清理
       setTimeout(function () {
+        detectColumn(); // [v2.6] 延迟再探测一次，确保内容已渲染
         bindImages();
         if (PAGE === 'question') pruneQuestionJunk();
         // 延迟定位手柄，确保内容已渲染
