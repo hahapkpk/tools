@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         知乎 · Paper Press 阅读模式
 // @namespace    https://github.com/hahapkpk/tools
-// @version      2.4.1
-// @description  知乎专栏 / 问答页 → 杂志风格沉浸阅读：悬浮目录 · 代码高亮 · 图片灯箱 · 深色模式 · 阅读进度 · 字号/宽度调节 · 代码复制 · 键盘快捷键
+// @version      2.5.0
+// @description  知乎专栏 / 问答页 → 杂志风格沉浸阅读：悬浮目录 · 代码高亮 · 图片灯箱 · 深色模式 · 阅读进度 · 字号/宽度调节 · 代码复制 · 键盘快捷键 · 拖拽调宽
 // @author       hahapkpk
 // @match        https://zhuanlan.zhihu.com/p/*
 // @match        https://www.zhihu.com/question/*
@@ -112,6 +112,16 @@
     },
     set width(v) {
       try { localStorage.setItem('pp_width', v); } catch (e) {}
+    },
+    // [新增] 自定义宽度（像素），拖拽时持久化
+    get customWidth() {
+      try {
+        var v = parseInt(localStorage.getItem('pp_customWidth'));
+        return isNaN(v) ? 860 : v;
+      } catch (e) { return 860; }
+    },
+    set customWidth(v) {
+      try { localStorage.setItem('pp_customWidth', v); } catch (e) {}
     },
   };
 
@@ -361,6 +371,7 @@
       '#pp-panel .pp-panel-label{font-size:8px;display:block;color:' + T.textFaint + ';margin-top:1px;}',
       '#pp-panel button:hover .pp-panel-label{color:' + T.accent + ';}',
       '#pp-panel .pp-sep{height:1px;background:' + T.rule + ';margin:2px 0;}',
+      '#pp-panel .pp-width-display{font-size:8px;text-align:center;color:' + T.textFaint + ';padding:1px 0 2px;font-family:' + FONTS.mono + ';line-height:1.3;}',
 
       '/* ── 图片灯箱 ── */',
       '#pp-lightbox{position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;cursor:zoom-out;opacity:0;pointer-events:none;transition:opacity 0.25s;}',
@@ -378,9 +389,21 @@
       '#pp-toc a.pp-toc-h2{padding-left:14px;font-weight:500;}',
       '#pp-toc a.pp-toc-h3{padding-left:24px;font-size:11px;}',
 
-      '/* 宽度模式 */',
+      '/* 宽度模式（预设） */',
       '.pp-width-narrow .Post-Row-Content-left{max-width:620px!important;}',
       '.pp-width-wide .Post-Row-Content-left{max-width:1100px!important;}',
+
+      // ════════════════════════════════════════════════════════════
+      // [新增] 拖拽调宽手柄
+      // ════════════════════════════════════════════════════════════
+      '.pp-drag-handle{position:fixed;top:50%;transform:translateY(-50%);width:18px;height:120px;z-index:9996;display:flex;align-items:center;justify-content:center;cursor:ew-resize;}',
+      '.pp-drag-grip{width:3px;height:40px;border-radius:3px;background:' + T.rule + ';opacity:0.3;transition:opacity 0.2s,width 0.2s,background 0.2s,box-shadow 0.2s;}',
+      '.pp-drag-handle:hover .pp-drag-grip{opacity:0.85;width:5px;background:' + T.accent + ';box-shadow:0 0 8px ' + T.accentGlow + ';}',
+      '.pp-drag-handle:active .pp-drag-grip{opacity:1;width:5px;background:' + T.accent + ';}',
+      '.pp-dragging,.pp-dragging *{cursor:ew-resize!important;user-select:none!important;-webkit-user-select:none!important;}',
+      '.pp-dragging .pp-drag-grip{opacity:1!important;width:5px!important;background:' + T.accent + '!important;}',
+      '#pp-drag-tooltip{position:fixed;display:none;top:70px;left:50%;transform:translateX(-50%);padding:6px 16px;font-family:' + FONTS.body + ';font-size:13px;font-weight:600;color:#fff;background:' + T.accent + ';border-radius:6px;pointer-events:none;z-index:99999;white-space:nowrap;box-shadow:0 4px 16px ' + T.accentGlow + ';}',
+      '#pp-drag-tooltip::after{content:"";position:absolute;bottom:-4px;left:50%;transform:translateX(-50%) rotate(45deg);width:8px;height:8px;background:' + T.accent + ';}',
 
       '/* ── 响应式 ── */',
       '@media (max-width:768px){',
@@ -391,9 +414,11 @@
       '.Post-RichTextContainer h3{line-height:1.4!important;}',
       '.Post-RichTextContainer pre{padding:16px!important;}',
       '#pp-toc{display:none!important;}',
+      '.pp-drag-handle{display:none!important;}', // 移动端隐藏拖拽手柄
       '#pp-panel{position:fixed;top:auto;bottom:16px;right:16px;left:auto;flex-direction:row;justify-content:center;gap:2px;z-index:9997;padding:6px;background:' + T.surface + ';border:1px solid ' + T.rule + ';border-radius:10px;}',
       '#pp-panel button{flex:0;width:44px;height:32px;padding:0;border-radius:6px;font-size:11px;border:none;background:transparent;}',
       '#pp-panel .pp-panel-label{display:none;}',
+      '#pp-panel .pp-width-display{display:none;}',
       '}',
 
       '@media (min-width:769px) and (max-width:1024px){',
@@ -406,7 +431,7 @@
       'body{background:white!important;}',
       '.Post-Main.Post-NormalMain::before,.Post-Main.Post-NormalMain::after{display:none!important;}',
       '.Post-Main.Post-NormalMain{box-shadow:none!important;background:white!important;}',
-      '#pp-progress,#pp-panel,#pp-toc,#pp-lightbox{display:none!important;}',
+      '#pp-progress,#pp-panel,#pp-toc,#pp-lightbox,.pp-drag-handle,#pp-drag-tooltip{display:none!important;}',
       '}',
     ];
 
@@ -489,17 +514,18 @@
       var b = btn(wl.text, wl.sub, function () {
         PREF.width = wl.key;
         applyWidth();
-        $$('#pp-panel .pp-width-btn').forEach(function (bb) { bb.style.borderColor = ''; bb.style.color = ''; });
-        b.style.borderColor = T('accent');
-        b.style.color = T('accent');
+        updateWidthButtons();
       }, wl.title);
       b.className = 'pp-width-btn';
-      if (PREF.width === wl.key) {
-        b.style.borderColor = T('accent');
-        b.style.color = T('accent');
-      }
+      b.setAttribute('data-width', wl.key);
       panel.appendChild(b);
     });
+
+    // [新增] 宽度数值显示
+    var widthDisplay = document.createElement('div');
+    widthDisplay.className = 'pp-width-display';
+    widthDisplay.id = 'pp-width-display';
+    panel.appendChild(widthDisplay);
 
     var sep = document.createElement('div');
     sep.className = 'pp-sep';
@@ -538,12 +564,43 @@
 
     document.body.appendChild(panel);
     panel._dmBtn = dmBtn;
+
+    // 初始化按钮高亮 & 宽度显示
+    updateWidthButtons();
+    updateWidthDisplay();
+
     return panel;
   }
 
   function T(key) {
     var mode = PREF.mode;
     return THEMES[mode][key];
+  }
+
+  // [新增] 更新宽度按钮高亮状态
+  function updateWidthButtons() {
+    $$('#pp-panel .pp-width-btn').forEach(function (bb) {
+      if (bb.getAttribute('data-width') === PREF.width) {
+        bb.style.borderColor = T('accent');
+        bb.style.color = T('accent');
+      } else {
+        bb.style.borderColor = '';
+        bb.style.color = '';
+      }
+    });
+    updateWidthDisplay();
+  }
+
+  // [新增] 更新宽度数值显示
+  function updateWidthDisplay() {
+    var el = $('#pp-width-display');
+    if (!el) return;
+    var w;
+    if (PREF.width === 'narrow') w = 620;
+    else if (PREF.width === 'wide') w = 1100;
+    else if (PREF.width === 'custom') w = PREF.customWidth;
+    else w = 860;
+    el.textContent = w + 'px';
   }
 
   // ── 图片灯箱 ──
@@ -682,6 +739,143 @@
   }
 
   // ═══════════════════════════════════════════════════════════════
+  // [新增] 拖拽调宽手柄
+  // ═══════════════════════════════════════════════════════════════
+
+  var _dragHandles = null;
+  var MIN_WIDTH = 420;
+  var MAX_WIDTH = 1600;
+
+  // 获取当前内容主元素（宽度由它决定）
+  function getContentEl() {
+    if (PAGE === 'question') {
+      return $('.Question-mainColumn') || $('.Question-main');
+    }
+    return $('.Post-Row-Content-left');
+  }
+
+  function buildDragHandles() {
+    // 清理旧手柄
+    $$('.pp-drag-handle').forEach(function (el) { el.remove(); });
+    var oldTip = $('#pp-drag-tooltip');
+    if (oldTip) oldTip.remove();
+
+    var leftHandle = document.createElement('div');
+    leftHandle.className = 'pp-drag-handle pp-drag-left';
+    leftHandle.title = '拖拽调整宽度 · 双击恢复标准 (860px)';
+    leftHandle.innerHTML = '<div class="pp-drag-grip"></div>';
+
+    var rightHandle = document.createElement('div');
+    rightHandle.className = 'pp-drag-handle pp-drag-right';
+    rightHandle.title = '拖拽调整宽度 · 双击恢复标准 (860px)';
+    rightHandle.innerHTML = '<div class="pp-drag-grip"></div>';
+
+    var tooltip = document.createElement('div');
+    tooltip.id = 'pp-drag-tooltip';
+    tooltip.textContent = '860px';
+
+    document.body.appendChild(leftHandle);
+    document.body.appendChild(rightHandle);
+    document.body.appendChild(tooltip);
+
+    // ── 定位手柄到内容区域左右边缘 ──
+    function reposition() {
+      var content = getContentEl();
+      if (!content) {
+        leftHandle.style.display = 'none';
+        rightHandle.style.display = 'none';
+        return;
+      }
+      var rect = content.getBoundingClientRect();
+      // 内容区域接近全屏宽时隐藏手柄（移动端 / 小窗口）
+      if (rect.width < window.innerWidth - 80) {
+        leftHandle.style.display = '';
+        rightHandle.style.display = '';
+        // 手柄贴在内容边缘外侧
+        leftHandle.style.left = (rect.left - 9) + 'px';
+        rightHandle.style.left = (rect.right - 9) + 'px';
+      } else {
+        leftHandle.style.display = 'none';
+        rightHandle.style.display = 'none';
+      }
+    }
+
+    // ── 拖拽逻辑 ──
+    // 内容居中 (margin:0 auto)，拖右边缘向右 delta → 宽度 +2*delta（左右对称扩展）
+    // 拖左边缘向左 delta(<0) → 宽度 -2*delta = 宽度 + 2*|delta|
+    function startDrag(e, isRight) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      var content = getContentEl();
+      if (!content) return;
+      var startWidth = content.getBoundingClientRect().width;
+      var startX = e.clientX;
+
+      tooltip.style.display = 'block';
+      tooltip.textContent = Math.round(startWidth) + 'px';
+
+      function onMove(ev) {
+        var delta = ev.clientX - startX;
+        // 右手柄：向右拖加宽；左手柄：向左拖加宽
+        var newWidth = isRight
+          ? startWidth + 2 * delta
+          : startWidth - 2 * delta;
+        newWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, newWidth));
+        newWidth = Math.round(newWidth);
+
+        // 写入偏好并应用
+        PREF.width = 'custom';
+        PREF.customWidth = newWidth;
+        applyWidth();
+
+        // 实时提示
+        tooltip.textContent = newWidth + 'px';
+
+        // 更新按钮状态 & 显示
+        updateWidthButtons();
+      }
+
+      function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.body.classList.remove('pp-dragging');
+        tooltip.style.display = 'none';
+        reposition();
+      }
+
+      document.body.classList.add('pp-dragging');
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    }
+
+    // ── 双击重置为标准宽度 ──
+    function onDblClick(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      PREF.width = 'standard';
+      PREF.customWidth = 860;
+      applyWidth();
+      updateWidthButtons();
+      reposition();
+    }
+
+    on(leftHandle, 'mousedown', function (e) { startDrag(e, false); });
+    on(rightHandle, 'mousedown', function (e) { startDrag(e, true); });
+    on(leftHandle, 'dblclick', onDblClick);
+    on(rightHandle, 'dblclick', onDblClick);
+
+    // 窗口大小变化时重新定位
+    on(window, 'resize', rafThrottle(reposition));
+
+    // 滚动时重新定位（防止滚动条出现/消失导致内容水平偏移）
+    on(window, 'scroll', rafThrottle(reposition), { passive: true });
+
+    _dragHandles = { reposition: reposition };
+    return _dragHandles;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
   // 主题 / 字号 / 宽度 应用
   // ═══════════════════════════════════════════════════════════════
 
@@ -745,8 +939,33 @@
 
   function applyWidth() {
     document.body.classList.remove('pp-width-narrow', 'pp-width-wide');
-    if (PREF.width === 'narrow') document.body.classList.add('pp-width-narrow');
-    if (PREF.width === 'wide') document.body.classList.add('pp-width-wide');
+
+    // 清除旧的自定义宽度样式
+    var customStyle = document.getElementById('pp-width-custom');
+    if (customStyle) customStyle.remove();
+
+    if (PREF.width === 'narrow') {
+      document.body.classList.add('pp-width-narrow');
+    } else if (PREF.width === 'wide') {
+      document.body.classList.add('pp-width-wide');
+    } else if (PREF.width === 'custom') {
+      // [新增] 注入自定义宽度样式
+      var w = PREF.customWidth;
+      var style = document.createElement('style');
+      style.id = 'pp-width-custom';
+      if (PAGE === 'question') {
+        style.textContent =
+          '.Question-mainColumn{max-width:' + w + 'px!important;}' +
+          '.QuestionHeader{max-width:' + w + 'px!important;}';
+      } else {
+        style.textContent =
+          '.Post-Row-Content-left{max-width:' + w + 'px!important;}';
+      }
+      appendToHead(style);
+    }
+
+    // 重新定位拖拽手柄
+    if (_dragHandles) _dragHandles.reposition();
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -927,6 +1146,9 @@
     // 重建目录（专栏：新增标题；问答：新加载的回答）
     buildTOC();
 
+    // 重新定位拖拽手柄（内容可能已加载，宽高变化）
+    if (_dragHandles) _dragHandles.reposition();
+
     if (_dynObserver && _observerTarget) {
       _dynObserver.observe(_observerTarget, { childList: true, subtree: true });
     }
@@ -986,6 +1208,9 @@
       _panelRef = buildPanel();
       lb = buildLightbox();
 
+      // [新增] 构建拖拽手柄
+      buildDragHandles();
+
       // 优化：只绑定一次滚动监听，进度条 + TOC 高亮共用
       bindScroll();
       bindKeyboard();
@@ -994,6 +1219,8 @@
       setTimeout(function () {
         bindImages();
         if (PAGE === 'question') pruneQuestionJunk();
+        // 延迟定位手柄，确保内容已渲染
+        if (_dragHandles) _dragHandles.reposition();
       }, 400);
       if (PAGE === 'question') {
         setTimeout(pruneQuestionJunk, 1200);
