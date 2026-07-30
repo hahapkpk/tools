@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         知乎 · Paper Press 阅读模式
 // @namespace    https://github.com/hahapkpk/tools
-// @version      2.6.0
-// @description  知乎专栏 / 问答页 → 杂志风格沉浸阅读：悬浮目录 · 代码高亮 · 图片灯箱 · 深色模式 · 阅读进度 · 字号/宽度调节 · 代码复制 · 键盘快捷键 · 拖拽调宽 · 适配知乎新版布局
+// @version      2.7.0
+// @description  知乎专栏 / 问答页 → 杂志风格沉浸阅读：悬浮目录 · 代码高亮 · 图片灯箱 · 深色模式(可跟随系统) · 阅读进度/位置记忆 · 字号/行距/宽度调节 · 代码复制/折叠 · 键盘快捷键 · 拖拽调宽 · 适配知乎新版布局 · CDN 多镜像兜底
 // @author       hahapkpk
 // @match        https://zhuanlan.zhihu.com/p/*
 // @match        https://www.zhihu.com/question/*
@@ -91,8 +91,8 @@
 
   var PREF = {
     get mode() {
-      try { return localStorage.getItem('pp_mode') || 'light'; }
-      catch (e) { return 'light'; }
+      try { return localStorage.getItem('pp_mode') || 'auto'; }
+      catch (e) { return 'auto'; }
     },
     set mode(v) {
       try { localStorage.setItem('pp_mode', v); } catch (e) {}
@@ -105,6 +105,16 @@
     },
     set fontSize(v) {
       try { localStorage.setItem('pp_fontSize', v); } catch (e) {}
+    },
+    // [v2.7] 行距（倍数），范围 1.6 ~ 2.2
+    get lineHeight() {
+      try {
+        var v = parseFloat(localStorage.getItem('pp_lineHeight'));
+        return isNaN(v) ? 1.85 : v;
+      } catch (e) { return 1.85; }
+    },
+    set lineHeight(v) {
+      try { localStorage.setItem('pp_lineHeight', v); } catch (e) {}
     },
     get width() {
       try { return localStorage.getItem('pp_width') || 'standard'; }
@@ -132,6 +142,16 @@
   function $(sel, ctx) { return (ctx || document).querySelector(sel); }
   function $$(sel, ctx) { return (ctx || document).querySelectorAll(sel); }
   function on(el, ev, fn, opts) { el.addEventListener(ev, fn, opts); }
+
+  // [v2.7] 解析实际主题模式：'auto' 时跟随系统
+  function resolveMode() {
+    var m = PREF.mode;
+    if (m === 'auto') {
+      try { return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+      catch (e) { return 'light'; }
+    }
+    return m === 'dark' ? 'dark' : 'light';
+  }
 
   // 优化：用 rAF 节流高频事件（滚动），避免每次 scroll 都同步执行布局读写
   function rafThrottle(fn) {
@@ -171,8 +191,14 @@
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // Google Fonts
+  // Google Fonts（[v2.7] 多镜像兜底：境外字体服务不稳时切换镜像）
   // ═══════════════════════════════════════════════════════════════
+
+  var FONT_HOSTS = [
+    'https://fonts.googleapis.com',
+    'https://fonts.loli.net',
+    'https://fonts.font.im',
+  ];
 
   function loadFonts() {
     var fonts = [
@@ -183,10 +209,17 @@
       'Noto+Sans+SC:wght@400;500;700',
       'Inter:opsz,wght@14..32,400;14..32,500',
     ];
-    var link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = 'https://fonts.googleapis.com/css2?family=' + fonts.join('&family=') + '&display=swap';
-    appendToHead(link);
+    var path = '/css2?family=' + fonts.join('&family=') + '&display=swap';
+    var i = 0;
+    function tryNext() {
+      if (i >= FONT_HOSTS.length) return; // 全部失败：使用系统字体回退
+      var link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = FONT_HOSTS[i++] + path;
+      link.onerror = function () { link.remove(); tryNext(); };
+      appendToHead(link);
+    }
+    tryNext();
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -344,6 +377,13 @@
       '.pp-copy-btn:hover{background:' + T.accentSoft + ';color:' + T.accent + ';border-color:' + T.accent + ';}',
       '.pp-copy-btn.copied{background:' + T.accent + ';color:#fff;border-color:' + T.accent + ';}',
 
+      /* [v2.7] 代码块语言标签 + 折叠 */
+      '.pp-code-lang{position:absolute;top:10px;left:16px;font-family:' + FONTS.mono + ';font-size:11px;color:' + T.textFaint + ';text-transform:uppercase;letter-spacing:0.08em;pointer-events:none;user-select:none;}',
+      '.Post-RichTextContainer pre.pp-code-collapsed,.ztext pre.pp-code-collapsed{max-height:300px!important;overflow:hidden!important;}',
+      '.Post-RichTextContainer pre.pp-code-collapsed::after,.ztext pre.pp-code-collapsed::after{content:"";position:absolute;left:0;right:0;bottom:0;height:72px;background:linear-gradient(transparent,' + T.surface3 + ');pointer-events:none;}',
+      '.pp-code-toggle{position:absolute;bottom:10px;left:50%;transform:translateX(-50%);padding:3px 14px;font-family:' + FONTS.body + ';font-size:12px;background:' + T.surface2 + ';color:' + T.textMute + ';border:1px solid ' + T.rule + ';border-radius:4px;cursor:pointer;z-index:2;transition:all 0.2s;}',
+      '.pp-code-toggle:hover{background:' + T.accentSoft + ';color:' + T.accent + ';border-color:' + T.accent + ';}',
+
       '/* 引用块 */',
       '.Post-RichTextContainer blockquote{font-family:' + FONTS.displayEN + '!important;font-style:italic!important;line-height:1.7!important;color:' + T.textMute + '!important;border-left:3px solid ' + T.accent + '!important;padding:12px 0 12px 24px!important;margin:2em 0!important;background:' + T.surface2 + '!important;border-radius:0 4px 4px 0!important;}',
 
@@ -377,12 +417,21 @@
       '#pp-panel .pp-sep{height:1px;background:' + T.rule + ';margin:2px 0;}',
       '#pp-panel .pp-width-display{font-size:8px;text-align:center;color:' + T.textFaint + ';padding:1px 0 2px;font-family:' + FONTS.mono + ';line-height:1.3;}',
 
+      /* [v2.7] 专注模式：f 键隐藏全部浮动 UI */
+      '.pp-focus #pp-panel,.pp-focus #pp-toc,.pp-focus .pp-drag-handle,.pp-focus #pp-progress{display:none!important;}',
+
       '/* ── 图片灯箱 ── */',
       '#pp-lightbox{position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;cursor:zoom-out;opacity:0;pointer-events:none;transition:opacity 0.25s;}',
       '#pp-lightbox.open{opacity:1;pointer-events:auto;}',
-      '#pp-lightbox img{max-width:92vw;max-height:92vh;border-radius:4px;box-shadow:0 40px 120px rgba(0,0,0,0.5);}',
+      '#pp-lightbox img{max-width:92vw;max-height:92vh;border-radius:4px;box-shadow:0 40px 120px rgba(0,0,0,0.5);cursor:default;}',
       '#pp-lightbox .pp-lb-close{position:fixed;top:20px;right:24px;width:44px;height:44px;border-radius:50%;background:rgba(255,255,255,0.1);color:#fff;font-size:22px;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;}',
       '#pp-lightbox .pp-lb-close:hover{background:rgba(255,255,255,0.2);}',
+      /* [v2.7] 画廊导航按钮与计数 */
+      '#pp-lightbox .pp-lb-nav{position:fixed;top:50%;transform:translateY(-50%);width:48px;height:72px;border-radius:8px;background:rgba(255,255,255,0.08);color:#fff;font-size:32px;line-height:1;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;z-index:2;}',
+      '#pp-lightbox .pp-lb-nav:hover{background:rgba(255,255,255,0.2);}',
+      '#pp-lightbox .pp-lb-prev{left:24px;}',
+      '#pp-lightbox .pp-lb-next{right:24px;}',
+      '#pp-lightbox .pp-lb-counter{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:4px 14px;border-radius:12px;background:rgba(255,255,255,0.12);color:#fff;font-size:13px;font-family:' + FONTS.body + ';}',
 
       '/* ── 悬浮目录 TOC ── */',
       '#pp-toc{position:fixed;left:16px;top:50%;transform:translateY(-50%);z-index:9998;font-family:' + FONTS.body + ';max-width:180px;max-height:80vh;overflow-y:auto;padding:8px 0;border-radius:8px;background:' + T.surface + ';border:1px solid ' + T.rule + ';box-shadow:0 2px 12px rgba(0,0,0,0.06);}',
@@ -485,6 +534,61 @@
     on(window, 'scroll', onScroll, { passive: true });
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // [v2.7] 阅读位置记忆：按文章 ID 记住滚动位置，30 天过期
+  // ═══════════════════════════════════════════════════════════════
+
+  var POS_KEY = (function () {
+    var m = location.pathname.match(/\/p\/(\d+)/) || location.pathname.match(/\/question\/(\d+)/);
+    return m ? 'pp_pos_' + (m[1] || m[2]) : null;
+  })();
+
+  function saveScrollPos() {
+    if (!POS_KEY) return;
+    try { localStorage.setItem(POS_KEY, (window.scrollY || 0) + '|' + Date.now()); } catch (e) {}
+  }
+
+  function restoreScrollPos() {
+    if (!POS_KEY) return;
+    var y = 0;
+    try {
+      var raw = localStorage.getItem(POS_KEY);
+      if (raw) y = parseInt(raw.split('|')[0]) || 0;
+    } catch (e) {}
+    if (y < 100) return;
+    // 等内容渲染到足够高度再跳转
+    var tries = 0;
+    var timer = setInterval(function () {
+      tries++;
+      if (document.documentElement.scrollHeight > y + window.innerHeight || tries > 12) {
+        clearInterval(timer);
+        window.scrollTo({ top: y, behavior: 'auto' });
+      }
+    }, 300);
+  }
+
+  // 清理 30 天前的历史位置记录，避免 localStorage 膨胀
+  function pruneScrollPos() {
+    try {
+      var cutoff = Date.now() - 30 * 24 * 3600 * 1000;
+      var dead = [];
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (!k || k.indexOf('pp_pos_') !== 0) continue;
+        var ts = parseInt((localStorage.getItem(k) || '').split('|')[1]) || 0;
+        if (ts < cutoff) dead.push(k);
+      }
+      dead.forEach(function (k) { localStorage.removeItem(k); });
+    } catch (e) {}
+  }
+
+  function bindScrollPos() {
+    var saveDeb = debounce(saveScrollPos, 500);
+    on(window, 'scroll', saveDeb, { passive: true });
+    on(window, 'beforeunload', saveScrollPos);
+    pruneScrollPos();
+  }
+
   // ── 阅读进度条 ──
   function buildProgressBar() {
     var bar = document.createElement('div');
@@ -495,6 +599,10 @@
 
   // ── 侧边按钮面板 ──
   function buildPanel() {
+    // [v2.7] 幂等：脚本晚注入（body 已存在）时避免重复面板
+    var oldPanel = document.getElementById('pp-panel');
+    if (oldPanel) oldPanel.remove();
+
     var panel = document.createElement('div');
     panel.id = 'pp-panel';
 
@@ -550,15 +658,33 @@
     panel.appendChild(fsDown);
     panel.appendChild(fsUp);
 
+    // [v2.7] 行距调节
+    var lhDown = btn('行-', '行距', function () {
+      var cur = PREF.lineHeight;
+      if (cur > 1.6) { PREF.lineHeight = (Math.round(cur * 10) - 1) / 10; applyLineHeight(); }
+    }, '减小行距 ( [ )');
+    var lhUp = btn('行+', '行距', function () {
+      var cur = PREF.lineHeight;
+      if (cur < 2.2) { PREF.lineHeight = (Math.round(cur * 10) + 1) / 10; applyLineHeight(); }
+    }, '增大行距 ( ] )');
+    panel.appendChild(lhDown);
+    panel.appendChild(lhUp);
+
     var sep2 = document.createElement('div');
     sep2.className = 'pp-sep';
     panel.appendChild(sep2);
 
-    var dmBtn = btn(PREF.mode === 'dark' ? '☀' : '☾', null, function () {
-      var next = PREF.mode === 'light' ? 'dark' : 'light';
+    // [v2.7] 主题按钮：单击切换日/夜，双击恢复跟随系统
+    var resolved0 = resolveMode();
+    var dmBtn = btn(resolved0 === 'dark' ? '☀' : '☾', null, function () {
+      var next = resolveMode() === 'light' ? 'dark' : 'light';
       PREF.mode = next;
       applyTheme(next);
-    }, PREF.mode === 'dark' ? '切换日间模式 ( d )' : '切换夜间模式 ( d )');
+    }, '切换日夜间 ( d ) · 双击恢复跟随系统' + (PREF.mode === 'auto' ? '（当前：自动）' : ''));
+    on(dmBtn, 'dblclick', function () {
+      PREF.mode = 'auto';
+      applyTheme(resolveMode());
+    });
     panel.appendChild(dmBtn);
 
     var sep3 = document.createElement('div');
@@ -581,7 +707,7 @@
   }
 
   function T(key) {
-    var mode = PREF.mode;
+    var mode = resolveMode();
     return THEMES[mode][key];
   }
 
@@ -611,22 +737,57 @@
     el.textContent = w + 'px';
   }
 
-  // ── 图片灯箱 ──
+  // ── 图片灯箱（[v2.7] 画廊模式：多图 ←/→ 切换 + 计数）──
   function buildLightbox() {
     var lb = document.createElement('div');
     lb.id = 'pp-lightbox';
-    lb.innerHTML = '<img src="" alt=""><button class="pp-lb-close">×</button>';
+    lb.innerHTML = '<img src="" alt="">' +
+      '<button class="pp-lb-close">×</button>' +
+      '<button class="pp-lb-nav pp-lb-prev">‹</button>' +
+      '<button class="pp-lb-nav pp-lb-next">›</button>' +
+      '<div class="pp-lb-counter"></div>';
     document.body.appendChild(lb);
 
     var img = $('img', lb);
     var closeBtn = $('.pp-lb-close', lb);
+    var prevBtn = $('.pp-lb-prev', lb);
+    var nextBtn = $('.pp-lb-next', lb);
+    var counter = $('.pp-lb-counter', lb);
 
-    function open(src) {
+    var gallery = [];
+    var idx = -1;
+
+    function show(i) {
+      if (!gallery.length) return;
+      idx = (i + gallery.length) % gallery.length;
+      img.src = gallery[idx].getAttribute('data-original') || gallery[idx].src;
+      counter.textContent = (idx + 1) + ' / ' + gallery.length;
+      var multi = gallery.length > 1;
+      prevBtn.style.display = multi ? '' : 'none';
+      nextBtn.style.display = multi ? '' : 'none';
+      counter.style.display = multi ? '' : 'none';
+    }
+
+    function open(src, el) {
+      // 收集正文内全部图片构成画廊
+      gallery = Array.prototype.filter.call($$(SCOPE + ' figure img, ' + SCOPE + ' img'), function (im) {
+        var s = im.getAttribute('data-original') || im.src;
+        return s && !s.startsWith('data:');
+      });
       img.src = src;
       lb.classList.add('open');
       // 修复：加上 pp-lightbox-open 标记，让 cleanupDOM 的守卫真正生效，避免背景漏滚
       document.body.classList.add('pp-lightbox-open');
       document.body.style.overflow = 'hidden';
+      var i = el ? gallery.indexOf(el) : -1;
+      if (i >= 0) {
+        show(i);
+      } else {
+        gallery = [];
+        prevBtn.style.display = 'none';
+        nextBtn.style.display = 'none';
+        counter.style.display = 'none';
+      }
     }
     function close() {
       lb.classList.remove('open');
@@ -634,9 +795,16 @@
       document.body.style.overflow = '';
       img.src = '';
     }
-    on(lb, 'click', function (e) { if (e.target !== img) close(); });
+    on(lb, 'click', function (e) { if (e.target === lb) close(); });
     on(closeBtn, 'click', close);
-    on(document, 'keydown', function (e) { if (e.key === 'Escape') close(); });
+    on(prevBtn, 'click', function (e) { e.stopPropagation(); show(idx - 1); });
+    on(nextBtn, 'click', function (e) { e.stopPropagation(); show(idx + 1); });
+    on(document, 'keydown', function (e) {
+      if (!lb.classList.contains('open')) return;
+      if (e.key === 'Escape') close();
+      else if (e.key === 'ArrowLeft') show(idx - 1);
+      else if (e.key === 'ArrowRight') show(idx + 1);
+    });
 
     return { open: open, close: close };
   }
@@ -664,6 +832,45 @@
         });
       });
       pre.appendChild(btn);
+    });
+  }
+
+  // ── [v2.7] 代码块装饰：语言标签 + 长代码折叠 ──
+  var CODE_FOLD_LINES = 14;
+
+  function decorateCodeBlocks() {
+    $$(SCOPE + ' pre').forEach(function (pre) {
+      if (pre._ppDecorated) return;
+      pre._ppDecorated = true;
+      var code = pre.querySelector('code');
+      if (!code) return;
+
+      // 语言标签（取自 class="language-xxx"）
+      var lang = '';
+      var cls = code.className || '';
+      var m = cls.match(/language-([a-zA-Z0-9+#-]+)/) || cls.match(/lang-([a-zA-Z0-9+#-]+)/);
+      if (m) lang = m[1];
+      if (lang) {
+        var tag = document.createElement('span');
+        tag.className = 'pp-code-lang';
+        tag.textContent = lang;
+        pre.appendChild(tag);
+      }
+
+      // 长代码折叠：超过 CODE_FOLD_LINES 行默认收起
+      var lines = (code.textContent || '').split('\n').length;
+      if (lines > CODE_FOLD_LINES) {
+        pre.classList.add('pp-code-collapsed');
+        var toggle = document.createElement('button');
+        toggle.className = 'pp-code-toggle';
+        toggle.textContent = '展开全部 ' + lines + ' 行';
+        on(toggle, 'click', function (e) {
+          e.stopPropagation();
+          var collapsed = pre.classList.toggle('pp-code-collapsed');
+          toggle.textContent = collapsed ? ('展开全部 ' + lines + ' 行') : '收起';
+        });
+        pre.appendChild(toggle);
+      }
     });
   }
 
@@ -932,20 +1139,29 @@
     // ── 拖拽逻辑 ──
     // 内容居中 (margin:0 auto)，拖右边缘向右 delta → 宽度 +2*delta（左右对称扩展）
     // 拖左边缘向左 delta(<0) → 宽度 -2*delta = 宽度 + 2*|delta|
+    // [v2.7] 同时支持鼠标与触屏
     function startDrag(e, isRight) {
       e.preventDefault();
       e.stopPropagation();
 
+      var isTouch = e.type === 'touchstart';
+      var moveEv = isTouch ? 'touchmove' : 'mousemove';
+      var endEv = isTouch ? 'touchend' : 'mouseup';
+      function pointX(ev) {
+        return (ev.touches && ev.touches[0]) ? ev.touches[0].clientX : ev.clientX;
+      }
+
       var content = getContentEl();
       if (!content) return;
       var startWidth = content.getBoundingClientRect().width;
-      var startX = e.clientX;
+      var startX = pointX(e);
 
       tooltip.style.display = 'block';
       tooltip.textContent = Math.round(startWidth) + 'px';
 
       function onMove(ev) {
-        var delta = ev.clientX - startX;
+        if (isTouch && ev.cancelable) ev.preventDefault(); // 阻止页面滚动
+        var delta = pointX(ev) - startX;
         // 右手柄：向右拖加宽；左手柄：向左拖加宽
         var newWidth = isRight
           ? startWidth + 2 * delta
@@ -966,16 +1182,16 @@
       }
 
       function onUp() {
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
+        document.removeEventListener(moveEv, onMove);
+        document.removeEventListener(endEv, onUp);
         document.body.classList.remove('pp-dragging');
         tooltip.style.display = 'none';
         reposition();
       }
 
       document.body.classList.add('pp-dragging');
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
+      document.addEventListener(moveEv, onMove, isTouch ? { passive: false } : undefined);
+      document.addEventListener(endEv, onUp);
     }
 
     // ── 双击重置为标准宽度 ──
@@ -991,6 +1207,8 @@
 
     on(leftHandle, 'mousedown', function (e) { startDrag(e, false); });
     on(rightHandle, 'mousedown', function (e) { startDrag(e, true); });
+    on(leftHandle, 'touchstart', function (e) { startDrag(e, false); }, { passive: false });
+    on(rightHandle, 'touchstart', function (e) { startDrag(e, true); }, { passive: false });
     on(leftHandle, 'dblclick', onDblClick);
     on(rightHandle, 'dblclick', onDblClick);
 
@@ -1011,6 +1229,7 @@
   var currentStyleEl = null;
   var _panelRef = null;
   var _fontSizeOverride = null;
+  var _lhOverride = null;
 
   function rebuildPanel() {
     if (_panelRef) {
@@ -1066,6 +1285,21 @@
     appendToHead(_fontSizeOverride);
   }
 
+  // [v2.7] 行距调节：覆盖正文/列表的行高
+  function applyLineHeight() {
+    var lh = PREF.lineHeight;
+    if (_lhOverride) _lhOverride.remove();
+    _lhOverride = document.createElement('style');
+    _lhOverride.id = 'pp-lh-override';
+    _lhOverride.textContent = [
+      '.Post-RichTextContainer,.ztext{line-height:' + lh + '!important;}',
+      '.Post-RichTextContainer p,.ztext p{line-height:' + lh + '!important;}',
+      '.Post-RichTextContainer li,.ztext li{line-height:' + Math.max(1.4, lh - 0.1).toFixed(2) + '!important;}',
+      '.Post-RichTextContainer blockquote,.ztext blockquote{line-height:' + Math.max(1.4, lh - 0.15).toFixed(2) + '!important;}',
+    ].join('\n');
+    appendToHead(_lhOverride);
+  }
+
   function applyWidth() {
     document.body.classList.remove('pp-width-narrow', 'pp-width-wide');
 
@@ -1105,25 +1339,47 @@
 
   var _hljsThemeEl = null;
 
+  // [v2.7] highlight.js 多镜像兜底：主 CDN 失败时依次切换国内镜像，全部失败则静默降级（仅无高亮）
+  var HLJS_HOSTS = [
+    'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0',
+    'https://cdn.staticfile.org/highlight.js/11.9.0',
+    'https://lib.baomitu.com/highlight.js/11.9.0',
+  ];
+
   function loadHighlightJS(cb) {
-    // 根据当前模式加载对应的高亮主题
-    var isDark = PREF.mode === 'dark';
-    var themeUrl = isDark
-      ? 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css'
-      : 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css';
+    var isDark = resolveMode() === 'dark';
+    var themeFile = isDark ? '/styles/github-dark.min.css' : '/styles/github.min.css';
+    var i = 0;
+    function tryNext() {
+      if (i >= HLJS_HOSTS.length) {
+        if (cb) cb();
+        return;
+      }
+      var base = HLJS_HOSTS[i++];
+      var link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = base + themeFile;
+      appendToHead(link);
 
-    var link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = themeUrl;
-    appendToHead(link);
-
-    var script = document.createElement('script');
-    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js';
-    script.onload = function () {
-      applyHighlightTheme(PREF.mode);
-      if (cb) cb();
-    };
-    appendToHead(script);
+      var script = document.createElement('script');
+      script.src = base + '/highlight.min.js';
+      var settled = false;
+      script.onload = function () {
+        if (settled) return;
+        settled = true;
+        applyHighlightTheme(resolveMode());
+        if (cb) cb();
+      };
+      script.onerror = function () {
+        if (settled) return;
+        settled = true;
+        script.remove();
+        link.remove();
+        tryNext();
+      };
+      appendToHead(script);
+    }
+    tryNext();
   }
 
   // 修复：暗色模式下覆盖 hljs 颜色以适配我们的主题
@@ -1192,9 +1448,24 @@
         case '+':
           if (PREF.fontSize < 24) { PREF.fontSize = PREF.fontSize + 2; applyFontSize(); }
           break;
+        case '[':
+        case '{':
+          if (PREF.lineHeight > 1.6) { PREF.lineHeight = (Math.round(PREF.lineHeight * 10) - 1) / 10; applyLineHeight(); }
+          break;
+        case ']':
+        case '}':
+          if (PREF.lineHeight < 2.2) { PREF.lineHeight = (Math.round(PREF.lineHeight * 10) + 1) / 10; applyLineHeight(); }
+          break;
+        case 'f':
+        case 'F':
+          document.body.classList.toggle('pp-focus');
+          break;
+        case 'Escape':
+          document.body.classList.remove('pp-focus');
+          break;
         case 'd':
         case 'D':
-          var next = PREF.mode === 'light' ? 'dark' : 'light';
+          var next = resolveMode() === 'light' ? 'dark' : 'light';
           PREF.mode = next;
           applyTheme(next);
           break;
@@ -1229,9 +1500,18 @@
     if (cleaned !== title) document.title = cleaned;
 
     removeJunk();
+    // 前 15 秒：全子树监听（首屏异步渲染密集）
     var obs = new MutationObserver(removeJunk);
     obs.observe(document.body, { childList: true, subtree: true });
     setTimeout(function () { obs.disconnect(); }, 15000);
+    // [v2.7] 之后长期监听 body 直接子节点：知乎延迟弹出的登录墙/遮罩都挂在 body 下，
+    // 只在有新增节点时才触发，开销极小
+    var obs2 = new MutationObserver(function (muts) {
+      for (var i = 0; i < muts.length; i++) {
+        if (muts[i].addedNodes.length) { removeJunk(); return; }
+      }
+    });
+    obs2.observe(document.body, { childList: true });
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -1270,6 +1550,7 @@
     if (_dynObserver) _dynObserver.disconnect();
 
     addCopyButtons();
+    decorateCodeBlocks();
     highlightAll();
     bindImages();
     if (PAGE === 'question') pruneQuestionJunk();
@@ -1288,11 +1569,18 @@
     }
   }
 
-  function observeDynamicContent() {
+  function observeDynamicContent(attempt) {
     var container = PAGE === 'question'
       ? ($('.Question-mainColumn') || $('.Question-main') || $('.ListShortcut'))
       : $('.Post-RichTextContainer');
-    if (!container) return;
+    if (!container) {
+      // [v2.7] 容器尚未渲染：重试最多 ~10 秒（知乎加载慢时不再静默失效）
+      attempt = attempt || 0;
+      if (attempt < 20) setTimeout(function () { observeDynamicContent(attempt + 1); }, 500);
+      return;
+    }
+    if (_observerTarget === container && _dynObserver) return; // 已绑定同一容器
+    if (_dynObserver) _dynObserver.disconnect();
     _observerTarget = container;
 
     // 优化：防抖聚合知乎的连续异步渲染，减少无谓的多次处理
@@ -1310,6 +1598,26 @@
     _dynObserver.observe(container, { childList: true, subtree: true });
   }
 
+  // [v2.7] 看门狗：SPA 换文（URL 变化）/ observer 目标脱离文档时自动重绑
+  var _lastHref = location.href;
+
+  function startWatchdog() {
+    setInterval(function () {
+      if (location.href !== _lastHref) {
+        _lastHref = location.href;
+        detectColumn();
+        observeDynamicContent();
+        processDynamicContent();
+        restoreScrollPos();
+        if (_dragHandles) _dragHandles.reposition();
+        return;
+      }
+      if (!_observerTarget || !document.contains(_observerTarget)) {
+        observeDynamicContent();
+      }
+    }, 2000);
+  }
+
   function bindImages() {
     $$(SCOPE + ' figure img, ' + SCOPE + ' img').forEach(function (img) {
       if (img._ppBound) return;
@@ -1317,7 +1625,7 @@
       on(img, 'click', function () {
         var src = img.getAttribute('data-original') || img.src;
         if (src && !src.startsWith('data:')) {
-          lb.open(src);
+          lb.open(src, img);
         }
       });
     });
@@ -1332,8 +1640,17 @@
   function init() {
     loadFonts();
 
-    var mode = PREF.mode;
-    applyTheme(mode);
+    applyTheme(resolveMode());
+
+    // [v2.7] 系统主题变化时，auto 模式下自动跟随
+    try {
+      var mq = window.matchMedia('(prefers-color-scheme: dark)');
+      var onMq = function () {
+        if (PREF.mode === 'auto') applyTheme(resolveMode());
+      };
+      if (mq.addEventListener) mq.addEventListener('change', onMq);
+      else if (mq.addListener) mq.addListener(onMq);
+    } catch (e) {}
 
     function onReady() {
       cleanupDOM();
@@ -1352,6 +1669,9 @@
       // 优化：只绑定一次滚动监听，进度条 + TOC 高亮共用
       bindScroll();
       bindKeyboard();
+      bindScrollPos(); // [v2.7] 阅读位置记忆
+      startWatchdog(); // [v2.7] SPA 换文 / observer 失效自动重绑
+      setTimeout(restoreScrollPos, 700); // [v2.7] 恢复上次阅读位置
 
       // 绑定图片点击 + 问答页杂项清理
       setTimeout(function () {
@@ -1369,8 +1689,9 @@
       // 代码高亮
       loadHighlightJS(function () {
         addCopyButtons();
+        decorateCodeBlocks();
         highlightAll();
-        setTimeout(function () { addCopyButtons(); highlightAll(); }, 1000);
+        setTimeout(function () { addCopyButtons(); decorateCodeBlocks(); highlightAll(); }, 1000);
       });
 
       // TOC
@@ -1381,6 +1702,7 @@
 
       // 应用偏好
       applyFontSize();
+      applyLineHeight();
       applyWidth();
 
       // 修复：持续监听知乎的异步渲染
