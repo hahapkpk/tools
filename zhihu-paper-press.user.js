@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         知乎 · Paper Press 阅读模式
 // @namespace    https://github.com/hahapkpk/tools
-// @version      2.5.0
+// @version      2.5.1
 // @description  知乎专栏 / 问答页 → 杂志风格沉浸阅读：悬浮目录 · 代码高亮 · 图片灯箱 · 深色模式 · 阅读进度 · 字号/宽度调节 · 代码复制 · 键盘快捷键 · 拖拽调宽
 // @author       hahapkpk
 // @match        https://zhuanlan.zhihu.com/p/*
@@ -396,12 +396,16 @@
       // ════════════════════════════════════════════════════════════
       // [新增] 拖拽调宽手柄
       // ════════════════════════════════════════════════════════════
-      '.pp-drag-handle{position:fixed;top:50%;transform:translateY(-50%);width:18px;height:120px;z-index:9996;display:flex;align-items:center;justify-content:center;cursor:ew-resize;}',
-      '.pp-drag-grip{width:3px;height:40px;border-radius:3px;background:' + T.rule + ';opacity:0.3;transition:opacity 0.2s,width 0.2s,background 0.2s,box-shadow 0.2s;}',
-      '.pp-drag-handle:hover .pp-drag-grip{opacity:0.85;width:5px;background:' + T.accent + ';box-shadow:0 0 8px ' + T.accentGlow + ';}',
-      '.pp-drag-handle:active .pp-drag-grip{opacity:1;width:5px;background:' + T.accent + ';}',
+      '.pp-drag-handle{position:fixed;top:50%;transform:translateY(-50%);width:20px;height:160px;z-index:9996;display:flex;align-items:center;justify-content:center;cursor:ew-resize;border-radius:4px;transition:background 0.2s;}',
+      '.pp-drag-handle:hover{background:' + T.accentSoft + ';}',
+      '.pp-drag-grip{width:4px;height:56px;border-radius:3px;background:' + T.accent + ';opacity:0.55;transition:opacity 0.2s,width 0.2s,box-shadow 0.2s;box-shadow:0 0 0 1px rgba(255,255,255,0.3);}',
+      '.pp-drag-handle:hover .pp-drag-grip{opacity:0.95;width:6px;box-shadow:0 0 12px ' + T.accentGlow + ';}',
+      '.pp-drag-handle:active .pp-drag-grip{opacity:1;width:6px;}',
       '.pp-dragging,.pp-dragging *{cursor:ew-resize!important;user-select:none!important;-webkit-user-select:none!important;}',
-      '.pp-dragging .pp-drag-grip{opacity:1!important;width:5px!important;background:' + T.accent + '!important;}',
+      '.pp-dragging .pp-drag-grip{opacity:1!important;width:6px!important;box-shadow:0 0 16px ' + T.accentGlow + '!important;}',
+      // [新增] 首次加载时手柄脉冲动画，吸引注意
+      '@keyframes pp-handle-pulse{0%,100%{opacity:0.55;}50%{opacity:0.9;}}',
+      '.pp-drag-handle.pp-pulse .pp-drag-grip{animation:pp-handle-pulse 1.5s ease-in-out 3;}',
       '#pp-drag-tooltip{position:fixed;display:none;top:70px;left:50%;transform:translateX(-50%);padding:6px 16px;font-family:' + FONTS.body + ';font-size:13px;font-weight:600;color:#fff;background:' + T.accent + ';border-radius:6px;pointer-events:none;z-index:99999;white-space:nowrap;box-shadow:0 4px 16px ' + T.accentGlow + ';}',
       '#pp-drag-tooltip::after{content:"";position:absolute;bottom:-4px;left:50%;transform:translateX(-50%) rotate(45deg);width:8px;height:8px;background:' + T.accent + ';}',
 
@@ -791,13 +795,24 @@
       if (rect.width < window.innerWidth - 80) {
         leftHandle.style.display = '';
         rightHandle.style.display = '';
-        // 手柄贴在内容边缘外侧
-        leftHandle.style.left = (rect.left - 9) + 'px';
-        rightHandle.style.left = (rect.right - 9) + 'px';
+        // 手柄居中对齐到内容边缘（handle 宽 20px，偏移 10px 让 grip 正好落在边缘）
+        leftHandle.style.left = (rect.left - 10) + 'px';
+        rightHandle.style.left = (rect.right - 10) + 'px';
       } else {
         leftHandle.style.display = 'none';
         rightHandle.style.display = 'none';
       }
+    }
+
+    // [新增] 首次加载时脉冲动画，吸引注意（仅当 width 不是 custom 时，避免每次拖拽后都动画）
+    if (PREF.width !== 'custom') {
+      leftHandle.classList.add('pp-pulse');
+      rightHandle.classList.add('pp-pulse');
+      // 动画结束后移除 class
+      setTimeout(function () {
+        leftHandle.classList.remove('pp-pulse');
+        rightHandle.classList.remove('pp-pulse');
+      }, 5000);
     }
 
     // ── 拖拽逻辑 ──
