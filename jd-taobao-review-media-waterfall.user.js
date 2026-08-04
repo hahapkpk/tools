@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.22
+// @version      0.5.23
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -157,7 +157,7 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.22';
+  const SCRIPT_VERSION = '0.5.23';
   const WHEEL_SHIFT_COOLDOWN = 320;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;
@@ -884,6 +884,7 @@
     },
     taobao: {
       allowPageFallback: true,
+      deferNativeOpen: true,
       findMount(doc) {
         return doc.querySelector('[class*="tabTitleList--"]') || doc.querySelector('[class*="Comments--"]');
       },
@@ -1575,6 +1576,9 @@
     doc.body.appendChild(backdrop);
 
     let nativeRoot = null;
+    let nativeOpenRequested = false;
+    let nativeOpenTimer = null;
+    let mediaSyncTimer = null;
     let disconnect = null;
     let attempts = 0;
     let restoredScroll = false;
@@ -1740,7 +1744,15 @@
         }
       });
     }
-    adapter.openNativeReviews(doc);
+    let initialPageItems = [];
+    if (adapter.allowPageFallback) {
+      initialPageItems = adapter.collectMedia(doc);
+      if (initialPageItems.length) {
+        controller.append(initialPageItems);
+        mediaStats.lastAdded = initialPageItems.length;
+        renderWall('正在准备更多评价图片...');
+      }
+    }
     function syncMedia(reset, generation = taskGeneration) {
       if (!isCurrentTask(generation)) return false;
       nativeRoot = adapter.findNativeRoot(doc);
@@ -1760,11 +1772,30 @@
       renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
       if (!disconnect && root.MutationObserver) {
         const observer = new root.MutationObserver(() => {
-          if (!dismissed) syncMedia(false, taskGeneration);
+          scheduleObservedSync(taskGeneration);
         });
         observer.observe(nativeRoot, { childList: true, subtree: true });
         disconnect = () => observer.disconnect();
       }
+      return true;
+    }
+    function scheduleObservedSync(generation) {
+      if (dismissed || mediaSyncTimer) return;
+      mediaSyncTimer = root.setTimeout(() => {
+        mediaSyncTimer = null;
+        if (isCurrentTask(generation)) syncMedia(false, generation);
+      }, 120);
+    }
+    function requestNativeReviews(delay = 0) {
+      if (dismissed || nativeOpenRequested) return false;
+      nativeOpenRequested = true;
+      attempts = 0;
+      nativeOpenTimer = root.setTimeout(() => {
+        nativeOpenTimer = null;
+        if (dismissed) return;
+        adapter.openNativeReviews(doc);
+        waitForNative(taskGeneration);
+      }, delay);
       return true;
     }
     function emitScrollEvents(scroller, distance) {
@@ -1860,11 +1891,17 @@
       }, AUTO_LOAD_SETTLE_DELAY));
     }
     function waitForNative(generation) {
-      if (!isCurrentTask(generation)) return;
-      attempts += 1;
-      if (!syncMedia(attempts === 1 && !controller.items().length, generation) && attempts < 12) {
-        root.setTimeout(() => waitForNative(generation), 250);
+      if (!isCurrentTask(generation)) {
+        nativeOpenRequested = false;
         return;
+      }
+      attempts += 1;
+      if (!syncMedia(attempts === 1 && !controller.items().length, generation)) {
+        if (attempts < 12) {
+          root.setTimeout(() => waitForNative(generation), 250);
+          return;
+        }
+        nativeOpenRequested = false;
       }
     }
     lastGridWidth = grid.clientWidth;
@@ -1873,7 +1910,13 @@
       layoutResizeObserver = new root.ResizeObserver(() => scheduleLayoutCalibration(layoutAnchor));
       layoutResizeObserver.observe(grid);
     }
-    waitForNative(taskGeneration);
+    if (!adapter.deferNativeOpen || !initialPageItems.length) {
+      requestNativeReviews(80);
+    } else {
+      root.setTimeout(() => {
+        if (!dismissed && grid.scrollHeight <= grid.clientHeight + AUTO_LOAD_NEAR_BOTTOM) requestNativeReviews(0);
+      }, 300);
+    }
 
     function waitForCurrentProductFilter(generation) {
       let sawFilter = false;
@@ -1895,8 +1938,11 @@
     }
 
     function requestMore() {
-      if (!nativeRoot) return;
       userRequestedMore = true;
+      if (!nativeRoot) {
+        requestNativeReviews(0);
+        return;
+      }
       if (wallSession.snapshot().loadingState === 'exhausted') {
         wallSession.retryLoad();
         autoLoadIdleRounds = 0;
@@ -1965,12 +2011,14 @@
     sync.addEventListener('click', () => {
       const generation = nextTaskGeneration();
       wallSession.retryLoad();
-      syncMedia(true, generation);
+      if (!syncMedia(true, generation)) requestNativeReviews(0);
     });
     function dismissWall() {
       dismissed = true;
       nextTaskGeneration();
       stopAutoLoad();
+      if (nativeOpenTimer) root.clearTimeout(nativeOpenTimer);
+      if (mediaSyncTimer) root.clearTimeout(mediaSyncTimer);
       if (virtualRenderFrame) (root.cancelAnimationFrame?.(virtualRenderFrame) || root.clearTimeout(virtualRenderFrame));
       if (layoutRenderFrame) (root.cancelAnimationFrame?.(layoutRenderFrame) || root.clearTimeout(layoutRenderFrame));
       if (slideshowTimer) { clearTimeout(slideshowTimer); slideshowTimer = null; }

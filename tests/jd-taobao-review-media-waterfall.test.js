@@ -932,7 +932,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.22/);
+  assert.match(source, /@version\s+0\.5\.23/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
@@ -1222,6 +1222,26 @@ test('淘宝打开原生评价抽屉使用查看全部评价按钮', () => {
   };
   api.adapters.taobao.openNativeReviews(doc);
   assert.equal(clicks, 1);
+});
+
+test('淘宝图片墙先使用页面已有评价媒体并在需要更多内容时再打开原生抽屉', () => {
+  assert.equal(api.adapters.taobao.deferNativeOpen, true);
+  assert.match(source, /initialPageItems = adapter\.collectMedia\(doc\)/);
+  assert.match(source, /if \(!adapter\.deferNativeOpen \|\| !initialPageItems\.length\)/);
+  assert.match(source, /if \(!nativeRoot\) \{\s*requestNativeReviews\(0\);\s*return;/);
+});
+
+test('淘宝原生抽屉连续 DOM 更新会合并为一次媒体同步', () => {
+  assert.match(source, /function scheduleObservedSync\(generation\)/);
+  assert.match(source, /if \(dismissed \|\| mediaSyncTimer\) return/);
+  assert.match(source, /scheduleObservedSync\(taskGeneration\)/);
+  assert.match(source, /\}, 120\)/);
+});
+
+test('淘宝原生评价抽屉打开失败后允许同步操作再次尝试', () => {
+  assert.match(source, /nativeOpenRequested = true;\s*attempts = 0;/);
+  assert.match(source, /if \(!isCurrentTask\(generation\)\) \{\s*nativeOpenRequested = false;/);
+  assert.match(source, /if \(attempts < 12\)[\s\S]*nativeOpenRequested = false;/);
 });
 
 test('关闭图片墙会关闭淘宝原生评价抽屉', () => {
