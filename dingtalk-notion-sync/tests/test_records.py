@@ -56,14 +56,16 @@ def test_filter_records_keeps_only_activity_group():
 def test_filter_records_includes_activity_category_when_group_is_missing():
     raw_records = [
         {"recordId": "1", "fields": {"任务内容": "足球联赛", "执行时间": "2026-05-03", "所属分类": "外出活动"}},
-        {"recordId": "2", "fields": {"任务内容": "草稿", "执行时间": "2026-05-03"}},
-        {"recordId": "3", "fields": {"任务内容": "维护", "执行时间": "2026-05-03", "所属分类": "设备维修"}},
+        {"recordId": "2", "fields": {"任务内容": "会议保障", "执行时间": "2026-05-04", "所属分类": "二楼会议室"}},
+        {"recordId": "3", "fields": {"任务内容": "综合活动", "执行时间": "2026-05-05", "所属分类": "活动"}},
+        {"recordId": "4", "fields": {"任务内容": "草稿", "执行时间": "2026-05-03"}},
+        {"recordId": "5", "fields": {"任务内容": "维护", "执行时间": "2026-05-03", "所属分类": "设备维修"}},
     ]
 
     records = filter_records([normalize_record(item) for item in raw_records], "所属", "活动")
 
-    assert [record["record_id"] for record in records] == ["1"]
-    assert records[0]["group"] == "活动"
+    assert [record["record_id"] for record in records] == ["1", "2", "3"]
+    assert all(record["group"] == "活动" for record in records)
 
 
 def test_normalize_record_reads_markdown_note_shape():
@@ -78,8 +80,6 @@ def test_normalize_record_reads_markdown_note_shape():
     })
 
     assert record["note"] == "**设备要求**\n\n- 双机位\n- 网络测试"
-
-
 def test_normalize_record_interprets_dingtalk_timestamps_in_shanghai_time():
     record = normalize_record({
         "recordId": "1",
