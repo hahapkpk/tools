@@ -20,6 +20,7 @@ Create a Notion database shared with your Notion integration. Add these properti
 | 所属 | Select |
 | 所属分类 | Select |
 | 负责人 | Rich text |
+| 负责人（标签） | Multi-select |
 | 活动联系人 | Rich text |
 | 备注 | Rich text |
 | 图片 | Files |
@@ -89,5 +90,10 @@ The workflow file is stored at the repository root:
 
 - The DingTalk access token is refreshed automatically.
 - The detail database uses `DingTalk Record ID` as the idempotency key.
+- Notes stored by DingTalk as `markdown` are preserved in the Notion note property and page body.
+- Owner names are normalized into `负责人（标签）` so Notion views can group and filter them reliably.
+- Records no longer present in the complete DingTalk activity selection are marked `Stale`, never deleted.
+- Every run prints a `SYNC_AUDIT` line and stops before writing if source IDs are duplicated or required fields are missing.
+- Limited runs do not replace the summary page or reconcile stale records.
 - The summary page body is replaced on every successful non-dry-run sync.
 - Keep DingTalk app secrets, Notion tokens, and MCP gateway URLs out of git.

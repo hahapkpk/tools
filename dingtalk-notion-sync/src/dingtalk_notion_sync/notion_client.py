@@ -30,6 +30,24 @@ class NotionClient:
         results = payload.get("results") or []
         return results[0] if results else None
 
+    def iter_database_pages(self) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        start_cursor = None
+        while True:
+            body: dict[str, Any] = {"page_size": 100}
+            if start_cursor:
+                body["start_cursor"] = start_cursor
+            payload = request_json(
+                "POST",
+                f"{self.base_url}/databases/{self.database_id}/query",
+                headers=self.headers,
+                json=body,
+            )
+            results.extend(payload.get("results") or [])
+            if not payload.get("has_more"):
+                return results
+            start_cursor = payload.get("next_cursor")
+
     def create_page(self, properties: dict[str, Any], blocks: list[dict[str, Any]]) -> dict[str, Any]:
         payload = request_json(
             "POST",

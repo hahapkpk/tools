@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from typing import Any
 
@@ -16,6 +17,7 @@ def properties_from_record(record: dict[str, Any], synced_at: str, status: str =
         "所属": _select(record.get("group")),
         "所属分类": _select(record.get("category")),
         "负责人": {"rich_text": _rich_text(record.get("owner") or "")},
+        "负责人（标签）": {"multi_select": [{"name": name} for name in owner_tags(record.get("owner"))]},
         "活动联系人": {"rich_text": _rich_text(record.get("contact") or "")},
         "备注": {"rich_text": _rich_text(record.get("note") or "")},
         "图片": {"files": _files(record.get("attachments") or [])},
@@ -32,6 +34,23 @@ def failure_properties(error: Exception, synced_at: str) -> dict[str, Any]:
         "同步状态": {"select": {"name": "Failed"}},
         "同步错误": {"rich_text": _rich_text(str(error))},
     }
+
+
+def stale_properties(synced_at: str) -> dict[str, Any]:
+    return {
+        "最后同步时间": {"date": {"start": synced_at}},
+        "同步状态": {"select": {"name": "Stale"}},
+        "同步错误": {"rich_text": _rich_text("当前钉钉活动筛选结果中已不存在此记录")},
+    }
+
+
+def owner_tags(value: Any) -> list[str]:
+    names: list[str] = []
+    for part in re.split(r"[、,，;；\n]+", str(value or "")):
+        name = re.sub(r"\s+", "", part)
+        if name and name not in names:
+            names.append(name)
+    return names
 
 
 def detail_blocks_from_record(record: dict[str, Any]) -> list[dict[str, Any]]:
@@ -126,8 +145,11 @@ def _paragraph_chunks(text: str) -> list[dict[str, Any]]:
 
 
 def _rich_text(text: Any) -> list[dict[str, Any]]:
-    value = str(text or "")[:MAX_TEXT]
+    value = str(text or "")
     if not value:
         return []
-    return [{"type": "text", "text": {"content": value}, "plain_text": value}]
+    return [
+        {"type": "text", "text": {"content": chunk}, "plain_text": chunk}
+        for chunk in (value[index:index + MAX_TEXT] for index in range(0, len(value), MAX_TEXT))
+    ][:100]
 

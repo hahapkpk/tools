@@ -1,6 +1,7 @@
 from dingtalk_notion_sync.notion_blocks import (
     detail_blocks_from_record,
     properties_from_record,
+    stale_properties,
     summary_blocks,
 )
 
@@ -36,8 +37,38 @@ def test_properties_from_record_builds_database_payload():
     assert props["所属"]["select"]["name"] == "活动"
     assert props["所属分类"]["select"]["name"] == "演播室活动"
     assert props["负责人"]["rich_text"][0]["text"]["content"] == "姚念英"
+    assert props["负责人（标签）"]["multi_select"] == [{"name": "姚念英"}]
+    assert props["备注"]["rich_text"][0]["text"]["content"] == "提前检查灯光和音频"
     assert props["图片"]["files"][0]["external"]["url"] == "https://example.com/a.jpg"
     assert props["同步状态"]["select"]["name"] == "Synced"
+
+
+def test_owner_tags_strip_spaces_and_split_multiple_people():
+    props = properties_from_record(
+        sample_record(owner="沈  伟、鲁　竞，姚念英、沈伟"),
+        synced_at="2026-06-05T10:00:00+08:00",
+    )
+
+    assert props["负责人（标签）"]["multi_select"] == [
+        {"name": "沈伟"},
+        {"name": "鲁竞"},
+        {"name": "姚念英"},
+    ]
+
+
+def test_stale_properties_are_recoverable_status_updates():
+    props = stale_properties("2026-06-05T10:00:00+08:00")
+
+    assert props["同步状态"]["select"]["name"] == "Stale"
+    assert "不存在" in props["同步错误"]["rich_text"][0]["text"]["content"]
+
+
+def test_long_notes_are_split_without_truncation():
+    note = "设备要求" * 1000
+    props = properties_from_record(sample_record(note=note), synced_at="2026-06-05T10:00:00+08:00")
+
+    assert len(props["备注"]["rich_text"]) > 1
+    assert "".join(item["text"]["content"] for item in props["备注"]["rich_text"]) == note
 
 
 def test_detail_blocks_from_record_include_metadata_and_attachment_links():
