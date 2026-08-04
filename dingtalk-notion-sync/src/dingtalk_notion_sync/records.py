@@ -18,7 +18,7 @@ FIELD_NAMES = {
     "created_time": ["创建时间"],
 }
 
-ACTIVITY_CATEGORIES = {"演播室活动", "广播电台", "外出活动"}
+ACTIVITY_CATEGORIES = {"演播室活动", "外出活动", "活动", "广播电台", "二楼会议室"}
 SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 
