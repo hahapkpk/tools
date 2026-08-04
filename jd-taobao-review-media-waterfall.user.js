@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.21
+// @version      0.5.22
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -157,14 +157,14 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.21';
+  const SCRIPT_VERSION = '0.5.22';
   const WHEEL_SHIFT_COOLDOWN = 320;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;
   const AUTO_LOAD_SCROLL_PULSES = 4;
   const AUTO_LOAD_NEAR_BOTTOM = 900;
-  const AUTO_LOAD_MAX_ROUNDS = 80;
-  const AUTO_LOAD_IDLE_LIMIT = 5;
+  const AUTO_LOAD_MAX_ROUNDS = 240;
+  const AUTO_LOAD_IDLE_LIMIT = 12;
   const VIRTUALIZE_THRESHOLD = 60;
   const VIRTUAL_BUFFER_SCREENS = 3;
   const THUMB_PREFETCH_SCREENS = 2;
@@ -705,13 +705,9 @@
         return response.clone().json().then((payload) => {
           const items = collectJdPayloadMedia(payload);
           const fingerprint = mediaProgressFingerprint(items);
-          if (fingerprint && capture.pageFingerprints.has(fingerprint)) {
-            capture.pageInfo = { ...extractJdPageInfo(payload), hasNextPage: false };
-            capture.exhaustedReason = '接口返回重复页';
-            return false;
-          }
+          const repeatedPage = Boolean(fingerprint && capture.pageFingerprints.has(fingerprint));
           capture.emit(payload);
-          return items.length > 0;
+          return items.length > 0 && !repeatedPage;
         }).catch(() => false);
       }).catch(() => false).finally(() => {
         capture.internalRequest = false;
@@ -1062,9 +1058,9 @@
 #${IDS.preview} { position:absolute; inset:0; z-index:2; display:flex; align-items:center; justify-content:center; padding:34px; background:rgba(0,0,0,.82); }
 .rmw-preview-content { display:flex; max-width:min(1280px,90vw); max-height:86vh; border-radius:12px; overflow:hidden; background:#111; }
 .rmw-preview-content.is-collapsed .rmw-context { display:none; }
-.rmw-preview-media { position:relative; display:flex; align-items:center; justify-content:center; min-width:300px; max-width:min(900px,68vw); background:#000; }
-.rmw-preview-content.is-collapsed .rmw-preview-media { max-width:min(1240px,86vw); }
-.rmw-preview-media img, .rmw-preview-media video { max-width:100%; max-height:84vh; object-fit:contain; }
+.rmw-preview-media { position:relative; display:flex; flex:1 1 0; align-items:center; justify-content:center; width:min(900px,68vw); min-width:300px; height:84vh; background:#000; overflow:hidden; }
+.rmw-preview-content.is-collapsed .rmw-preview-media { width:min(1240px,86vw); }
+.rmw-preview-media img, .rmw-preview-media video { display:block; width:100%; height:100%; object-fit:contain; }
 .rmw-counter { position:absolute; top:14px; left:50%; transform:translateX(-50%); padding:6px 14px; border-radius:18px; background:rgba(0,0,0,.58); color:#fff; font-size:14px; }
 .rmw-preview-tools { position:absolute; top:12px; right:12px; z-index:2; display:flex; gap:8px; }
 .rmw-preview-nav { position:absolute; top:50%; z-index:1; transform:translateY(-50%); width:52px; height:72px; border:0; border-radius:28px; background:rgba(0,0,0,.5); color:#fff; font-size:36px; line-height:1; cursor:pointer; }
@@ -1112,11 +1108,14 @@
       media.src = previewSrc;
       if (item.src && item.src !== previewSrc) {
         const fullImage = preloadPreviewMedia(item);
-        if (fullImage?.complete && fullImage.naturalWidth) {
-          media.src = item.src;
-        } else {
-          fullImage?.addEventListener('load', () => { media.src = item.src; }, { once: true });
-        }
+        const showOriginal = () => {
+          const decoded = typeof fullImage?.decode === 'function'
+            ? fullImage.decode().catch(() => undefined)
+            : root.Promise.resolve();
+          decoded.then(() => { media.src = item.src; });
+        };
+        if (fullImage?.complete && fullImage.naturalWidth) showOriginal();
+        else fullImage?.addEventListener('load', showOriginal, { once: true });
       }
     } else {
       media.src = item.src;
@@ -1573,6 +1572,7 @@
     let autoLoadTimer = null;
     let autoLoadRounds = 0;
     let autoLoadIdleRounds = 0;
+    let lastAutoPageIndex = 0;
     let userRequestedMore = false;
     let virtualRenderFrame = null;
     let layoutRenderFrame = null;
@@ -1713,7 +1713,7 @@
         controller.append(items);
         const added = controller.items().length > before;
         mediaStats.lastAdded = Math.max(0, controller.items().length - before);
-        wallSession.finishLoad(added);
+        if (added) wallSession.finishLoad(true);
         renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
         const nearBottom = isGridNearBottom();
         if (shouldAutoFillCurrentProduct({
@@ -1795,6 +1795,7 @@
       if (reset) {
         autoLoadRounds = 0;
         autoLoadIdleRounds = 0;
+        lastAutoPageIndex = Number(adapter.getLoadProgress?.().pageIndex) || 0;
         wallSession.retryLoad();
         loadProgressTracker.reset();
       }
@@ -1828,16 +1829,20 @@
         const before = controller.items().length;
         syncMedia(false, generation);
         const added = controller.items().length > before;
-        autoLoadIdleRounds = added ? 0 : autoLoadIdleRounds + 1;
+        const pageIndex = Number(adapter.getLoadProgress?.().pageIndex) || 0;
+        const pageAdvanced = pageIndex > lastAutoPageIndex;
+        lastAutoPageIndex = Math.max(lastAutoPageIndex, pageIndex);
+        autoLoadIdleRounds = (added || pageAdvanced) ? 0 : autoLoadIdleRounds + 1;
         const pageProgress = adapter.getLoadProgress?.() || {};
         const progress = loadProgressTracker.record(loadProgressSignature(), added);
-        if (pageProgress.hasNextPage === false || pageProgress.exhaustedReason || progress.exhausted) {
+        if (pageProgress.hasNextPage === false || pageProgress.exhaustedReason || (progress.exhausted && pageProgress.hasNextPage !== true)) {
           autoLoadIdleRounds = AUTO_LOAD_IDLE_LIMIT;
           wallSession.exhaustLoad(pageProgress.exhaustedReason || (pageProgress.hasNextPage === false ? '接口已到最后一页' : '连续多轮未发现新评价'));
           renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
           return;
         }
-        if ((moved || added) && userRequestedMore && isGridNearBottom() && autoLoadRounds < AUTO_LOAD_MAX_ROUNDS && autoLoadIdleRounds < AUTO_LOAD_IDLE_LIMIT) {
+        if (pageProgress.hasNextPage === true) wallSession.retryLoad();
+        if ((moved || added || pageProgress.hasNextPage === true) && userRequestedMore && isGridNearBottom() && autoLoadRounds < AUTO_LOAD_MAX_ROUNDS && autoLoadIdleRounds < AUTO_LOAD_IDLE_LIMIT) {
           scheduleAutoLoad(false);
         }
       }, AUTO_LOAD_SETTLE_DELAY));

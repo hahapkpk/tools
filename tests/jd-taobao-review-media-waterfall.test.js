@@ -746,9 +746,9 @@ test('加载状态防止重复请求并在连续无新增后结束', () => {
   const session = api.createWallSession();
   assert.equal(session.beginLoad(), true);
   assert.equal(session.beginLoad(), false);
-  for (let i = 0; i < 5; i += 1) {
+  for (let i = 0; i < 12; i += 1) {
     session.finishLoad(false);
-    if (i < 4) session.beginLoad();
+    if (i < 11) session.beginLoad();
   }
   assert.equal(session.snapshot().loadingState, 'exhausted');
   session.retryLoad();
@@ -841,10 +841,12 @@ test('打开预览前会提前预热原图以减少黑屏等待', () => {
   assert.match(source, /preloadPreviewAround\(items, index\)/);
 });
 
-test('预览图片先显示缩略图并在原图加载后替换以提升打开速度', () => {
+test('预览图片保持固定画框并在原图解码后无跳动替换缩略图', () => {
   assert.match(source, /const previewSrc = item\.poster \|\| item\.src/);
   assert.match(source, /media\.src = previewSrc/);
-  assert.match(source, /fullImage\?\.addEventListener\('load', \(\) => \{ media\.src = item\.src; \}, \{ once: true \}\)/);
+  assert.match(source, /fullImage\.decode\(\)\.catch/);
+  assert.match(source, /\.rmw-preview-media \{[^}]*height:84vh/);
+  assert.match(source, /\.rmw-preview-media img, \.rmw-preview-media video \{[^}]*width:100%; height:100%/);
 });
 
 test('预览原图缓存使用最多十二项的 LRU 淘汰', () => {
@@ -904,7 +906,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.21/);
+  assert.match(source, /@version\s+0\.5\.22/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
@@ -1094,7 +1096,7 @@ test('按需懒加载新增内容后只有仍接近图片墙底部才继续下�
   assert.match(source, /userRequestedMore = true/);
   assert.match(source, /wallSession\.snapshot\(\)\.loadingState === 'exhausted'/);
   assert.match(source, /wallSession\.retryLoad\(\)/);
-  assert.match(source, /if \(\(moved \|\| added\) && userRequestedMore && isGridNearBottom\(\) && autoLoadRounds < AUTO_LOAD_MAX_ROUNDS/);
+  assert.match(source, /if \(\(moved \|\| added \|\| pageProgress\.hasNextPage === true\) && userRequestedMore && isGridNearBottom\(\) && autoLoadRounds < AUTO_LOAD_MAX_ROUNDS/);
   assert.match(source, /else if \(added && userRequestedMore && nearBottom\)/);
 });
 
@@ -1115,14 +1117,16 @@ test('自动加载综合媒体评价和原生滚动进度识别重复终点', ()
   assert.deepEqual(tracker.record('advanced', true), { repeated: 0, exhausted: false });
   assert.match(source, /function loadProgressSignature/);
   assert.match(source, /mediaProgressFingerprint\(controller\.items\(\)\)/);
-  assert.match(source, /pageProgress\.hasNextPage === false \|\| pageProgress\.exhaustedReason \|\| progress\.exhausted/);
+  assert.match(source, /progress\.exhausted && pageProgress\.hasNextPage !== true/);
+  assert.match(source, /const pageAdvanced = pageIndex > lastAutoPageIndex/);
 });
 
-test('京东分页并发锁和响应指纹阻止重复页继续请求', () => {
+test('京东分页并发锁保留响应指纹但不会把单次重复页误判为接口终点', () => {
   assert.match(source, /capture\.requestInFlight/);
   assert.match(source, /capture\.pageFingerprints/);
   assert.match(source, /capture\.pageFingerprints\.has\(fingerprint\)/);
-  assert.match(source, /capture\.exhaustedReason = '接口返回重复页'/);
+  assert.match(source, /const repeatedPage = Boolean\(fingerprint && capture\.pageFingerprints\.has\(fingerprint\)\)/);
+  assert.doesNotMatch(source, /capture\.exhaustedReason = '接口返回重复页'/);
   assert.match(source, /capture\.originalFetch \|\| host\.fetch/);
   assert.match(source, /capture\.internalRequest = true/);
   assert.match(source, /const shouldCapture = \/api\\\.m\\\.jd\\\.com/);
