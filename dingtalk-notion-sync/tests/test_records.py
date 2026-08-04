@@ -63,6 +63,21 @@ def test_filter_records_includes_activity_category_when_group_is_missing():
     records = filter_records([normalize_record(item) for item in raw_records], "所属", "活动")
 
     assert [record["record_id"] for record in records] == ["1"]
+    assert records[0]["group"] == "活动"
+
+
+def test_normalize_record_reads_markdown_note_shape():
+    record = normalize_record({
+        "recordId": "1",
+        "fields": {
+            "任务内容": "足球联赛",
+            "执行时间": "2026-05-23",
+            "所属": "活动",
+            "备注": {"markdown": "**设备要求**\n\n- 双机位\n- 网络测试"},
+        },
+    })
+
+    assert record["note"] == "**设备要求**\n\n- 双机位\n- 网络测试"
 
 
 def test_normalize_record_interprets_dingtalk_timestamps_in_shanghai_time():

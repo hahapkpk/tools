@@ -2,9 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable
+from typing import Any, Callable
 
-from .notion_blocks import detail_blocks_from_record, failure_properties, properties_from_record, summary_blocks
+from .notion_blocks import (
+    detail_blocks_from_record,
+    failure_properties,
+    properties_from_record,
+    stale_properties,
+    summary_blocks,
+)
 from .records import filter_records, normalize_record, sort_records
 
 
@@ -24,18 +30,65 @@ def run_sync(config: SyncConfig, dingtalk, notion, now: Callable[[], str] | None
     records = [normalize_record(item) for item in raw_records]
     records = filter_records(records, config.filter_field, config.filter_value)
     records = sort_records(records)
-    if config.limit is not None:
-        records = records[: config.limit]
+    source_ids = [record["record_id"] for record in records]
+    duplicate_ids = len(source_ids) - len(set(source_ids))
+    missing_required = sum(
+        1 for record in records if not all(record.get(key) for key in ("record_id", "title", "execution_date"))
+    )
+    if not records or duplicate_ids or missing_required:
+        raise RuntimeError(
+            "DingTalk integrity check failed: "
+            f"selected={len(records)} duplicate_ids={duplicate_ids} missing_required={missing_required}"
+        )
 
-    stats = {"created": 0, "updated": 0, "skipped": 0, "failed": 0, "total": len(records)}
+    existing_pages = notion.iter_database_pages()
+    page_groups: dict[str, list[dict[str, Any]]] = {}
+    for page in existing_pages:
+        record_id = _page_property_text(page, "DingTalk Record ID")
+        if record_id:
+            page_groups.setdefault(record_id, []).append(page)
+    notion_duplicates = sum(len(pages) - 1 for pages in page_groups.values())
+    if notion_duplicates:
+        raise RuntimeError(f"Notion integrity check failed: duplicate_ids={notion_duplicates}")
+    existing_by_id = {record_id: pages[0] for record_id, pages in page_groups.items()}
+    selected_ids = set(source_ids)
+    stale_ids = sorted(set(existing_by_id) - selected_ids)
+    process_records = records[: config.limit] if config.limit is not None else records
+
+    stats = {
+        "created": 0,
+        "updated": 0,
+        "skipped": 0,
+        "failed": 0,
+        "stale": len(stale_ids),
+        "stale_marked": 0,
+        "total": len(records),
+        "processed": len(process_records),
+        "notion_before": len(existing_by_id),
+        "missing_before": len(selected_ids - set(existing_by_id)),
+        "notes": sum(bool(record.get("note")) for record in records),
+        "attachments": sum(len(record.get("attachments") or []) for record in records),
+    }
+    audit = {
+        "selected": len(records),
+        "notion_before": len(existing_by_id),
+        "missing_before": len(selected_ids - set(existing_by_id)),
+        "stale": len(stale_ids),
+        "duplicate_ids": duplicate_ids,
+        "notion_duplicate_ids": notion_duplicates,
+        "missing_required": missing_required,
+        "notes": stats["notes"],
+        "attachments": stats["attachments"],
+    }
+    print("SYNC_AUDIT " + " ".join(f"{key}={value}" for key, value in audit.items()))
     synced_records = []
 
-    for record in records:
+    for record in process_records:
         record["source_url"] = config.source_url
         try:
-            existing = notion.find_page_by_record_id(record["record_id"]) if not config.dry_run else None
+            existing = existing_by_id.get(record["record_id"])
             if config.dry_run:
-                stats["created"] += 1
+                stats["updated" if existing else "created"] += 1
                 synced_records.append(record)
                 continue
 
@@ -57,12 +110,35 @@ def run_sync(config: SyncConfig, dingtalk, notion, now: Callable[[], str] | None
             stats["failed"] += 1
             if not config.dry_run:
                 try:
-                    existing = notion.find_page_by_record_id(record["record_id"])
                     if existing:
                         notion.update_page(existing["id"], failure_properties(exc, synced_at))
                 except Exception:
                     pass
-    if not config.dry_run:
+
+    if not config.dry_run and config.limit is None:
+        for record_id in stale_ids:
+            page = existing_by_id[record_id]
+            if _page_select_name(page, "同步状态") == "Stale":
+                continue
+            try:
+                notion.update_page(page["id"], stale_properties(synced_at))
+                stats["stale_marked"] += 1
+            except Exception:
+                stats["failed"] += 1
         notion.replace_summary(summary_blocks(synced_records, synced_at, config.source_url))
     return stats
+
+
+def _page_property_text(page: dict[str, Any], name: str) -> str:
+    prop = (page.get("properties") or {}).get(name) or {}
+    values = prop.get("rich_text") or prop.get("title") or []
+    return "".join(
+        item.get("plain_text") or (item.get("text") or {}).get("content") or ""
+        for item in values
+    ).strip()
+
+
+def _page_select_name(page: dict[str, Any], name: str) -> str:
+    prop = (page.get("properties") or {}).get(name) or {}
+    return str((prop.get("select") or {}).get("name") or "")
 

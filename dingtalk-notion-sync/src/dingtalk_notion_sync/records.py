@@ -61,7 +61,9 @@ def filter_records(records: list[dict[str, Any]], field_name: str = "所属", ex
             continue
         if field_name == "所属" and expected == "活动" and not record.get("group"):
             if str(record.get("category") or "") in ACTIVITY_CATEGORIES:
-                filtered.append(record)
+                normalized = dict(record)
+                normalized["group"] = expected
+                filtered.append(normalized)
     return filtered
 
 
@@ -85,7 +87,7 @@ def _to_text(value: Any) -> str:
             return "".join(parts)
         return "、".join(parts)
     if isinstance(value, dict):
-        for key in ("name", "displayName", "text", "title", "label", "value", "fileName", "filename"):
+        for key in ("markdown", "name", "displayName", "text", "title", "label", "value", "fileName", "filename"):
             if value.get(key) is not None:
                 return _to_text(value[key])
         if "richText" in value:
