@@ -359,6 +359,32 @@ test('京东继续加载支持 body 位于 GET 查询参数且递增 offset', as
   assert.equal(requests[1].options.method, 'GET');
 });
 
+test('京东动态签名评论请求不复制改页码以避免无效 403 请求', async () => {
+  const signedBody = new URLSearchParams({
+    body: JSON.stringify({ pageNum: '1', pageSize: '10' }),
+    h5st: 'signed-value'
+  }).toString();
+  let requests = 0;
+  const host = {
+    fetch() {
+      requests += 1;
+      return Promise.resolve({ ok: false });
+    }
+  };
+  const stop = api.installJdResponseCapture(host, () => {});
+  host.__reviewMediaWallJdResponseCapture.lastRequest = {
+    url: 'https://api.m.jd.com/client.action',
+    method: 'POST',
+    body: signedBody
+  };
+  host.__reviewMediaWallJdResponseCapture.pageInfo = { pageIndex: 2, hasNextPage: true, maxPage: 100 };
+
+  assert.equal(api.isSignedJdRequest(host.__reviewMediaWallJdResponseCapture.lastRequest), true);
+  assert.equal(await host.__reviewMediaWallJdResponseCapture.requestNextPage(), false);
+  assert.equal(requests, 0);
+  stop();
+});
+
 test('继续加载时优先驱动原生评价列表内部的滚动容器', () => {
   const child = { clientHeight: 200, scrollHeight: 600, parentElement: null };
   const root = {

@@ -633,6 +633,17 @@
     return '';
   }
 
+  function isSignedJdRequest(lastRequest) {
+    try {
+      const bodyParams = new URLSearchParams(lastRequest?.body || '');
+      if (bodyParams.has('h5st')) return true;
+      const url = new URL(lastRequest?.url || '', root.location?.href || 'https://item.jd.com/');
+      return url.searchParams.has('h5st');
+    } catch (error) {
+      return false;
+    }
+  }
+
   function buildNextJdRequest(lastRequest, nextPage) {
     if (!lastRequest?.url) return null;
     const body = buildNextJdBody(lastRequest.body, nextPage);
@@ -690,6 +701,7 @@
       if (
         capture.requestInFlight ||
         !capture.lastRequest ||
+        isSignedJdRequest(capture.lastRequest) ||
         pageInfo.hasNextPage === false ||
         (pageInfo.maxPage && nextPage > pageInfo.maxPage)
       ) {
@@ -2032,6 +2044,7 @@
     shouldPreloadThumb,
     updateVideoThumbSource,
     createPreviewImageCache,
+    isSignedJdRequest,
     ensureLauncher,
     init
   };
