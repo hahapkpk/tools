@@ -22,6 +22,11 @@ New-Item -ItemType Directory -Force -Path $Dest | Out-Null
 Write-Host "== 下载组件到 $Dest =="
 Invoke-WebRequest -UseBasicParsing -OutFile (Join-Path $Dest "modlens_ocr.py") "$BaseUrl/modlens_ocr.py"
 try {
+    Invoke-WebRequest -UseBasicParsing -OutFile (Join-Path $Dest "wan_gen.py") "$BaseUrl/wan_gen.py"
+} catch {
+    Write-Host "[警告] wan_gen.py 下载失败（文生图不可用，识图不受影响）"
+}
+try {
     Invoke-WebRequest -UseBasicParsing -OutFile (Join-Path $Dest "SKILL.md") "$BaseUrl/SKILL.md"
 } catch {
     Write-Host "[警告] SKILL.md 下载失败（不影响调用器使用）"
@@ -71,6 +76,9 @@ Write-Host "✅ 安装完成！"
 Write-Host ""
 Write-Host "识图命令:"
 Write-Host "  python3 $Dest\modlens_ocr.py <图片路径或URL>"
+Write-Host ""
+Write-Host "文生图命令:"
+Write-Host "  python3 $Dest\wan_gen.py `"<图像描述>`" 输出.png [尺寸如 1024*1024] [--model wan2.7-image-pro]"
 Write-Host ""
 Write-Host "常用参数:"
 Write-Host "  -o 输出.json      结果写入文件"
