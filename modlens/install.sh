@@ -25,6 +25,10 @@ curl -fsSL -o "$DEST/modlens_ocr.py" "$BASE_URL/modlens_ocr.py" || {
   echo "[错误] 下载调用器失败: $BASE_URL/modlens_ocr.py"
   exit 1
 }
+curl -fsSL -o "$DEST/wan_gen.py" "$BASE_URL/wan_gen.py" || {
+  echo "[错误] 下载文生图脚本失败: $BASE_URL/wan_gen.py"
+  exit 1
+}
 if ! curl -fsSL -o "$DEST/SKILL.md" "$BASE_URL/SKILL.md" 2>/dev/null; then
   echo "[警告] SKILL.md 下载失败（不影响调用器使用）"
 fi
@@ -85,6 +89,9 @@ echo "✅ 安装完成！"
 echo ""
 echo "识图命令:"
 echo "  python3 $DEST/modlens_ocr.py <图片路径或URL>"
+echo ""
+echo "文生图命令:"
+echo "  python3 $DEST/wan_gen.py \"<图像描述>\" 输出.png [尺寸如 1024*1024] [--model wan2.7-image-pro]"
 echo ""
 echo "常用参数:"
 echo "  -o 输出.json      结果写入文件"
