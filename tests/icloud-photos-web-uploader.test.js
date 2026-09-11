@@ -637,6 +637,499 @@ test('画布初始化失败时仍释放已解码位图', async () => {
 });
 
 
+test('连续缩放使用当前视觉中心计算锚点，不重复缩放旧平移量', () => {
+  const first = api.calculateZoomTranslation({
+    tx: 0,
+    ty: 0,
+    pointerOffsetX: 100,
+    pointerOffsetY: 50,
+    scaleRatio: 2,
+  });
+  const second = api.calculateZoomTranslation({
+    tx: first.tx,
+    ty: first.ty,
+    pointerOffsetX: 200,
+    pointerOffsetY: 100,
+    scaleRatio: 2,
+  });
+
+  assert.deepEqual(first, { tx: -100, ty: -50 });
+  assert.deepEqual(second, { tx: -300, ty: -150 });
+});
+
+test('成功上传后的刷新需求会跨过后续失败批次并在队列结束时恢复', () => {
+  const demand = api.createRefreshDemandTracker();
+  demand.enqueue();
+  demand.enqueue();
+  demand.recordSuccess('token-a');
+
+  assert.equal(demand.finish(), null);
+  // The second batch failed, so it records no success. Finishing it must expose
+  // the first batch's still-outstanding refresh demand.
+  assert.deepEqual(demand.finish(), { baseline: 'token-a' });
+
+  demand.recordSuccess('token-b');
+  assert.deepEqual(demand.ready(), { baseline: 'token-b' });
+  demand.clear();
+  assert.equal(demand.ready(), null);
+});
+
+test('hash 往返没有观察到图库变化时软刷新返回 false', async () => {
+  let hash = '#/recents';
+  const win = {
+    location: {
+      get hash() {
+        return hash;
+      },
+      set hash(value) {
+        hash = value;
+      },
+    },
+    MutationObserver: class MutationObserverStub {
+      observe() {}
+      disconnect() {}
+    },
+  };
+  const doc = {
+    body: {},
+    querySelector() {
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+
+  const refreshed = await api.softRefreshLibraryView(doc, win, {
+    verificationTimeout: 5,
+  });
+
+  assert.equal(refreshed, false);
+  assert.equal(hash, '#/recents');
+});
+
+test('观察到两次图库变化后软刷新才返回 true', async () => {
+  let hash = '#/recents';
+  const observers = new Set();
+  let viewNode = { closest: () => null };
+  class MutationObserverStub {
+    constructor(callback) {
+      this.callback = callback;
+    }
+    observe() {
+      observers.add(this);
+    }
+    disconnect() {
+      observers.delete(this);
+    }
+  }
+  const win = {
+    location: {
+      get hash() {
+        return hash;
+      },
+      set hash(value) {
+        hash = value;
+        viewNode = { closest: () => null };
+        setTimeout(function () {
+          Array.from(observers).forEach(function (observer) {
+            observer.callback([{ target: viewNode }]);
+          });
+        }, 0);
+      },
+    },
+    MutationObserver: MutationObserverStub,
+  };
+  const doc = {
+    body: viewNode,
+    querySelector(selector) {
+      return selector.indexOf('PhotosRootContent') !== -1 ? viewNode : null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+
+  const refreshed = await api.softRefreshLibraryView(doc, win, {
+    verificationTimeout: 50,
+  });
+
+  assert.equal(refreshed, true);
+  assert.equal(hash, '#/recents');
+});
+
+test('无关 DOM 变化不能冒充图库路由刷新', async () => {
+  let hash = '#/recents';
+  const observers = new Set();
+  const stableView = { closest: () => null };
+  class MutationObserverStub {
+    constructor(callback) {
+      this.callback = callback;
+    }
+    observe() {
+      observers.add(this);
+    }
+    disconnect() {
+      observers.delete(this);
+    }
+  }
+  const win = {
+    location: {
+      get hash() {
+        return hash;
+      },
+      set hash(value) {
+        hash = value;
+        setTimeout(function () {
+          Array.from(observers).forEach(function (observer) {
+            observer.callback([{ target: { closest: () => null } }]);
+          });
+        }, 0);
+      },
+    },
+    MutationObserver: MutationObserverStub,
+  };
+  const doc = {
+    body: stableView,
+    querySelector(selector) {
+      return selector.indexOf('PhotosRootContent') !== -1 ? stableView : null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+
+  assert.equal(
+    await api.softRefreshLibraryView(doc, win, { verificationTimeout: 30 }),
+    false
+  );
+  assert.equal(hash, '#/recents');
+});
+
+test('软刷新只有第一程改变图库时仍返回 false', async () => {
+  let hash = '#/recents';
+  const observers = new Set();
+  let viewNode = { closest: () => null };
+  class MutationObserverStub {
+    constructor(callback) {
+      this.callback = callback;
+    }
+    observe() {
+      observers.add(this);
+    }
+    disconnect() {
+      observers.delete(this);
+    }
+  }
+  const win = {
+    location: {
+      get hash() {
+        return hash;
+      },
+      set hash(value) {
+        hash = value;
+        if (value !== '#/recents') viewNode = { closest: () => null };
+        setTimeout(function () {
+          Array.from(observers).forEach(function (observer) {
+            observer.callback([{ target: viewNode }]);
+          });
+        }, 0);
+      },
+    },
+    MutationObserver: MutationObserverStub,
+  };
+  const doc = {
+    body: {},
+    querySelector(selector) {
+      return selector.indexOf('PhotosRootContent') !== -1 ? viewNode : null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+
+  assert.equal(
+    await api.softRefreshLibraryView(doc, win, { verificationTimeout: 30 }),
+    false
+  );
+  assert.equal(hash, '#/recents');
+});
+
+test('文件输入选择排除禁用和非图片控件', () => {
+  function input(accept, options) {
+    return Object.assign({
+      accept,
+      disabled: false,
+      isConnected: true,
+      multiple: true,
+      getAttribute(name) {
+        return name === 'accept' ? this.accept : null;
+      },
+      closest() {
+        return null;
+      },
+    }, options);
+  }
+  const disabled = input('image/*', { disabled: true });
+  const unrelated = input('application/pdf');
+  const photos = input('image/*');
+  const doc = {
+    querySelectorAll(selector) {
+      return selector === 'input[type="file"]'
+        ? [disabled, unrelated, photos]
+        : [];
+    },
+  };
+
+  assert.equal(api.findICloudFileInput(doc), photos);
+});
+
+test('点击上传后优先选择新出现的文件输入控件', () => {
+  const existing = {
+    disabled: false,
+    isConnected: true,
+    multiple: true,
+    getAttribute: () => 'image/*',
+    closest: () => null,
+  };
+  const added = {
+    disabled: false,
+    isConnected: true,
+    multiple: true,
+    getAttribute: () => 'image/*',
+    closest: () => null,
+  };
+
+  assert.equal(
+    api.selectICloudFileInput([existing, added], null, new Set([existing])),
+    added
+  );
+});
+
+test('等待上传控件时跳过先出现的低置信新文件输入', async () => {
+  const unknown = {
+    disabled: false,
+    isConnected: true,
+    multiple: false,
+    getAttribute: () => '',
+    closest: () => null,
+  };
+  const photos = {
+    disabled: false,
+    isConnected: true,
+    multiple: true,
+    getAttribute: () => 'image/*',
+    closest: () => null,
+  };
+  let fileQueries = 0;
+  const doc = {
+    querySelectorAll(selector) {
+      if (selector !== 'input[type="file"]') return [];
+      fileQueries += 1;
+      return fileQueries < 3 ? [unknown] : [unknown, photos];
+    },
+  };
+
+  const found = await api.waitForICloudFileInput(doc, 100, 1, new Set());
+
+  assert.equal(found, photos);
+});
+
+test('已缓存的文件输入失效后重新选择控件', () => {
+  const first = {
+    disabled: false,
+    isConnected: true,
+    multiple: true,
+    getAttribute: () => 'image/*',
+    closest: () => null,
+  };
+  const second = {
+    disabled: false,
+    isConnected: true,
+    multiple: true,
+    getAttribute: () => 'image/*',
+    closest: () => null,
+  };
+  let inputs = [first];
+  const doc = {
+    querySelectorAll(selector) {
+      return selector === 'input[type="file"]' ? inputs : [];
+    },
+  };
+
+  assert.equal(api.findICloudFileInput(doc), first);
+  first.disabled = true;
+  inputs = [second];
+  assert.equal(api.findICloudFileInput(doc), second);
+});
+
+test('路由变化会使文件输入缓存失效', () => {
+  const first = {
+    disabled: false,
+    isConnected: true,
+    multiple: true,
+    getAttribute: () => 'image/*',
+    closest: () => null,
+  };
+  const second = {
+    disabled: false,
+    isConnected: true,
+    multiple: true,
+    getAttribute: () => 'image/*',
+    closest: () => null,
+  };
+  const location = { href: 'https://www.icloud.com/photos/#/recents', hash: '#/recents' };
+  let inputs = [first];
+  const doc = {
+    defaultView: { location },
+    querySelectorAll(selector) {
+      return selector === 'input[type="file"]' ? inputs : [];
+    },
+  };
+
+  assert.equal(api.findICloudFileInput(doc), first);
+  location.href = 'https://www.icloud.com/photos/#/favorites';
+  location.hash = '#/favorites';
+  inputs = [second];
+  assert.equal(api.findICloudFileInput(doc), second);
+});
+
+test('CloudKit 同步状态比较全部 zone 且不受返回顺序影响', () => {
+  const first = {
+    zones: [
+      { zoneID: { zoneName: 'photos', ownerRecordName: 'a' }, syncToken: 'one' },
+      { zoneID: { zoneName: 'shared', ownerRecordName: 'b' }, syncToken: 'two' },
+    ],
+  };
+  const reordered = {
+    zones: [
+      { zoneID: { ownerRecordName: 'b', zoneName: 'shared' }, syncToken: 'two' },
+      { zoneID: { ownerRecordName: 'a', zoneName: 'photos' }, syncToken: 'one' },
+    ],
+  };
+  const changed = {
+    zones: [
+      { zoneID: { zoneName: 'photos', ownerRecordName: 'a' }, syncToken: 'one' },
+      { zoneID: { zoneName: 'shared', ownerRecordName: 'b' }, syncToken: 'three' },
+    ],
+  };
+
+  assert.equal(api.serializeZoneSyncState(first), api.serializeZoneSyncState(reordered));
+  assert.notEqual(api.serializeZoneSyncState(first), api.serializeZoneSyncState(changed));
+});
+
+test('CloudKit 请求禁用缓存、传递取消信号并返回全部 zone 状态', async () => {
+  const controller = new AbortController();
+  let request = null;
+  const win = {
+    async fetch(url, options) {
+      request = { url, options };
+      return {
+        ok: true,
+        async json() {
+          return {
+            zones: [
+              { zoneID: { zoneName: 'photos' }, syncToken: 'one' },
+              { zoneID: { zoneName: 'shared' }, syncToken: 'two' },
+            ],
+          };
+        },
+      };
+    },
+  };
+
+  const state = await api.fetchCloudKitSyncState(
+    win,
+    'https://photos.cloud.example/zones/list',
+    controller.signal
+  );
+
+  assert.equal(request.url, 'https://photos.cloud.example/zones/list');
+  assert.equal(request.options.credentials, 'include');
+  assert.equal(request.options.cache, 'no-store');
+  assert.equal(request.options.signal, controller.signal);
+  assert.equal(typeof state, 'string');
+  assert.match(state, /one/);
+  assert.match(state, /two/);
+});
+
+
+test('可中止任务会把取消信号传给底层请求', async () => {
+  let signal = null;
+  const task = api.startAbortableTask(
+    function (requestSignal) {
+      signal = requestSignal;
+      return new Promise(function (resolve) {
+        requestSignal.addEventListener('abort', function () {
+          resolve('aborted');
+        }, { once: true });
+      });
+    },
+    1000,
+    AbortController,
+    'request timed out'
+  );
+  await Promise.resolve();
+  task.abort();
+
+  assert.equal(await task.promise, 'aborted');
+  assert.equal(signal.aborted, true);
+});
+
+test('请求超时时会中止底层任务', async () => {
+  let signal = null;
+  const task = api.startAbortableTask(
+    function (requestSignal) {
+      signal = requestSignal;
+      return new Promise(function () {});
+    },
+    5,
+    AbortController,
+    'request timed out'
+  );
+
+  await assert.rejects(task.promise, /request timed out/);
+  assert.equal(signal.aborted, true);
+});
+
+
+test('媒体来源变化可以被缩放看护识别', () => {
+  assert.equal(
+    api.hasMediaSourceChanged({ currentSrc: 'photo-a.jpg', src: 'fallback.jpg' }, 'photo-a.jpg'),
+    false
+  );
+  assert.equal(
+    api.hasMediaSourceChanged({ currentSrc: 'photo-b.jpg', src: 'fallback.jpg' }, 'photo-a.jpg'),
+    true
+  );
+});
+
+test('缩放清理只恢复脚本仍然拥有的内联样式', () => {
+  const hostUpdated = { transform: 'matrix(2, 0, 0, 2, 10, 0)' };
+  assert.equal(
+    api.restoreOwnedInlineStyle(
+      hostUpdated,
+      'transform',
+      'translate(-20px, 0px) scale(1.5)',
+      'matrix(1.2, 0, 0, 1.2, 0, 0)'
+    ),
+    false
+  );
+  assert.equal(hostUpdated.transform, 'matrix(2, 0, 0, 2, 10, 0)');
+
+  const stillOwned = { transform: 'translate(-20px, 0px) scale(1.5)' };
+  assert.equal(
+    api.restoreOwnedInlineStyle(
+      stillOwned,
+      'transform',
+      'translate(-20px, 0px) scale(1.5)',
+      'matrix(1.2, 0, 0, 1.2, 0, 0)'
+    ),
+    true
+  );
+  assert.equal(stillOwned.transform, 'matrix(1.2, 0, 0, 1.2, 0, 0)');
+});
+
 test('面板拖拽会阻止 drop 冒泡，避免 iCloud 重复入队', () => {
   assert.match(
     source,
@@ -644,6 +1137,6 @@ test('面板拖拽会阻止 drop 冒泡，避免 iCloud 重复入队', () => {
   );
 });
 
-test('版本号已升级到 1.13.1', () => {
-  assert.match(source, /\/\/ @version\s+1\.13\.1/);
+test('版本号已升级到 1.13.2', () => {
+  assert.match(source, /\/\/ @version\s+1\.13\.2/);
 });

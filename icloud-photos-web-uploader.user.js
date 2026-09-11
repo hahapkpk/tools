@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.13.1
+// @version      1.13.2
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -27,7 +27,6 @@
   const PANEL_ID = 'icloud-web-uploader-panel';
   const LOG_PREFIX = '[iCloud Photos Web Uploader]';
   const POSITION_KEY = 'icloud-web-uploader-position';
-  const SIZE_KEY = 'icloud-web-uploader-size';
   const IMAGE_EXTENSIONS = /\.(apng|avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|tiff?|webp)$/i;
   const JPEG_EXTENSIONS = /\.jpe?g$/i;
   const JPEG_QUALITY = 0.92;
@@ -35,17 +34,11 @@
   const registeredPasteTargets = new WeakSet();
   const handledPasteEvents = new WeakSet();
 
-  const PANEL_TEXT = {
-    title: 'iCloud 上传',
-    tooltip: '点击选择 · 粘贴 · 拖拽',
-    waiting: '等待图片',
-    ready: '已就绪',
-    uploading: '处理中…',
-    closeTitle: '隐藏',
-  };
-
   function getPanelText() {
-    return Object.assign({}, PANEL_TEXT);
+    return {
+      title: 'iCloud 上传',
+      tooltip: '点击选择 · 粘贴 · 拖拽',
+    };
   }
 
   function pad2(value) {
@@ -215,6 +208,89 @@
     return Promise.race([promise, timeout]).finally(function () {
       clearTimeout(timer);
     });
+  }
+
+  function startAbortableTask(operation, timeoutMs, AbortControllerCtor, timeoutMessage) {
+    const controller = typeof AbortControllerCtor === 'function'
+      ? new AbortControllerCtor()
+      : null;
+    const signal = controller ? controller.signal : undefined;
+    const promise = withTimeout(
+      Promise.resolve().then(function () {
+        return operation(signal);
+      }),
+      timeoutMs,
+      timeoutMessage
+    ).finally(function () {
+      if (controller) controller.abort();
+    });
+
+    return {
+      promise,
+      abort: function () {
+        if (controller) controller.abort();
+      },
+    };
+  }
+
+  function stableSerialize(value) {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value);
+    if (Array.isArray(value)) {
+      return '[' + value.map(stableSerialize).join(',') + ']';
+    }
+    const keys = Object.keys(value).sort();
+    return '{' + keys.map(function (key) {
+      return JSON.stringify(key) + ':' + stableSerialize(value[key]);
+    }).join(',') + '}';
+  }
+
+  function serializeZoneSyncState(data) {
+    if (!data || !Array.isArray(data.zones) || !data.zones.length) return null;
+    const zones = data.zones.map(function (zone) {
+      return stableSerialize({
+        zoneID: zone && zone.zoneID ? zone.zoneID : null,
+        syncToken: zone && zone.syncToken !== undefined ? zone.syncToken : null,
+      });
+    });
+    zones.sort();
+    return '[' + zones.join(',') + ']';
+  }
+
+  async function fetchCloudKitSyncState(win, url, signal) {
+    if (!win || typeof win.fetch !== 'function' || !url) return null;
+    const response = await win.fetch(url, {
+      credentials: 'include',
+      cache: 'no-store',
+      signal,
+    });
+    if (!response.ok) return null;
+    return serializeZoneSyncState(await response.json());
+  }
+
+  function createRefreshDemandTracker() {
+    let demand = null;
+    let queuedBatches = 0;
+    function snapshot() {
+      return demand ? { baseline: demand.baseline } : null;
+    }
+    return {
+      enqueue: function () {
+        queuedBatches += 1;
+      },
+      finish: function () {
+        queuedBatches = Math.max(0, queuedBatches - 1);
+        return queuedBatches === 0 ? snapshot() : null;
+      },
+      recordSuccess: function (baseline) {
+        demand = { baseline: baseline || null };
+      },
+      ready: function () {
+        return queuedBatches === 0 ? snapshot() : null;
+      },
+      clear: function () {
+        demand = null;
+      },
+    };
   }
 
   function canvasToBlob(canvas, type, quality) {
@@ -448,11 +524,6 @@
     return normalized;
   }
 
-  function describeFiles(files) {
-    if (!files.length) return '没有选择图片文件。';
-    if (files.length === 1) return '已准备：' + files[0].name;
-    return '已准备：' + files.length + ' 张图片';
-  }
 
   function clamp(value, min, max) {
     return Math.min(Math.max(value, min), max);
@@ -484,17 +555,6 @@
     };
   }
 
-  function calculatePanelSize(options) {
-    const margin = typeof options.margin === 'number' ? options.margin : 8;
-    const minWidth = typeof options.minWidth === 'number' ? options.minWidth : 260;
-    const minHeight = typeof options.minHeight === 'number' ? options.minHeight : 220;
-    const maxWidth = Math.max(minWidth, options.viewportWidth - margin * 2);
-    const maxHeight = Math.max(minHeight, options.viewportHeight - margin * 2);
-    return {
-      width: clamp(options.width, minWidth, maxWidth),
-      height: clamp(options.height, minHeight, maxHeight),
-    };
-  }
 
   function queryAllDeep(rootNode, selector) {
     const results = [];
@@ -525,48 +585,102 @@
   }
 
   // queryAllDeep is expensive (it walks the entire DOM plus every shadow root and
-  // same-origin frame), so remember what we found and let the polling loop below
-  // use a cheap look-up until it is told to look properly again.
+  // same-origin frame), so cache a validated result between route changes.
   const fileInputCacheByDocument = new WeakMap();
+  const PHOTO_ACCEPT_PATTERN = /(?:^|,)\s*(?:image\/|\.(?:apng|avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|tiff?|webp)\b)/i;
 
-  function findICloudFileInput(doc) {
-    const cached = fileInputCacheByDocument.get(doc);
-    if (cached && cached.isConnected) return cached;
-    fileInputCacheByDocument.delete(doc);
-
-    const inputs = queryAllDeep(doc, 'input[type="file"]').filter(function (input) {
-      return !(typeof input.closest === 'function' && input.closest('#' + PANEL_ID));
-    });
-    if (!inputs.length) return null;
-
-    const preferred = inputs.find(function (input) {
-      const accept = String(input.getAttribute('accept') || '').toLowerCase();
-      return accept.includes('image') || accept.includes('video') || input.multiple;
-    });
-
-    const found = preferred || inputs[0];
-    fileInputCacheByDocument.set(doc, found);
-    return found;
+  function getDocumentRouteKey(doc) {
+    const location = doc && doc.defaultView && doc.defaultView.location;
+    if (!location) return '';
+    return String(location.href || location.pathname || '') + String(location.hash || '');
   }
 
-  // Shallow probe for the polling loop: one querySelector instead of a full
+  function isUsableICloudFileInput(input) {
+    if (!input || input.disabled || input.isConnected === false) return false;
+    if (input.type && String(input.type).toLowerCase() !== 'file') return false;
+    if (typeof input.getAttribute !== 'function') return false;
+    if (String(input.getAttribute('aria-disabled') || '').toLowerCase() === 'true') return false;
+    try {
+      if (typeof input.closest === 'function' && input.closest('#' + PANEL_ID)) return false;
+    } catch (error) {
+      return false;
+    }
+    const accept = String(input.getAttribute('accept') || '').trim();
+    return !accept || PHOTO_ACCEPT_PATTERN.test(accept);
+  }
+
+  function getFileInputScore(input, knownInputs) {
+    if (!isUsableICloudFileInput(input)) return -Infinity;
+    let score = 0;
+    const accept = String(input.getAttribute('accept') || '');
+    if (PHOTO_ACCEPT_PATTERN.test(accept)) score += 100;
+    if (input.multiple) score += 40;
+    try {
+      if (
+        typeof input.closest === 'function' &&
+        input.closest('[class*="PhotosRootContent"], [class*="PhotosApp"], [role="main"], main')
+      ) {
+        score += 80;
+      }
+    } catch (error) {
+      // Keep the MIME/multiple score when the host rejects a selector.
+    }
+    // "Newly mounted" only ranks candidates that already look like a Photos
+    // picker; it must never turn an unrelated generic file input into one.
+    if (score < 120) return -Infinity;
+    if (knownInputs && !knownInputs.has(input)) score += 1000;
+    return score;
+  }
+
+  function selectICloudFileInput(inputs, doc, knownInputs) {
+    let selected = null;
+    let selectedScore = -Infinity;
+    Array.from(inputs || []).forEach(function (input) {
+      const score = getFileInputScore(input, knownInputs);
+      if (score > selectedScore) {
+        selected = input;
+        selectedScore = score;
+      }
+    });
+    return selected;
+  }
+
+  function cacheFileInput(doc, input) {
+    if (input) {
+      fileInputCacheByDocument.set(doc, {
+        input,
+        routeKey: getDocumentRouteKey(doc),
+      });
+    }
+    return input;
+  }
+
+  function findICloudFileInput(doc, knownInputs) {
+    const cached = fileInputCacheByDocument.get(doc);
+    if (
+      !knownInputs &&
+      cached &&
+      cached.routeKey === getDocumentRouteKey(doc) &&
+      getFileInputScore(cached.input, null) > 119
+    ) {
+      return cached.input;
+    }
+    fileInputCacheByDocument.delete(doc);
+
+    return cacheFileInput(
+      doc,
+      selectICloudFileInput(queryAllDeep(doc, 'input[type="file"]'), doc, knownInputs)
+    );
+  }
+
+  // Shallow probe for the polling loop: one querySelectorAll instead of a full
   // deep walk. Only reaches inputs that are not inside a shadow root or iframe.
-  function findICloudFileInputShallow(doc) {
-    if (typeof doc.querySelectorAll !== 'function') return null;
-
-    const inputs = Array.from(doc.querySelectorAll('input[type="file"]')).filter(function (input) {
-      return !(typeof input.closest === 'function' && input.closest('#' + PANEL_ID));
-    });
-    if (!inputs.length) return null;
-
-    const preferred = inputs.find(function (input) {
-      const accept = String(input.getAttribute('accept') || '').toLowerCase();
-      return accept.includes('image') || accept.includes('video') || input.multiple;
-    });
-
-    const found = preferred || inputs[0];
-    fileInputCacheByDocument.set(doc, found);
-    return found;
+  function findICloudFileInputShallow(doc, knownInputs) {
+    if (!doc || typeof doc.querySelectorAll !== 'function') return null;
+    return cacheFileInput(
+      doc,
+      selectICloudFileInput(doc.querySelectorAll('input[type="file"]'), doc, knownInputs)
+    );
   }
 
   function sleep(ms) {
@@ -575,21 +689,31 @@
     });
   }
 
-  async function waitForICloudFileInput(doc, timeoutMs, intervalMs) {
-    const deadline = Date.now() + (timeoutMs || 2500);
+  async function waitForICloudFileInput(doc, timeoutMs, intervalMs, knownInputs) {
+    const startedAt = Date.now();
+    const deadline = startedAt + (timeoutMs || 2500);
+    const preferNewUntil = knownInputs ? Math.min(deadline, startedAt + 500) : startedAt;
     const interval = intervalMs || 80;
-    let input = findICloudFileInput(doc);
+    let fallback = null;
     let polls = 0;
 
-    while (!input && Date.now() < deadline) {
+    while (Date.now() < deadline) {
+      const input = polls % 4 === 0
+        ? findICloudFileInput(doc, knownInputs)
+        : findICloudFileInputShallow(doc, knownInputs);
+      if (input) {
+        if (!knownInputs || !knownInputs.has(input)) return input;
+        fallback = input;
+        if (Date.now() >= preferNewUntil) {
+          const finalInput = findICloudFileInput(doc, knownInputs);
+          if (finalInput && !knownInputs.has(finalInput)) return finalInput;
+          return fallback;
+        }
+      }
       await sleep(interval);
       polls += 1;
-      // Cheap probe first; fall back to the deep walk every fifth poll so a newly
-      // mounted input inside a shadow root is still discovered.
-      input = polls % 5 === 0 ? findICloudFileInput(doc) : findICloudFileInputShallow(doc);
     }
-
-    return input;
+    return fallback;
   }
 
   // Labels that contain an upload keyword but mean something else. Without this
@@ -756,43 +880,151 @@
     '#/mediatypes',
   ];
 
+  function captureLibraryViewState(doc) {
+    const view = doc && typeof doc.querySelector === 'function'
+      ? doc.querySelector('[class*="PhotosRootContent"], [class*="PhotosApp"]')
+      : null;
+    let grid = null;
+    if (view && typeof view.querySelector === 'function') {
+      grid = view.querySelector(
+        '[role="grid"], [class*="PhotosGrid"], [class*="PhotoGrid"], [class*="GridView"]'
+      );
+    }
+    const active = doc ? findActiveSidebarItem(doc) : null;
+    let activeKey = '';
+    if (active) {
+      activeKey = [
+        normalizeLabelText(active.textContent),
+        typeof active.getAttribute === 'function' ? active.getAttribute('aria-current') || '' : '',
+        typeof active.getAttribute === 'function' ? active.getAttribute('aria-selected') || '' : '',
+      ].join('|');
+    }
+    return { view, grid, activeKey };
+  }
+
+  function hasLibraryViewStateChanged(before, after) {
+    if (after.view && after.view !== before.view) return true;
+    if (after.grid && after.grid !== before.grid) return true;
+    return Boolean(after.activeKey && after.activeKey !== before.activeKey);
+  }
+
+  function waitForLibraryViewChange(doc, win, action, timeoutMs) {
+    const before = captureLibraryViewState(doc);
+    const Observer = (win && win.MutationObserver) || root.MutationObserver;
+    const target = (before.view && before.view.parentNode) ||
+      before.view ||
+      (doc && (doc.body || doc.documentElement));
+    if (typeof Observer !== 'function' || !target) {
+      try {
+        action();
+        return Promise.resolve(false);
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    }
+
+    return new Promise(function (resolve, reject) {
+      let timer = null;
+      let settled = false;
+      function changed() {
+        return hasLibraryViewStateChanged(before, captureLibraryViewState(doc));
+      }
+      const observer = new Observer(function () {
+        if (changed()) finish(true);
+      });
+      function cleanup() {
+        clearTimeout(timer);
+        observer.disconnect();
+      }
+      function finish(didChange) {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(didChange);
+      }
+
+      timer = setTimeout(function () {
+        finish(false);
+      }, Math.max(0, timeoutMs));
+      try {
+        observer.observe(target, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['class', 'aria-current', 'aria-selected'],
+        });
+        if (action() === false) {
+          finish(false);
+        } else if (changed()) {
+          finish(true);
+        }
+      } catch (error) {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          reject(error);
+        }
+      }
+    });
+  }
+
   async function softRefreshLibraryView(doc, win, options) {
     const opts = options || {};
-    const pivotDelay = typeof opts.pivotDelay === 'number' ? opts.pivotDelay : 180;
+    const totalTimeout = typeof opts.verificationTimeout === 'number'
+      ? Math.max(0, opts.verificationTimeout)
+      : 3000;
+    const expiresAt = Date.now() + totalTimeout;
+    function observe(action) {
+      return waitForLibraryViewChange(
+        doc,
+        win,
+        action,
+        Math.max(0, expiresAt - Date.now())
+      );
+    }
 
-    // Preferred path: switch the hash-based route to a different sidebar view
-    // and back. This drives iCloud's own router state, which is what actually
-    // remounts the photo grid component, without depending on DOM click handlers.
+    // Prefer iCloud's hash router, but count the round-trip as successful only
+    // when both route changes produce an observable Photos view mutation.
     if (win && win.location && typeof win.location.hash === 'string' && opts.allowHashNavigation !== false) {
-      const original = win.location.hash || '';
-      let pivot = null;
+      const originalHash = win.location.hash || '';
+      let pivotHash = null;
       for (let i = 0; i < KNOWN_HASH_ROUTES.length; i += 1) {
         const candidate = KNOWN_HASH_ROUTES[i];
-        if (original === candidate) continue;
-        if (original && original.indexOf(candidate) === 0) continue;
-        pivot = candidate;
+        if (originalHash === candidate) continue;
+        if (originalHash && originalHash.indexOf(candidate) === 0) continue;
+        pivotHash = candidate;
         break;
       }
-      if (pivot) {
+      if (pivotHash) {
         try {
-          win.location.hash = pivot;
-          await sleep(pivotDelay);
-          // Setting hash to '' clears it; setting to the original string restores
-          // any deep-link route the user was on (e.g. a specific photo).
-          win.location.hash = original;
-          return true;
+          const pivotChanged = await observe(function () {
+            win.location.hash = pivotHash;
+          });
+          if (pivotChanged) {
+            const originalChanged = await observe(function () {
+              win.location.hash = originalHash;
+            });
+            if (originalChanged) return true;
+          } else {
+            win.location.hash = originalHash;
+          }
         } catch (error) {
-          // fall through to DOM click fallback below
+          try {
+            win.location.hash = originalHash;
+          } catch (restoreError) {
+            // Continue to the DOM fallback with the best state the router kept.
+          }
         }
       }
     }
 
-    // Fallback: simulate the user clicking the sidebar.
+    if (Date.now() >= expiresAt) return false;
+
+    // Fallback: simulate the user clicking two distinct sidebar views and apply
+    // the same observable-change requirement to both clicks.
     const original = findActiveSidebarItem(doc) || findSidebarItem(doc, LIBRARY_SIDEBAR_LABELS);
     if (!original) return false;
-
     const originalText = normalizeLabelText(original.textContent);
-
     const pivotLabelPool = PIVOT_SIDEBAR_LABELS.concat(LIBRARY_SIDEBAR_LABELS);
     let pivot = null;
     for (let i = 0; i < pivotLabelPool.length; i += 1) {
@@ -805,10 +1037,13 @@
     }
     if (!pivot) return false;
 
-    if (!simulateMouseClick(pivot)) return false;
-    await sleep(pivotDelay);
-    if (!simulateMouseClick(original)) return false;
-    return true;
+    const pivotChanged = await observe(function () {
+      return simulateMouseClick(pivot);
+    });
+    if (!pivotChanged) return false;
+    return observe(function () {
+      return simulateMouseClick(original);
+    });
   }
 
   function transferFilesToInput(input, files, win) {
@@ -940,9 +1175,12 @@
     }
     let input = findICloudFileInput(doc);
     if (!input) {
+      const knownInputs = new Set(queryAllDeep(doc, 'input[type="file"]'));
       status('正在打开 iCloud 上传控件...');
       const clickedUploadTrigger = clickPossibleUploadTrigger(doc);
-      input = clickedUploadTrigger ? await waitForICloudFileInput(doc, 3000) : null;
+      input = clickedUploadTrigger
+        ? await waitForICloudFileInput(doc, 3000, undefined, knownInputs)
+        : null;
     }
     const beforeDispatch = options && options.beforeDispatch;
     if (typeof beforeDispatch === 'function') await beforeDispatch();
@@ -1037,59 +1275,6 @@
     }
   }
 
-  function loadSavedSize(win) {
-    try {
-      const raw = win.localStorage && win.localStorage.getItem(SIZE_KEY);
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (typeof parsed.width !== 'number' || typeof parsed.height !== 'number') return null;
-      return parsed;
-    } catch (error) {
-      return null;
-    }
-  }
-
-  function saveSize(win, size) {
-    try {
-      if (win.localStorage) win.localStorage.setItem(SIZE_KEY, JSON.stringify(size));
-    } catch (error) {
-      // Ignore storage failures; resizing still works for the current page.
-    }
-  }
-
-  function applyPanelSize(panel, size) {
-    panel.style.width = size.width + 'px';
-    panel.style.height = size.height + 'px';
-  }
-
-  function enablePanelResizePersistence(panel, win) {
-    const savedSize = loadSavedSize(win);
-    if (savedSize) {
-      applyPanelSize(
-        panel,
-        calculatePanelSize({
-          width: savedSize.width,
-          height: savedSize.height,
-          viewportWidth: win.innerWidth || savedSize.width,
-          viewportHeight: win.innerHeight || savedSize.height,
-          margin: 8,
-        })
-      );
-    }
-
-    const ResizeObserverCtor = win.ResizeObserver || root.ResizeObserver;
-    if (typeof ResizeObserverCtor !== 'function') return;
-
-    const observer = new ResizeObserverCtor(function (entries) {
-      const entry = entries && entries[0];
-      if (!entry || !entry.contentRect) return;
-      saveSize(win, {
-        width: Math.round(entry.contentRect.width),
-        height: Math.round(entry.contentRect.height),
-      });
-    });
-    observer.observe(panel);
-  }
 
   function applyPanelPosition(panel, position) {
     panel.style.left = position.left + 'px';
@@ -1122,67 +1307,6 @@
     return clamped;
   }
 
-  function enablePanelDragging(panel, handle, win) {
-    let dragState = null;
-
-    restorePanelPosition(panel, win);
-
-    function move(event) {
-      if (!dragState) return;
-      event.preventDefault();
-      const point = getPointerPoint(event);
-      const position = calculateDraggedPanelPosition({
-        pointerX: point.x,
-        pointerY: point.y,
-        offsetX: dragState.offsetX,
-        offsetY: dragState.offsetY,
-        panelWidth: dragState.panelWidth,
-        panelHeight: dragState.panelHeight,
-        viewportWidth: win.innerWidth || dragState.viewportWidth,
-        viewportHeight: win.innerHeight || dragState.viewportHeight,
-        margin: 8,
-      });
-      applyPanelPosition(panel, position);
-      dragState.lastPosition = position;
-    }
-
-    function stop() {
-      if (!dragState) return;
-      panel.classList.remove('is-moving');
-      if (dragState.lastPosition) savePosition(win, dragState.lastPosition);
-      dragState = null;
-      win.removeEventListener('mousemove', move, true);
-      win.removeEventListener('mouseup', stop, true);
-      win.removeEventListener('touchmove', move, true);
-      win.removeEventListener('touchend', stop, true);
-      win.removeEventListener('touchcancel', stop, true);
-    }
-
-    function start(event) {
-      if (event.target && typeof event.target.closest === 'function' && event.target.closest('button')) return;
-      const point = getPointerPoint(event);
-      const rect = panel.getBoundingClientRect();
-      dragState = {
-        offsetX: point.x - rect.left,
-        offsetY: point.y - rect.top,
-        panelWidth: rect.width,
-        panelHeight: rect.height,
-        viewportWidth: win.innerWidth || rect.right,
-        viewportHeight: win.innerHeight || rect.bottom,
-        lastPosition: { left: rect.left, top: rect.top },
-      };
-      panel.classList.add('is-moving');
-      event.preventDefault();
-      win.addEventListener('mousemove', move, true);
-      win.addEventListener('mouseup', stop, true);
-      win.addEventListener('touchmove', move, true);
-      win.addEventListener('touchend', stop, true);
-      win.addEventListener('touchcancel', stop, true);
-    }
-
-    handle.addEventListener('mousedown', start);
-    handle.addEventListener('touchstart', start, { passive: false });
-  }
 
   function enableFabDragging(panel, win) {
     restorePanelPosition(panel, win);
@@ -1314,9 +1438,11 @@
 
     let reloadTimer = null;
     let activeRefreshGeneration = null;
+    let activeSyncTask = null;
     let reloadInFlight = null;
     let sendQueue = Promise.resolve();
     const refreshGate = createGenerationGate();
+    const refreshDemand = createRefreshDemandTracker();
 
     function isRefreshCurrent(generation) {
       return activeRefreshGeneration === generation && refreshGate.isCurrent(generation);
@@ -1329,6 +1455,10 @@
     function clearPendingReload() {
       clearTimeout(reloadTimer);
       reloadTimer = null;
+      if (activeSyncTask) {
+        activeSyncTask.abort();
+        activeSyncTask = null;
+      }
       refreshGate.invalidate();
       activeRefreshGeneration = null;
       panel.classList.remove('is-pending-reload');
@@ -1342,21 +1472,27 @@
         try {
           const softened = await softRefreshLibraryView(doc, win);
           if (softened) {
+            refreshDemand.clear();
             status('已刷新图库');
-            return;
+            return true;
           }
           status('无法自动刷新图库，请使用 iCloud 侧边栏切换视图后返回。', true);
         } catch (error) {
           status('刷新图库失败，请手动切换视图。', true);
           console.warn(LOG_PREFIX, 'Soft refresh failed:', error && error.message ? error.message : error);
         }
+        return false;
       }).finally(function () {
         reloadInFlight = null;
+        if (refreshDemand.ready()) {
+          panel.classList.add('is-pending-reload');
+          panel.title = '点击重试刷新图库';
+        }
       });
       return reloadInFlight;
     }
 
-    async function fetchSyncToken() {
+    async function fetchSyncToken(signal) {
       const perf = (win && win.performance) || root.performance;
       if (
         !perf ||
@@ -1380,28 +1516,33 @@
       }
       if (!ckEntry) return null;
       try {
-        const response = await win.fetch(ckEntry.name, { credentials: 'include' });
-        if (!response.ok) return null;
-        const data = await response.json();
-        return data.zones && data.zones[0] ? data.zones[0].syncToken : null;
+        return await fetchCloudKitSyncState(win, ckEntry.name, signal);
       } catch (error) {
         return null;
       }
     }
 
     function captureBaselineToken() {
-      return withTimeout(fetchSyncToken(), 1500, 'Sync baseline timed out.').catch(function () {
+      const task = startAbortableTask(
+        fetchSyncToken,
+        1500,
+        (win && win.AbortController) || root.AbortController,
+        'Sync baseline timed out.'
+      );
+      return task.promise.catch(function () {
         return null;
       });
     }
 
-    function scheduleRefresh(baseToken) {
+    function schedulePendingRefresh() {
+      const demand = refreshDemand.ready();
+      if (!demand || reloadInFlight) return;
       clearPendingReload();
       const generation = refreshGate.next();
       activeRefreshGeneration = generation;
       panel.classList.add('is-pending-reload');
       panel.title = '点击立即刷新图库';
-      void pollSyncTokenAndRefresh(baseToken, generation).catch(function (error) {
+      void pollSyncTokenAndRefresh(demand.baseline, generation).catch(function (error) {
         console.warn(LOG_PREFIX, 'Sync polling failed:', error);
         if (isRefreshCurrent(generation)) void doReload();
       });
@@ -1443,13 +1584,17 @@
           scheduleNextPoll();
           return;
         }
-        const token = await withTimeout(
-          fetchSyncToken(),
+        const task = startAbortableTask(
+          fetchSyncToken,
           Math.min(5000, remaining),
+          (win && win.AbortController) || root.AbortController,
           'Sync check timed out.'
-        ).catch(function () {
+        );
+        activeSyncTask = task;
+        const token = await task.promise.catch(function () {
           return null;
         });
+        if (activeSyncTask === task) activeSyncTask = null;
         if (!isRefreshCurrent(generation)) return;
         if (token && token !== baseToken) {
           status('服务器已确认，正在刷新…');
@@ -1471,9 +1616,8 @@
       }
       if (reloadInFlight) await reloadInFlight;
 
-      // A new batch cancels the previous batch's refresh generation. Queued
-      // batches run serially so their busy state and refresh timers cannot race.
-      clearPendingReload();
+      // Batches run serially. The outer queue pauses any active refresh while
+      // preserving the latest successful batch's outstanding refresh demand.
       panel.classList.add('is-busy');
       let uploadedCount = 0;
       let baseToken = null;
@@ -1492,12 +1636,14 @@
       }
       if (uploadedCount > 0) {
         status('已发送 ' + uploadedCount + ' 张，等待服务器确认…');
-        scheduleRefresh(baseToken);
+        refreshDemand.recordSuccess(baseToken);
       }
     }
 
     function send(files) {
       const queuedFiles = snapshotFiles(files);
+      refreshDemand.enqueue();
+      clearPendingReload();
       sendQueue = sendQueue.then(
         function () { return sendBatch(queuedFiles); },
         function () { return sendBatch(queuedFiles); }
@@ -1505,6 +1651,8 @@
         const detail = error && error.message ? error.message : String(error);
         status('上传处理失败：' + detail, true);
         console.warn(LOG_PREFIX, 'Queued upload failed:', error);
+      }).finally(function () {
+        if (refreshDemand.finish()) schedulePendingRefresh();
       });
       return sendQueue;
     }
@@ -1533,8 +1681,9 @@
       Promise.resolve().then(async function () {
         let found = findICloudFileInput(doc);
         if (!found) {
+          const knownInputs = new Set(queryAllDeep(doc, 'input[type="file"]'));
           clickPossibleUploadTrigger(doc);
-          found = await waitForICloudFileInput(doc, 3000);
+          found = await waitForICloudFileInput(doc, 3000, undefined, knownInputs);
         }
         status(found ? '已找到 iCloud 上传控件' : '未找到上传控件', !found);
       }).catch(function (error) {
@@ -1637,6 +1786,13 @@
     };
   }
 
+  function calculateZoomTranslation(options) {
+    return {
+      tx: options.tx + options.pointerOffsetX * (1 - options.scaleRatio),
+      ty: options.ty + options.pointerOffsetY * (1 - options.scaleRatio),
+    };
+  }
+
   function resolveZoomMedia(element, zoomTarget, eventTarget, findAtPoint) {
     const overAttachedTarget = Boolean(
       element &&
@@ -1647,6 +1803,26 @@
     );
     if (overAttachedTarget) return element;
     return typeof findAtPoint === 'function' ? findAtPoint() : null;
+  }
+
+  function getMediaSourceSignature(element) {
+    if (!element) return '';
+    if (typeof element.getAttribute === 'function') {
+      const src = element.getAttribute('src') || '';
+      const srcset = element.getAttribute('srcset') || '';
+      if (src || srcset) return src + '\n' + srcset;
+    }
+    return String(element.currentSrc || element.src || '');
+  }
+
+  function hasMediaSourceChanged(element, originalSource) {
+    return getMediaSourceSignature(element) !== String(originalSource || '');
+  }
+
+  function restoreOwnedInlineStyle(style, property, appliedValue, savedValue) {
+    if (!style || appliedValue === null || style[property] !== appliedValue) return false;
+    style[property] = savedValue;
+    return true;
   }
 
   let zoomPanInstalled = false;
@@ -1677,8 +1853,15 @@
       savedTransition: '',
       savedCursor: '',
       savedWillChange: '',
+      appliedInlineTransform: null,
+      appliedTransition: null,
+      appliedCursor: null,
+      appliedWillChange: null,
       watchdogObserver: null,
       watchdogFrame: null,
+      mediaSource: '',
+      mediaObserver: null,
+      mediaLoadHandler: null,
     };
 
     let zoomHintShown = false;
@@ -1808,10 +1991,17 @@
       state.dragging = false;
     }
 
+    function setOwnedInlineStyle(property, value, appliedField) {
+      if (!state.zoomTarget) return;
+      state.zoomTarget.style[property] = value;
+      state[appliedField] = state.zoomTarget.style[property];
+    }
+
     function attach(el) {
       if (state.element === el && state.zoomTarget && state.zoomTarget.isConnected) return;
       if (state.element || state.zoomTarget) detach();
       state.element = el;
+      state.mediaSource = getMediaSourceSignature(el);
       resetView();
 
       state.zoomTarget = findZoomTarget(el);
@@ -1824,26 +2014,38 @@
       state.savedCursor = state.zoomTarget.style.cursor || '';
       state.savedWillChange = state.zoomTarget.style.willChange || '';
 
-      state.zoomTarget.style.transition = 'none';
-      state.zoomTarget.style.willChange = 'transform';
+      setOwnedInlineStyle('transition', 'none', 'appliedTransition');
+      setOwnedInlineStyle('willChange', 'transform', 'appliedWillChange');
       startWatchdog();
     }
 
     function detach() {
       stopWatchdog();
       if (state.zoomTarget) {
-        // Restore only the inline values we replaced. Writing a computed matrix
-        // here would freeze transforms that iCloud owns through CSS classes.
-        state.zoomTarget.style.transform = state.savedInlineTransform;
-        state.zoomTarget.style.transition = state.savedTransition;
-        state.zoomTarget.style.cursor = state.savedCursor;
-        state.zoomTarget.style.willChange = state.savedWillChange;
+        // Restore only values the script still owns. React may reuse this wrapper
+        // for the next photo and write its own inline state before observers run.
+        const style = state.zoomTarget.style;
+        restoreOwnedInlineStyle(
+          style, 'transform', state.appliedInlineTransform, state.savedInlineTransform
+        );
+        restoreOwnedInlineStyle(
+          style, 'transition', state.appliedTransition, state.savedTransition
+        );
+        restoreOwnedInlineStyle(style, 'cursor', state.appliedCursor, state.savedCursor);
+        restoreOwnedInlineStyle(
+          style, 'willChange', state.appliedWillChange, state.savedWillChange
+        );
       }
       state.zoomTarget = null;
       state.element = null;
       state.baseWidth = 0;
       state.baseHeight = 0;
       state.baseTransform = '';
+      state.mediaSource = '';
+      state.appliedInlineTransform = null;
+      state.appliedTransition = null;
+      state.appliedCursor = null;
+      state.appliedWillChange = null;
       resetView();
     }
 
@@ -1861,10 +2063,12 @@
 
     function applyTransform() {
       if (!state.zoomTarget) return;
-      state.zoomTarget.style.transform = expectedTransform();
-      state.zoomTarget.style.cursor = state.scale > 1
-        ? (state.dragging ? 'grabbing' : 'grab')
-        : state.savedCursor;
+      setOwnedInlineStyle('transform', expectedTransform(), 'appliedInlineTransform');
+      setOwnedInlineStyle(
+        'cursor',
+        state.scale > 1 ? (state.dragging ? 'grabbing' : 'grab') : state.savedCursor,
+        'appliedCursor'
+      );
     }
 
     function checkZoomMount() {
@@ -1897,11 +2101,29 @@
       applyTransform();
     }
 
+    function checkMediaSource() {
+      if (!state.element || !hasMediaSourceChanged(state.element, state.mediaSource)) return;
+      debugLog('media source changed, detaching');
+      mediaCache = { at: 0, el: null };
+      detach();
+    }
+
     function startWatchdog() {
       const MutationObserverCtor = (win && win.MutationObserver) || root.MutationObserver;
+      state.mediaLoadHandler = checkMediaSource;
+      if (state.element && typeof state.element.addEventListener === 'function') {
+        state.element.addEventListener('load', state.mediaLoadHandler);
+      }
+      if (typeof MutationObserverCtor === 'function' && state.element) {
+        state.mediaObserver = new MutationObserverCtor(checkMediaSource);
+        state.mediaObserver.observe(state.element, {
+          attributes: true,
+          attributeFilter: ['src', 'srcset'],
+        });
+      }
+
       const observeTarget = doc.body || doc.documentElement;
       if (typeof MutationObserverCtor !== 'function' || !observeTarget) return;
-
       state.watchdogObserver = new MutationObserverCtor(function () {
         if (state.watchdogFrame !== null) return;
         const raf = (win && win.requestAnimationFrame) || root.requestAnimationFrame;
@@ -1916,6 +2138,16 @@
     }
 
     function stopWatchdog() {
+      if (state.mediaObserver) state.mediaObserver.disconnect();
+      state.mediaObserver = null;
+      if (
+        state.element &&
+        state.mediaLoadHandler &&
+        typeof state.element.removeEventListener === 'function'
+      ) {
+        state.element.removeEventListener('load', state.mediaLoadHandler);
+      }
+      state.mediaLoadHandler = null;
       if (state.watchdogObserver) state.watchdogObserver.disconnect();
       state.watchdogObserver = null;
       const cancel = (win && win.cancelAnimationFrame) || root.cancelAnimationFrame;
@@ -1978,8 +2210,15 @@
       if (state.element !== img) attach(img);
 
       const scaleRatio = newScale / state.scale;
-      state.tx = px - (px - state.tx) * scaleRatio;
-      state.ty = py - (py - state.ty) * scaleRatio;
+      const translation = calculateZoomTranslation({
+        tx: state.tx,
+        ty: state.ty,
+        pointerOffsetX: px,
+        pointerOffsetY: py,
+        scaleRatio,
+      });
+      state.tx = translation.tx;
+      state.ty = translation.ty;
       state.scale = newScale;
       if (state.scale <= MIN_SCALE + 0.001) {
         debugLog('detach (back to 1x)');
@@ -2005,7 +2244,7 @@
       state.startY = event.clientY;
       state.origTx = state.tx;
       state.origTy = state.ty;
-      state.zoomTarget.style.cursor = 'grabbing';
+      setOwnedInlineStyle('cursor', 'grabbing', 'appliedCursor');
       event.preventDefault();
       event.stopPropagation();
     }
@@ -2025,7 +2264,7 @@
     function endDrag() {
       if (!state.dragging) return;
       state.dragging = false;
-      if (state.zoomTarget) state.zoomTarget.style.cursor = 'grab';
+      if (state.zoomTarget) setOwnedInlineStyle('cursor', 'grab', 'appliedCursor');
     }
 
     function onDoubleClick(event) {
@@ -2221,14 +2460,16 @@
     bootstrap,
     calculateCanvasSize,
     calculateDraggedPanelPosition,
-    calculatePanelSize,
     calculatePanLimits,
+    calculateZoomTranslation,
     convertImageFileToJpeg,
     createGenerationGate,
+    createRefreshDemandTracker,
     createNamedImageFile,
     decodeImageForCanvas,
     dropFilesOnICloudPage,
     extractImageFilesFromPaste,
+    fetchCloudKitSyncState,
     filterImageFiles,
     findActiveSidebarItem,
     findICloudFileInput,
@@ -2236,6 +2477,7 @@
     findSidebarItem,
     getConvertedJpegFileName,
     getPanelText,
+    hasMediaSourceChanged,
     installPasteListener,
     isInICloudPhotosAppFrame,
     isJpegLikeFile,
@@ -2244,12 +2486,17 @@
     looksLikePhotosAppDom,
     normalizeFilesForICloudWebUpload,
     resolveZoomMedia,
+    restoreOwnedInlineStyle,
+    selectICloudFileInput,
+    serializeZoneSyncState,
     shouldConvertForICloudWeb,
     snapshotFiles,
+    startAbortableTask,
     softRefreshLibraryView,
     transferFilesToInput,
     uploadViaICloudPage,
     waitForICloudFileInput,
+    waitForLibraryViewChange,
     withTimeout,
   };
 });
