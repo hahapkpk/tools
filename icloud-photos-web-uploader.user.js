@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.12.0
+// @version      1.13.0
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -170,8 +170,33 @@
       });
     }
 
-    blob.name = name;
+    // Without a File constructor the raw blob is the best we can hand over.
+    // Naming it is best-effort only — Blob.name is not a writable standard
+    // property — so callers must not depend on the name surviving.
+    try {
+      blob.name = name;
+    } catch (error) {
+      // Ignore: a blob without a name still transfers as image bytes.
+    }
     return blob;
+  }
+
+  // Decode and encode are browser-native async operations with no built-in
+  // timeout. A stalled one would otherwise wedge the whole upload path with the
+  // panel stuck in its busy state and no way out.
+  const DECODE_TIMEOUT_MS = 20000;
+  const ENCODE_TIMEOUT_MS = 30000;
+
+  function withTimeout(promise, ms, message) {
+    let timer = null;
+    const timeout = new Promise(function (resolve, reject) {
+      timer = setTimeout(function () {
+        reject(new Error(message));
+      }, ms);
+    });
+    return Promise.race([promise, timeout]).finally(function () {
+      if (timer !== null) clearTimeout(timer);
+    });
   }
 
   function canvasToBlob(canvas, type, quality) {
@@ -181,7 +206,17 @@
         return;
       }
 
+      let settled = false;
+      const timer = setTimeout(function () {
+        if (settled) return;
+        settled = true;
+        reject(new Error('Encoding timed out.'));
+      }, ENCODE_TIMEOUT_MS);
+
       canvas.toBlob(function (blob) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
         if (!blob) reject(new Error('Could not convert image to JPEG.'));
         else resolve(blob);
       }, type, quality);
@@ -201,11 +236,28 @@
 
       const url = urlApi.createObjectURL(file);
       const image = new ImageCtor();
+      let settled = false;
+
+      // Neither onload nor onerror is guaranteed to fire for a decode that
+      // stalls, so bound the wait ourselves.
+      const timer = setTimeout(function () {
+        if (settled) return;
+        settled = true;
+        urlApi.revokeObjectURL(url);
+        reject(new Error('Decoding timed out: ' + (file.name || 'unnamed file')));
+      }, DECODE_TIMEOUT_MS);
+
       image.onload = function () {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
         urlApi.revokeObjectURL(url);
         resolve(image);
       };
       image.onerror = function () {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
         urlApi.revokeObjectURL(url);
         reject(new Error('Could not decode image: ' + (file.name || 'unnamed file')));
       };
@@ -216,7 +268,11 @@
   async function decodeImageForCanvas(file, win) {
     if (win && typeof win.createImageBitmap === 'function') {
       try {
-        return await win.createImageBitmap(file);
+        return await withTimeout(
+          win.createImageBitmap(file),
+          DECODE_TIMEOUT_MS,
+          'Decoding timed out: ' + (file.name || 'unnamed file')
+        );
       } catch (error) {
         // createImageBitmap commonly fails on SVG and ICO; fall back to <img>.
       }
@@ -235,7 +291,13 @@
   // Pick a reasonable raster size in that case so the JPEG output is usable.
   const SVG_DEFAULT_RASTER_PX = 1024;
 
-  async function convertImageFileToJpeg(file, win) {
+  // Canvas dimensions beyond roughly 16384px (and beyond the total-pixel cap)
+  // make toBlob return null instead of throwing, which used to surface as an
+  // unexplained "conversion failed". iPhone panoramas hit this. 8192 is well
+  // past what iCloud's web viewer renders, so downscaling loses nothing visible.
+  const MAX_CANVAS_EDGE_PX = 8192;
+
+  async function convertImageFileToJpeg(file, win, status) {
     const actualWindow = win || root;
     const doc = actualWindow.document || root.document;
     if (!doc || typeof doc.createElement !== 'function') {
@@ -253,6 +315,16 @@
 
     if (!width || !height) throw new Error('Could not read image dimensions: ' + (file.name || 'unnamed file'));
 
+    const longestEdge = Math.max(width, height);
+    if (longestEdge > MAX_CANVAS_EDGE_PX) {
+      const ratio = MAX_CANVAS_EDGE_PX / longestEdge;
+      width = Math.max(1, Math.round(width * ratio));
+      height = Math.max(1, Math.round(height * ratio));
+      if (typeof status === 'function') {
+        status('已缩放至 ' + width + '×' + height + '（原图超出浏览器画布上限）');
+      }
+    }
+
     const canvas = doc.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
@@ -262,6 +334,7 @@
 
     context.fillStyle = '#fff';
     context.fillRect(0, 0, width, height);
+    context.imageSmoothingQuality = 'high';
     context.drawImage(image, 0, 0, width, height);
 
     if (typeof image.close === 'function') image.close();
@@ -273,8 +346,11 @@
   async function normalizeFilesForICloudWebUpload(files, win, status, converter) {
     const images = filterImageFiles(files);
     const normalized = [];
+    const failures = [];
     let convertedCount = 0;
     const convert = converter || convertImageFileToJpeg;
+    const report = typeof status === 'function' ? status : function () {};
+    let processedCount = 0;
 
     for (let i = 0; i < images.length; i += 1) {
       const file = images[i];
@@ -283,20 +359,31 @@
         continue;
       }
 
-      status('正在转换为 iCloud.com 支持的 JPEG：' + (file.name || '图片'));
+      processedCount += 1;
+      report('正在转换为 iCloud.com 支持的 JPEG（' + processedCount + '）：' + (file.name || '图片'));
       try {
-        normalized.push(await convert(file, win));
+        const converted = await convert(file, win, report);
+        // A converter that resolves to nothing would otherwise put an unusable
+        // entry into the upload batch.
+        if (!converted) throw new Error('converter returned no file');
+        normalized.push(converted);
         convertedCount += 1;
       } catch (error) {
-        throw new Error(
-          '无法将“' + (file.name || '图片') + '”转换为 JPEG。' +
-            '当前浏览器可能无法解码这个源格式。详情：' + error.message
-        );
+        // One undecodable file must not cost the user the rest of the batch.
+        failures.push((file.name || '图片') + '（' + ((error && error.message) || '未知错误') + '）');
       }
     }
 
     if (convertedCount) {
-      status('已将 ' + convertedCount + ' 张图片转换为 JPEG。');
+      report('已将 ' + convertedCount + ' 张图片转换为 JPEG。');
+    }
+
+    if (failures.length) {
+      report(
+        '跳过 ' + failures.length + ' 张无法转换的图片：' + failures.join('；') +
+          (normalized.length ? '。其余 ' + normalized.length + ' 张继续上传。' : '。没有可上传的图片。'),
+        !normalized.length
+      );
     }
 
     return normalized;
@@ -362,7 +449,15 @@
     return results;
   }
 
+  // queryAllDeep is expensive (it walks the entire DOM plus every shadow root and
+  // same-origin frame), so remember what we found and let the polling loop below
+  // use a cheap look-up until it is told to look properly again.
+  let cachedFileInput = null;
+
   function findICloudFileInput(doc) {
+    if (cachedFileInput && cachedFileInput.isConnected) return cachedFileInput;
+    cachedFileInput = null;
+
     const inputs = queryAllDeep(doc, 'input[type="file"]').filter(function (input) {
       return !(typeof input.closest === 'function' && input.closest('#' + PANEL_ID));
     });
@@ -373,7 +468,27 @@
       return accept.includes('image') || accept.includes('video') || input.multiple;
     });
 
-    return preferred || inputs[0];
+    cachedFileInput = preferred || inputs[0];
+    return cachedFileInput;
+  }
+
+  // Shallow probe for the polling loop: one querySelector instead of a full
+  // deep walk. Only reaches inputs that are not inside a shadow root or iframe.
+  function findICloudFileInputShallow(doc) {
+    if (typeof doc.querySelectorAll !== 'function') return null;
+
+    const inputs = Array.from(doc.querySelectorAll('input[type="file"]')).filter(function (input) {
+      return !(typeof input.closest === 'function' && input.closest('#' + PANEL_ID));
+    });
+    if (!inputs.length) return null;
+
+    const preferred = inputs.find(function (input) {
+      const accept = String(input.getAttribute('accept') || '').toLowerCase();
+      return accept.includes('image') || accept.includes('video') || input.multiple;
+    });
+
+    cachedFileInput = preferred || inputs[0];
+    return cachedFileInput;
   }
 
   function sleep(ms) {
@@ -386,30 +501,51 @@
     const deadline = Date.now() + (timeoutMs || 2500);
     const interval = intervalMs || 80;
     let input = findICloudFileInput(doc);
+    let polls = 0;
 
     while (!input && Date.now() < deadline) {
       await sleep(interval);
-      input = findICloudFileInput(doc);
+      polls += 1;
+      // Cheap probe first; fall back to the deep walk every fifth poll so a newly
+      // mounted input inside a shadow root is still discovered.
+      input = polls % 5 === 0 ? findICloudFileInput(doc) : findICloudFileInputShallow(doc);
     }
 
     return input;
   }
 
+  // Labels that contain an upload keyword but mean something else. Without this
+  // list a substring match on '添加'/'add' would happily click "添加到相簿".
+  const NON_UPLOAD_LABEL_MARKERS = [
+    'album', '相簿', '共享', 'share', 'description', 'caption', 'comment',
+    '评论', '标题', 'title', 'person', 'people', '人脸', '地点', 'location',
+    'date', '日期', 'tag', '标签', 'folder', '文件夹', 'link', '链接',
+  ];
+
+  const UPLOAD_LABEL_MARKERS = [
+    'upload', 'uploads', 'uploading', 'add photo', 'add photos', 'add image',
+    'add images', 'add picture', 'add pictures', 'import photos', 'import photo',
+    'choose photo', 'choose photos', 'select photos', 'upload photos',
+    '上传', '添加照片', '增加照片', '添加图片', '导入',
+  ];
+
   function isUploadTrigger(element) {
+    if (!element || typeof element.getAttribute !== 'function') return false;
+
     const label = [
       element.getAttribute('aria-label'),
       element.getAttribute('title'),
       element.textContent,
     ].join(' ').toLowerCase();
 
-    return (
-      label.includes('upload') ||
-      label.includes('add photos') ||
-      label.includes('add photo') ||
-      label.includes('上传') ||
-      label.includes('加入') ||
-      label.includes('添加')
-    );
+    if (!label.trim()) return false;
+    if (NON_UPLOAD_LABEL_MARKERS.some(function (marker) {
+      return label.indexOf(marker) !== -1;
+    })) return false;
+
+    return UPLOAD_LABEL_MARKERS.some(function (marker) {
+      return label.indexOf(marker) !== -1;
+    });
   }
 
   function clickPossibleUploadTrigger(doc) {
@@ -608,6 +744,11 @@
     });
 
     input.files = transfer.files;
+    // Assigning input.files is a silent no-op when the browser rejects it, so
+    // read the result back instead of claiming a success we cannot observe.
+    const attached = input.files ? input.files.length : 0;
+    if (attached !== files.length) return false;
+
     const EventCtor = (win && win.Event) || root.Event;
     const inputEvent = typeof EventCtor === 'function'
       ? new EventCtor('input', { bubbles: true, composed: true })
@@ -685,18 +826,25 @@
     return true;
   }
 
+  // Returns the number of images actually handed to iCloud (0 on failure) so the
+  // caller reports what happened instead of what was attempted.
   async function uploadViaICloudPage(files, doc, win, status) {
     let images = filterImageFiles(files);
     if (!images.length) {
       status('这里只能上传图片文件。', true);
-      return false;
+      return 0;
     }
 
     try {
       images = await normalizeFilesForICloudWebUpload(images, win, status);
     } catch (error) {
       status(error.message, true);
-      return false;
+      return 0;
+    }
+
+    if (!images.length) {
+      status('没有图片可以上传：全部转换失败。', true);
+      return 0;
     }
 
     let input = findICloudFileInput(doc);
@@ -709,21 +857,21 @@
     if (!input) {
       status('找不到 iCloud 上传控件，正在尝试拖拽上传通道...');
       if (dropFilesOnICloudPage(images, doc, win)) {
-        status('已通过拖拽上传通道发送：' + images.length + ' 张图片。');
-        return true;
+        status('已通过拖拽上传通道发送：' + images.length + ' 张图片（未经验证）。');
+        return images.length;
       }
       status('找不到可用的 iCloud 上传入口。请确认当前页面已经登录并停留在“照片”图库视图。', true);
-      return false;
+      return 0;
     }
 
     const transferred = transferFilesToInput(input, images, input.ownerDocument && input.ownerDocument.defaultView || win);
     if (!transferred) {
       status('浏览器阻止了自动交接。请使用“选择图片”按钮手动选择。', true);
-      return false;
+      return 0;
     }
 
     status('已发送到 iCloud 上传队列：' + images.length + ' 张图片。');
-    return true;
+    return images.length;
   }
 
   function injectStyles(doc) {
@@ -738,7 +886,7 @@
       'box-shadow:0 4px 14px rgba(0,0,0,.25);cursor:pointer;',
       'display:flex;align-items:center;justify-content:center;',
       'transition:transform .15s ease,box-shadow .15s ease,background .15s ease;',
-      'touch-action:none;-webkit-user-select:none;user-select:none;',
+      'touch-action:none;-webkit-user-select:none;user-select:none;overflow:visible;',
       'font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}',
       '#' + PANEL_ID + ':hover{transform:scale(1.06);box-shadow:0 6px 18px rgba(0,0,0,.3)}',
       '#' + PANEL_ID + ':focus{outline:none;box-shadow:0 0 0 3px rgba(0,122,255,.35)}',
@@ -755,13 +903,15 @@
       'border:2px solid transparent;border-top-color:#fff;opacity:0;pointer-events:none}',
       '@keyframes iu-spin{to{transform:rotate(360deg)}}',
       '#' + PANEL_ID + ' .iu-toast{position:absolute;right:calc(100% + 8px);bottom:50%;',
-      'transform:translate(6px,50%);white-space:nowrap;background:rgba(0,0,0,.82);color:#fff;',
+      'transform:translate(6px,50%);white-space:normal;word-break:break-word;',
+      'background:rgba(0,0,0,.82);color:#fff;',
       'font:12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;',
       'padding:6px 10px;border-radius:8px;pointer-events:none;opacity:0;',
-      'transition:opacity .2s ease,transform .2s ease;max-width:280px;',
-      'overflow:hidden;text-overflow:ellipsis}',
+      'transition:opacity .2s ease,transform .2s ease;max-width:320px;',
+      'max-height:40vh;overflow:hidden}',
       '#' + PANEL_ID + ' .iu-toast.is-visible{opacity:1;transform:translate(0,50%)}',
       '#' + PANEL_ID + ' .iu-toast.is-error{background:rgba(176,0,32,.92)}',
+      '#' + PANEL_ID + '.is-zoomed .iu-toast.is-visible{opacity:.92}',
       '#' + PANEL_ID + ' input[type="file"]{display:none}',
     ].join('');
     doc.head.appendChild(style);
@@ -858,11 +1008,34 @@
     panel.style.bottom = 'auto';
   }
 
+  // A position saved on a larger window (or a second monitor that is no longer
+  // attached) would otherwise restore the FAB off-screen with no way to grab it.
+  function restorePanelPosition(panel, win) {
+    const savedPosition = loadSavedPosition(win);
+    if (!savedPosition) return;
+
+    const rect = typeof panel.getBoundingClientRect === 'function'
+      ? panel.getBoundingClientRect()
+      : { width: 44, height: 44 };
+    const clamped = calculateDraggedPanelPosition({
+      pointerX: savedPosition.left + (rect.width || 44) / 2,
+      pointerY: savedPosition.top + (rect.height || 44) / 2,
+      offsetX: (rect.width || 44) / 2,
+      offsetY: (rect.height || 44) / 2,
+      panelWidth: rect.width || 44,
+      panelHeight: rect.height || 44,
+      viewportWidth: win.innerWidth || 0,
+      viewportHeight: win.innerHeight || 0,
+      margin: 8,
+    });
+    applyPanelPosition(panel, clamped);
+    return clamped;
+  }
+
   function enablePanelDragging(panel, handle, win) {
     let dragState = null;
 
-    const savedPosition = loadSavedPosition(win);
-    if (savedPosition) applyPanelPosition(panel, savedPosition);
+    restorePanelPosition(panel, win);
 
     function move(event) {
       if (!dragState) return;
@@ -922,8 +1095,12 @@
   }
 
   function enableFabDragging(panel, win) {
-    const savedPosition = loadSavedPosition(win);
-    if (savedPosition) applyPanelPosition(panel, savedPosition);
+    restorePanelPosition(panel, win);
+    if (win && typeof win.addEventListener === 'function') {
+      win.addEventListener('resize', function () {
+        restorePanelPosition(panel, win);
+      });
+    }
 
     let dragState = null;
     let moved = false;
@@ -1041,15 +1218,17 @@
       else console.log(LOG_PREFIX, message);
     }
 
-    let pendingReload = null;
+    let reloadTimer = null;
+    let pollActive = false;
     let reloadInFlight = false;
 
     async function doReload() {
       clearPendingReload();
       if (reloadInFlight) return;
       reloadInFlight = true;
+      let softened = false;
       try {
-        const softened = await softRefreshLibraryView(doc, win);
+        softened = await softRefreshLibraryView(doc, win);
         if (softened) {
           status('已刷新图库');
           return;
@@ -1059,8 +1238,12 @@
       } finally {
         reloadInFlight = false;
       }
+      // A full reload throws away everything the page is holding — an open
+      // editor, the upload queue, scroll position. Only do it when the soft
+      // refresh could not remount the grid at all.
       try {
         if (win.location && typeof win.location.reload === 'function') {
+          status('无法软刷新，正在重新加载页面…', true);
           win.location.reload();
         }
       } catch (error) {
@@ -1069,11 +1252,13 @@
     }
 
     function clearPendingReload() {
-      if (pendingReload) {
-        clearTimeout(pendingReload);
-        pendingReload = null;
+      if (reloadTimer) {
+        clearTimeout(reloadTimer);
+        reloadTimer = null;
       }
+      pollActive = false;
       panel.classList.remove('is-pending-reload');
+      panel.title = text.tooltip;
     }
 
     function scheduleRefresh() {
@@ -1085,7 +1270,9 @@
 
     async function fetchSyncToken() {
       // Find the CloudKit zones/list URL from performance entries
-      var entries = (win.performance || performance).getEntriesByType('resource');
+      var perf = (win && win.performance) || root.performance;
+      if (!perf || typeof perf.getEntriesByType !== 'function') return null;
+      var entries = perf.getEntriesByType('resource');
       var ckEntry = null;
       for (var i = entries.length - 1; i >= 0; i--) {
         if (entries[i].name.indexOf('ckdatabasews') !== -1 &&
@@ -1106,38 +1293,45 @@
     }
 
     async function pollSyncTokenAndRefresh() {
+      pollActive = true;
       var baseToken = await fetchSyncToken();
+      if (!pollActive) return;
       if (!baseToken) {
-        // Can't poll, fall back to timed refresh
-        status('⏳ 等待服务器处理…');
-        pendingReload = setTimeout(function () { pendingReload = null; doReload(); }, 5000);
+        // No baseline to compare against; the resource-timing entry may simply
+        // have been evicted from the buffer. Fall back to one timed refresh.
+        status('⏳ 无法读取同步状态，稍后刷新…');
+        reloadTimer = setTimeout(function () { reloadTimer = null; doReload(); }, 5000);
         return;
       }
       status('⏳ 等待服务器确认…');
       var attempts = 0;
-      var maxAttempts = 15; // 15 * 2s = 30s max wait
+      var maxAttempts = 12;
+      var delay = 2000;
 
       function poll() {
         attempts += 1;
         fetchSyncToken().then(function (token) {
-          if (!panel.classList.contains('is-pending-reload')) return; // cancelled
+          if (!pollActive) return; // cancelled or already refreshed
           if (token && token !== baseToken) {
-            // Sync token changed — server processed the upload
+            // Sync token changed — the server has processed something in this zone.
             status('✓ 服务器已确认，刷新中…');
             doReload();
           } else if (attempts >= maxAttempts) {
-            // Timeout — refresh anyway
-            status('⏳ 超时，强制刷新…');
+            // Timed out. The token may legitimately never change if the upload
+            // landed elsewhere, so refresh gently rather than force-reloading a
+            // page that may still be uploading.
+            status('⏳ 等待超时，尝试软刷新…');
             doReload();
           } else {
-            pendingReload = setTimeout(poll, 2000);
+            delay = Math.min(delay + 1000, 5000);
+            reloadTimer = setTimeout(poll, delay);
           }
         }).catch(function () {
-          // Network error, just refresh after a short delay
-          pendingReload = setTimeout(function () { doReload(); }, 3000);
+          if (!pollActive) return;
+          reloadTimer = setTimeout(function () { reloadTimer = null; doReload(); }, 3000);
         });
       }
-      pendingReload = setTimeout(poll, 2000);
+      reloadTimer = setTimeout(poll, delay);
     }
 
     async function send(files) {
@@ -1149,14 +1343,14 @@
       // A new upload cancels any queued auto-refresh so we refresh only once at the end.
       clearPendingReload();
       panel.classList.add('is-busy');
-      let uploaded = false;
+      let uploadedCount = 0;
       try {
-        uploaded = await uploadViaICloudPage(files, doc, win, status);
+        uploadedCount = await uploadViaICloudPage(files, doc, win, status);
       } finally {
         panel.classList.remove('is-busy');
       }
-      if (uploaded) {
-        status('✓ 已发送 ' + images.length + ' 张，等待服务器确认…');
+      if (uploadedCount > 0) {
+        status('✓ 已发送 ' + uploadedCount + ' 张，等待服务器确认…');
         scheduleRefresh();
       }
     }
@@ -1169,7 +1363,7 @@
         return;
       }
       if (event.target === picker) return;
-      if (pendingReload) {
+      if (pollActive || panel.classList.contains('is-pending-reload')) {
         event.preventDefault();
         doReload();
         return;
@@ -1206,6 +1400,9 @@
 
     panel.addEventListener('drop', function (event) {
       event.preventDefault();
+      // Keep the drop from bubbling to iCloud's own drop handling, which would
+      // enqueue the very same DataTransfer a second time.
+      event.stopPropagation();
       panel.classList.remove('is-dragging');
       send(event.dataTransfer && event.dataTransfer.files);
     });
@@ -1219,11 +1416,12 @@
     return panel;
   }
 
-  let pasteListenerInstalled = false;
-
   function installPasteListener(doc, win) {
-    if (pasteListenerInstalled) return;
-    pasteListenerInstalled = true;
+    // Registered on every mount rather than once per page: the first mount can
+    // happen before <body> exists, and a listener that silently went missing
+    // would disable paste upload for the rest of the session. The event tag
+    // below keeps duplicate registrations from handling the same paste twice.
+    const PASTE_FLAG = '__iCloudUploaderPasteHandler';
 
     function dispatchPaste(event) {
       // The same paste event bubbles to window/document/body — each has our
@@ -1266,6 +1464,8 @@
 
     targets.forEach(function (target) {
       try {
+        if (target[PASTE_FLAG] === dispatchPaste) return;
+        target[PASTE_FLAG] = dispatchPaste;
         target.addEventListener('paste', dispatchPaste, true);
       } catch (error) {
         // ignore registration failures
@@ -1293,12 +1493,34 @@
       startY: 0,
       origTx: 0,
       origTy: 0,
+      dragWidth: 0,
+      dragHeight: 0,
+      rafActive: false,
+      rafId: null,
       savedTransform: '',
       savedTransition: '',
       savedOrigin: '',
       savedCursor: '',
       savedUserSelect: '',
     };
+
+    let zoomHintShown = false;
+
+    function showZoomHint() {
+      if (zoomHintShown) return;
+      zoomHintShown = true;
+      const panel = doc.getElementById ? doc.getElementById(PANEL_ID) : null;
+      const toast = panel && panel.querySelector ? panel.querySelector('.iu-toast') : null;
+      if (!toast) return;
+      toast.textContent = '滚轮缩放 · 拖动平移 · Esc 复位';
+      toast.classList.remove('is-error');
+      toast.classList.add('is-visible');
+      panel.classList.add('is-zoomed');
+      setTimeout(function () {
+        toast.classList.remove('is-visible');
+        panel.classList.remove('is-zoomed');
+      }, 3600);
+    }
 
     function isLargeMedia(el) {
       if (!el || !el.tagName) return false;
@@ -1317,6 +1539,7 @@
       for (let i = 0; i < stack.length; i += 1) {
         const el = stack[i];
         if (!isLargeMedia(el)) continue;
+        // isLargeMedia already measured the element; do not force a second reflow.
         const rect = el.getBoundingClientRect();
         const area = rect.width * rect.height;
         if (area > bestArea) {
@@ -1327,7 +1550,17 @@
       return best;
     }
 
+    // The wheel handler runs on every scroll tick, so cache the "largest media in
+    // the viewport" answer briefly instead of measuring every image on the page
+    // each time.
+    let mediaCache = { at: 0, el: null };
+    const MEDIA_CACHE_MS = 250;
+
     function findLargestMediaInViewport() {
+      const now = Date.now();
+      if (mediaCache.el && mediaCache.el.isConnected && now - mediaCache.at < MEDIA_CACHE_MS) {
+        return mediaCache.el;
+      }
       const candidates = doc.querySelectorAll
         ? doc.querySelectorAll('img, canvas, video')
         : [];
@@ -1347,6 +1580,7 @@
           bestArea = area;
         }
       }
+      mediaCache = { at: now, el: best };
       return best;
     }
 
@@ -1381,17 +1615,38 @@
       return el; // fallback to the image itself
     }
 
-    function attach(el) {
-      if (state.element === el) return;
-      if (state.element) detach();
-      state.element = el;
+    // The inline value is empty whenever iCloud styles the wrapper through a
+    // class instead, and restoring '' in that case would strip a transform we
+    // never set. Fall back to the computed value.
+    function readCurrentTransform(el) {
+      if (el.style && el.style.transform) return el.style.transform;
+      try {
+        const getStyle = (win && win.getComputedStyle) || (root.getComputedStyle || null);
+        if (typeof getStyle !== 'function') return '';
+        const computed = getStyle(el);
+        const value = computed && computed.transform;
+        return value && value !== 'none' ? value : '';
+      } catch (error) {
+        return '';
+      }
+    }
+
+    function resetView() {
       state.scale = 1;
       state.tx = 0;
       state.ty = 0;
+      state.dragging = false;
+    }
+
+    function attach(el) {
+      if (state.element === el && state.zoomTarget && state.zoomTarget.isConnected) return;
+      if (state.element) detach();
+      state.element = el;
+      resetView();
 
       // Find the wrapper that iCloud uses for its native zoom transform
       state.zoomTarget = findZoomTarget(el);
-      state.savedTransform = state.zoomTarget.style.transform || '';
+      state.savedTransform = readCurrentTransform(state.zoomTarget);
       state.savedTransition = state.zoomTarget.style.transition || '';
       state.savedCursor = state.zoomTarget.style.cursor || '';
 
@@ -1411,14 +1666,27 @@
       }
       state.zoomTarget = null;
       state.element = null;
-      state.scale = 1;
-      state.tx = 0;
-      state.ty = 0;
-      state.dragging = false;
+      resetView();
     }
 
     function expectedTransform() {
       return 'translate(' + state.tx + 'px, ' + state.ty + 'px) scale(' + state.scale + ')';
+    }
+
+    // Pan bounds for the currently rendered box. Without this the image can be
+    // dragged completely out of view at high zoom with no way back except Esc.
+    function translationLimit(rect, scale) {
+      return {
+        x: Math.max(0, ((scale - 1) * rect.width) / 2),
+        y: Math.max(0, ((scale - 1) * rect.height) / 2),
+      };
+    }
+
+    function clampTranslation() {
+      if (!state.zoomTarget || typeof state.zoomTarget.getBoundingClientRect !== 'function') return;
+      const limit = translationLimit(state.zoomTarget.getBoundingClientRect(), state.scale);
+      state.tx = Math.max(-limit.x, Math.min(limit.x, state.tx));
+      state.ty = Math.max(-limit.y, Math.min(limit.y, state.ty));
     }
 
     function applyTransform() {
@@ -1431,41 +1699,58 @@
       const raf = (win && win.requestAnimationFrame) || root.requestAnimationFrame;
       if (typeof raf !== 'function' || state.rafActive) return;
       state.rafActive = true;
+      let idleFrames = 0;
+
       function tick() {
         if (!state.element || state.scale <= MIN_SCALE + 0.001) {
           state.rafActive = false;
           return;
         }
-        // If the source element was replaced by React, decide whether to migrate.
-        if (!state.element.isConnected) {
+        // If the element or the wrapper it lives in was replaced by React, decide
+        // whether to migrate. Checking both matters: a replaced wrapper leaves the
+        // transform on a detached node while the visible one stays at 1×.
+        const elementGone = !state.element.isConnected;
+        const targetGone = !state.zoomTarget || !state.zoomTarget.isConnected;
+        if (elementGone || targetGone) {
           const oldSrc = (state.element.currentSrc || state.element.src) || '';
           const replacement = findLargestMediaInViewport();
           const newSrc = (replacement && (replacement.currentSrc || replacement.src)) || '';
-          const sameImage = replacement && oldSrc && newSrc && oldSrc === newSrc;
+          const sameImage = replacement &&
+            ((oldSrc && newSrc && oldSrc === newSrc) || (targetGone && !elementGone));
           if (sameImage) {
             debugLog('element re-rendered, re-anchoring zoom');
-            const keepScale = state.scale;
-            const keepTx = state.tx;
-            const keepTy = state.ty;
+            const camera = { scale: state.scale, tx: state.tx, ty: state.ty };
             state.element = null;
             attach(replacement);
-            state.scale = keepScale;
-            state.tx = keepTx;
-            state.ty = keepTy;
+            state.scale = camera.scale;
+            state.tx = camera.tx;
+            state.ty = camera.ty;
+            clampTranslation();
           } else {
             debugLog('user navigated away, detaching');
             detach();
             return;
           }
         }
-        // Keep the zoom target's transform in sync.
+        // Keep the zoom target's transform in sync, but do not rewrite it every
+        // frame: only repair it when something else changed it, and stop the
+        // loop once the DOM has been quiet for a while.
         if (state.zoomTarget) {
           const expected = expectedTransform();
           if (state.zoomTarget.style.transform !== expected) {
             state.zoomTarget.style.transform = expected;
+            idleFrames = 0;
+          } else {
+            idleFrames += 1;
           }
           if (state.zoomTarget.style.transition !== 'none') {
             state.zoomTarget.style.transition = 'none';
+          }
+          if (idleFrames > 180) {
+            debugLog('watchdog idle, parking');
+            state.rafActive = false;
+            startWatchdogLater();
+            return;
           }
         }
         state.rafId = raf(tick);
@@ -1473,10 +1758,27 @@
       state.rafId = raf(tick);
     }
 
+    // Parked watchdog: re-arm lazily so a long-lived zoom does not burn a frame
+    // callback forever, but a React re-render is still picked up quickly.
+    function startWatchdogLater() {
+      if (state.watchdogTimer) clearTimeout(state.watchdogTimer);
+      state.watchdogTimer = setTimeout(function () {
+        state.watchdogTimer = null;
+        if (state.element && state.scale > MIN_SCALE + 0.001) {
+          mediaCache = { at: 0, el: null };
+          startWatchdog();
+        }
+      }, 1000);
+    }
+
     function stopWatchdog() {
       const cancel = (win && win.cancelAnimationFrame) || root.cancelAnimationFrame;
       if (typeof cancel === 'function' && state.rafId != null) {
         cancel(state.rafId);
+      }
+      if (state.watchdogTimer) {
+        clearTimeout(state.watchdogTimer);
+        state.watchdogTimer = null;
       }
       state.rafActive = false;
       state.rafId = null;
@@ -1494,7 +1796,17 @@
     }
 
     function onWheel(event) {
-      const img = state.element || findPreviewImage(event.target, event.clientX, event.clientY);
+      // Only reuse the attached element while the cursor is actually over it:
+      // otherwise a single zoom would hijack the page scroll everywhere on the
+      // page (and zoom the wrong photo while hovering a thumbnail).
+      let img = null;
+      if (state.element && state.zoomTarget && state.element.isConnected) {
+        const overTarget = event.target &&
+          typeof state.zoomTarget.contains === 'function' &&
+          state.zoomTarget.contains(event.target);
+        if (overTarget) img = state.element;
+      }
+      if (!img) img = findPreviewImage(event.target, event.clientX, event.clientY);
       if (!img) {
         debugLog('no preview img', event.target && event.target.tagName, event.target && event.target.className);
         return;
@@ -1529,6 +1841,8 @@
         detach();
         return;
       }
+      clampTranslation();
+      showZoomHint();
       debugLog('scale=', state.scale.toFixed(2), 'tag=', img.tagName, 'size=', Math.round(rect.width) + 'x' + Math.round(rect.height));
       applyTransform();
     }
@@ -1546,6 +1860,8 @@
       state.startY = event.clientY;
       state.origTx = state.tx;
       state.origTy = state.ty;
+      state.dragWidth = rect.width;
+      state.dragHeight = rect.height;
       state.zoomTarget.style.cursor = 'grabbing';
       event.preventDefault();
       event.stopPropagation();
@@ -1555,6 +1871,11 @@
       if (!state.dragging || !state.element) return;
       state.tx = state.origTx + (event.clientX - state.startX);
       state.ty = state.origTy + (event.clientY - state.startY);
+      // Bound the pan against the box measured at drag start so the image cannot
+      // be pushed out of view.
+      const limit = translationLimit({ width: state.dragWidth, height: state.dragHeight }, state.scale);
+      state.tx = Math.max(-limit.x, Math.min(limit.x, state.tx));
+      state.ty = Math.max(-limit.y, Math.min(limit.y, state.ty));
       applyTransform();
       event.preventDefault();
     }
@@ -1565,8 +1886,29 @@
       if (state.zoomTarget) state.zoomTarget.style.cursor = 'grab';
     }
 
+    function onDoubleClick(event) {
+      if (!state.element) return;
+      if (event.target && state.zoomTarget && typeof state.zoomTarget.contains === 'function' &&
+          !state.zoomTarget.contains(event.target)) {
+        return;
+      }
+      event.preventDefault();
+      detach();
+    }
+
     function onKeyDown(event) {
       if (!state.element) return;
+      // Only claim the reset keys when the user is not typing or invoking a
+      // browser/OS shortcut.
+      const target = event.target;
+      if (target && typeof target.matches === 'function') {
+        try {
+          if (target.matches('input, textarea, select, [contenteditable]')) return;
+        } catch (error) {
+          // ignore selector errors and continue
+        }
+      }
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
       if (event.key === 'Escape' || event.key === '0') {
         event.preventDefault();
         detach();
@@ -1586,17 +1928,42 @@
       target.addEventListener('mousemove', onMouseMove, true);
       target.addEventListener('mouseup', endDrag, true);
       target.addEventListener('mouseleave', endDrag, true);
+      target.addEventListener('dblclick', onDoubleClick, true);
       target.addEventListener('keydown', onKeyDown, true);
     });
   }
 
-  function isInICloudPhotosAppFrame(win) {    try {
+  // DOM markers unique to the Photos app chrome. Used as a fallback so a renamed
+  // route does not silently disable the whole script. Keep these narrow: a false
+  // positive here would mount a second panel, every bit as bad as mounting none.
+  const APP_DOM_MARKERS = [
+    '[class*="OneUpCarouselItem"]',
+    '[class*="PhotosRootContent"]',
+  ];
+
+  function looksLikePhotosAppDom(doc) {
+    if (!doc || typeof doc.querySelector !== 'function') return false;
+    return APP_DOM_MARKERS.some(function (selector) {
+      try {
+        return Boolean(doc.querySelector(selector));
+      } catch (error) {
+        return false;
+      }
+    });
+  }
+
+  function isInICloudPhotosAppFrame(win, doc) {
+    try {
       const loc = win && win.location;
       if (!loc) return false;
       // The actual Photos app is loaded inside an iframe at
       // /applications/photos3/current/<locale>/index.html.
       // The outer shell at /photos is just a launcher.
-      return /^\/applications\/photos/i.test(loc.pathname || '');
+      if (/^\/applications\/photos/i.test(loc.pathname || '')) return true;
+      // The route is an implementation detail Apple can rename at any time. If
+      // the document carries the app's own markup we mount anyway rather than
+      // leaving the user with a script that silently does nothing.
+      return looksLikePhotosAppDom(doc || (win && win.document));
     } catch (error) {
       return false;
     }
@@ -1605,48 +1972,107 @@
   function observeAndRemount(doc, win) {
     const MutationObserverCtor = (win && win.MutationObserver) || root.MutationObserver;
     if (typeof MutationObserverCtor !== 'function') return;
+
+    let observed = null;
+    let reattachTimer = null;
+
     const observer = new MutationObserverCtor(function () {
-      if (doc.body && !doc.getElementById(PANEL_ID)) {
-        try {
-          createPanel(doc, win);
-        } catch (error) {
-          console.warn(LOG_PREFIX, 'Remount failed:', error && error.message ? error.message : error);
+      const panel = doc.getElementById(PANEL_ID);
+      if (panel && panel.isConnected) {
+        // React can replace the subtree the panel lives in (not just body's
+        // direct children), so track whichever parent currently holds it.
+        if (observed !== panel.parentNode) {
+          observed = panel.parentNode;
+          if (observed) observer.observe(observed, { childList: true, subtree: false });
         }
+        return;
       }
+      try {
+        const remounted = createPanel(doc, win);
+        observed = remounted && remounted.parentNode;
+        if (observed) observer.observe(observed, { childList: true, subtree: false });
+      } catch (error) {
+        console.warn(LOG_PREFIX, 'Remount failed:', error && error.message ? error.message : error);
+      }
+      // Swapping out the subtree can drop our document-level listeners too;
+      // re-assert them, which is idempotent thanks to the handler marker.
+      if (reattachTimer) clearTimeout(reattachTimer);
+      reattachTimer = setTimeout(function () {
+        reattachTimer = null;
+        installPasteListener(doc, win);
+      }, 200);
     });
-    const target = doc.body || doc.documentElement;
-    if (target) observer.observe(target, { childList: true, subtree: false });
+
+    const target = (doc.getElementById(PANEL_ID) || {}).parentNode || doc.body || doc.documentElement;
+    if (target) {
+      observed = target;
+      observer.observe(target, { childList: true, subtree: false });
+    }
+  }
+
+  function mountPanel(doc, win) {
+    createPanel(doc, win);
+    installPasteListener(doc, win);
+    installImageZoomPan(doc, win);
+    observeAndRemount(doc, win);
+    return true;
   }
 
   function mountWhenReady(doc, win) {
+    if (!doc) return false;
     if (doc.body) {
-      createPanel(doc, win);
-      installPasteListener(doc, win);
-      installImageZoomPan(doc, win);
-      observeAndRemount(doc, win);
-      return;
+      if (!isInICloudPhotosAppFrame(win, doc)) return false;
+      mountPanel(doc, win);
+      return true;
     }
     doc.addEventListener('DOMContentLoaded', function () {
-      if (!doc.body) return;
-      createPanel(doc, win);
-      installPasteListener(doc, win);
-      installImageZoomPan(doc, win);
-      observeAndRemount(doc, win);
+      if (doc.body && isInICloudPhotosAppFrame(win, doc)) mountPanel(doc, win);
     }, { once: true });
+    return true;
   }
 
   function bootstrap() {
     const doc = root.document;
     if (!doc) return;
     const win = root.window || root;
-    if (!isInICloudPhotosAppFrame(win)) {
-      // Outer shell frame (or unrelated page). The inner iframe instance will mount the panel.
-      if (typeof console !== 'undefined' && console.debug) {
-        console.debug(LOG_PREFIX, 'Skipping panel mount in non-app frame:', (win.location || {}).href);
+
+    if (mountWhenReady(doc, win)) return;
+
+    // Not the app frame. The outer shell loads the Photos app in an iframe, and
+    // that iframe usually gets its own copy of this script — but if it mounted
+    // before we were injected, adopt it so the panel is not missing all session.
+    const adoptFrames = function () {
+      let frames = [];
+      try {
+        frames = Array.from(win.frames || []);
+      } catch (error) {
+        frames = [];
       }
-      return;
+      for (let i = 0; i < frames.length; i += 1) {
+        try {
+          const frameDoc = frames[i].document;
+          if (!frameDoc) continue;
+          if (frameDoc.getElementById(PANEL_ID)) return true;
+          if (!looksLikePhotosAppDom(frameDoc)) continue;
+          mountPanel(frameDoc, frames[i]);
+          return true;
+        } catch (error) {
+          // Cross-origin frame: nothing we can do from here.
+        }
+      }
+      return false;
+    };
+
+    const deadline = Date.now() + 20000;
+    const pollFrames = function () {
+      if (adoptFrames() || Date.now() > deadline) return;
+      setTimeout(pollFrames, 400);
+    };
+    pollFrames();
+
+    if (typeof console !== 'undefined' && console.debug) {
+      console.debug(LOG_PREFIX, 'Waiting for the Photos app frame at', (win.location || {}).href);
     }
-    mountWhenReady(doc, win);
   }
 
   return {
@@ -1660,17 +2086,21 @@
     filterImageFiles,
     findActiveSidebarItem,
     findICloudFileInput,
+    findICloudFileInputShallow,
     findSidebarItem,
     getConvertedJpegFileName,
     getPanelText,
     isInICloudPhotosAppFrame,
     isJpegLikeFile,
     isImageLikeFile,
+    isUploadTrigger,
+    looksLikePhotosAppDom,
     normalizeFilesForICloudWebUpload,
     shouldConvertForICloudWeb,
     softRefreshLibraryView,
     transferFilesToInput,
     uploadViaICloudPage,
     waitForICloudFileInput,
+    withTimeout,
   };
 });
