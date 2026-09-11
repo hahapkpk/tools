@@ -279,38 +279,242 @@ test('转换后的文件名统一为 .jpg', () => {
   assert.equal(api.getConvertedJpegFileName(''), 'icloud-upload-image.jpg');
 });
 
-test('滚动缩放只在指针位于缩放目标内时复用已附加元素', () => {
-  // 回归：状态清理函数被重命名后，滚轮临时状态不能再泄漏到下一次手势。
-  assert.match(source, /function resetView\(\)/);
-  assert.match(source, /const overTarget = event\.target &&/);
-  assert.match(source, /if \(overTarget\) img = state\.element;/);
-  assert.match(source, /function clampTranslation\(\)/);
-  assert.doesNotMatch(source, /const img = state\.element \|\| findPreviewImage/);
+test('文件选择结果可在 input 清空前复制为稳定数组', () => {
+  const file = fakeFile('picked.png', 'image/png');
+  const liveFileList = { 0: file, length: 1 };
+
+  const snapshot = api.snapshotFiles(liveFileList);
+  delete liveFileList[0];
+  liveFileList.length = 0;
+
+  assert.deepEqual(snapshot, [file]);
 });
 
-test('刷新轮询不再用整页 reload 作为超时兜底', () => {
-  assert.match(source, /let pollActive = false;/);
-  assert.match(source, /if \(!pollActive\) return;/);
-  assert.doesNotMatch(source, /超时，强制刷新/);
+test('滚轮只复用指针命中的缩放目标', () => {
+  const image = {};
+  const inside = {};
+  const outside = {};
+  const zoomTarget = {
+    contains(node) {
+      return node === inside;
+    },
+  };
+  let pointLookups = 0;
+
+  assert.equal(
+    api.resolveZoomMedia(image, zoomTarget, inside, () => {
+      pointLookups += 1;
+      return null;
+    }),
+    image
+  );
+  assert.equal(pointLookups, 0);
+  assert.equal(api.resolveZoomMedia(image, zoomTarget, outside, () => null), null);
+  assert.equal(api.resolveZoomMedia(image, zoomTarget, outside, () => image), image);
 });
 
-test('粘贴监听器按目标幂等注册，不会因首次挂载过早而永久失效', () => {
-  assert.doesNotMatch(source, /let pasteListenerInstalled = false;/);
-  assert.match(source, /const PASTE_FLAG = '__iCloudUploaderPasteHandler';/);
-  assert.match(source, /if \(target\[PASTE_FLAG\] === dispatchPaste\) return;/);
+test('平移边界使用未缩放尺寸，八倍缩放不会重复放大', () => {
+  assert.deepEqual(api.calculatePanLimits(400, 300, 8), {
+    x: 1400,
+    y: 1050,
+  });
+});
+
+test('粘贴监听器在同一目标上只注册一次', () => {
+  function listenerTarget() {
+    const counts = new Map();
+    return {
+      addEventListener(type) {
+        counts.set(type, (counts.get(type) || 0) + 1);
+      },
+      count(type) {
+        return counts.get(type) || 0;
+      },
+    };
+  }
+
+  const win = listenerTarget();
+  const body = listenerTarget();
+  const doc = Object.assign(listenerTarget(), {
+    body,
+    getElementById() {
+      return null;
+    },
+  });
+
+  api.installPasteListener(doc, win);
+  api.installPasteListener(doc, win);
+
+  assert.equal(win.count('paste'), 1);
+  assert.equal(doc.count('paste'), 1);
+  assert.equal(body.count('paste'), 1);
+});
+
+test('刷新代际令牌会让旧轮询立即失效', () => {
+  const gate = api.createGenerationGate();
+  const first = gate.next();
+  assert.equal(gate.isCurrent(first), true);
+
+  const second = gate.next();
+  assert.equal(gate.isCurrent(first), false);
+  assert.equal(gate.isCurrent(second), true);
+
+  gate.invalidate();
+  assert.equal(gate.isCurrent(second), false);
+});
+
+test('未被页面接受的拖放不会报告上传成功，也不会广播到多个目标', () => {
+  const dispatched = [];
+  const target = {
+    dispatchEvent(event) {
+      dispatched.push(event.type);
+      return true;
+    },
+  };
+  const doc = {
+    body: { dispatchEvent() { throw new Error('不应广播到 body'); } },
+    documentElement: { dispatchEvent() { throw new Error('不应广播到 html'); } },
+    querySelectorAll(selector) {
+      if (selector === '[role="main"]') return [target];
+      return [];
+    },
+  };
+  class DataTransferStub {
+    constructor() {
+      this.items = { add() {} };
+    }
+  }
+  class EventStub {
+    constructor(type, options) {
+      this.type = type;
+      this.defaultPrevented = false;
+      Object.assign(this, options);
+    }
+    preventDefault() {
+      this.defaultPrevented = true;
+    }
+  }
+
+  const accepted = api.dropFilesOnICloudPage(
+    [fakeFile('photo.jpg', 'image/jpeg')],
+    doc,
+    { DataTransfer: DataTransferStub, DragEvent: EventStub, Event: EventStub }
+  );
+
+  assert.equal(accepted, false);
+  assert.deepEqual(dispatched, ['dragenter', 'dragover', 'drop']);
+});
+
+test('页面取消 dragover 时拖放备用通道才报告已接受', () => {
+  const dispatched = [];
+  const target = {
+    dispatchEvent(event) {
+      dispatched.push(event.type);
+      if (event.type === 'dragover') event.preventDefault();
+      return !event.defaultPrevented;
+    },
+  };
+  const doc = {
+    querySelectorAll(selector) {
+      if (selector === '[data-testid*="drop" i]') return [target];
+      return [];
+    },
+  };
+  class DataTransferStub {
+    constructor() {
+      this.items = { add() {} };
+    }
+  }
+  class EventStub {
+    constructor(type, options) {
+      this.type = type;
+      this.defaultPrevented = false;
+      Object.assign(this, options);
+    }
+    preventDefault() {
+      this.defaultPrevented = true;
+    }
+  }
+
+  const accepted = api.dropFilesOnICloudPage(
+    [fakeFile('photo.jpg', 'image/jpeg')],
+    doc,
+    { DataTransfer: DataTransferStub, DragEvent: EventStub, Event: EventStub }
+  );
+
+  assert.equal(accepted, true);
+  assert.deepEqual(dispatched, ['dragenter', 'dragover', 'drop']);
+});
+
+test('input.files setter 抛错时上传交接返回 false 而不是泄漏异常', () => {
+  const input = {
+    set files(value) {
+      void value;
+      const error = new Error('blocked');
+      error.name = 'SecurityError';
+      throw error;
+    },
+  };
+  class DataTransferStub {
+    constructor() {
+      this.items = { add() {} };
+      this.files = [];
+    }
+  }
+
+  assert.doesNotThrow(() => {
+    assert.equal(
+      api.transferFilesToInput(
+        input,
+        [fakeFile('photo.jpg', 'image/jpeg')],
+        { DataTransfer: DataTransferStub }
+      ),
+      false
+    );
+  });
+});
+
+test('createImageBitmap 超时后不会再串行等待 img 解码', async () => {
+  const startedAt = Date.now();
+
+  await assert.rejects(
+    api.decodeImageForCanvas(
+      fakeFile('stalled.png', 'image/png'),
+      {
+        createImageBitmap() {
+          return new Promise(() => {});
+        },
+        document: {
+          createElement() {
+            throw new Error('超时后不应回退到 img');
+          },
+        },
+      },
+      15
+    ),
+    /Decoding timed out/
+  );
+
+  assert.ok(Date.now() - startedAt < 100);
+});
+
+test('画布尺寸同时受长边和总像素限制', () => {
+  const landscape = api.calculateCanvasSize(12000, 8000, 8192, 40000000);
+  const square = api.calculateCanvasSize(8192, 8192, 8192, 40000000);
+
+  assert.ok(landscape.width <= 8192);
+  assert.ok(landscape.width * landscape.height <= 40000000);
+  assert.ok(square.width * square.height <= 40000000);
+  assert.ok(Math.abs(landscape.width / landscape.height - 1.5) < 0.001);
 });
 
 test('面板拖拽会阻止 drop 冒泡，避免 iCloud 重复入队', () => {
-  assert.match(source, /Keep the drop from bubbling to iCloud's own drop handling/);
-  assert.match(source, /event\.stopPropagation\(\);\n\s*panel\.classList\.remove\('is-dragging'\);/);
+  assert.match(
+    source,
+    /event\.stopPropagation\(\);\r?\n\s*panel\.classList\.remove\('is-dragging'\);/
+  );
 });
 
-test('画布尺寸受浏览器上限保护', () => {
-  assert.match(source, /const MAX_CANVAS_EDGE_PX = 8192;/);
-  assert.match(source, /const DECODE_TIMEOUT_MS = 20000;/);
-  assert.match(source, /const ENCODE_TIMEOUT_MS = 30000;/);
-});
-
-test('版本号已升级', () => {
-  assert.match(source, /\/\/ @version\s+1\.13\.0/);
+test('版本号已升级到 1.13.1', () => {
+  assert.match(source, /\/\/ @version\s+1\.13\.1/);
 });
