@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.13.0
+// @version      1.13.1
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -31,6 +31,10 @@
   const IMAGE_EXTENSIONS = /\.(apng|avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|tiff?|webp)$/i;
   const JPEG_EXTENSIONS = /\.jpe?g$/i;
   const JPEG_QUALITY = 0.92;
+  const pasteDispatcherByDocument = new WeakMap();
+  const registeredPasteTargets = new WeakSet();
+  const handledPasteEvents = new WeakSet();
+
   const PANEL_TEXT = {
     title: 'iCloud 上传',
     tooltip: '点击选择 · 粘贴 · 拖拽',
@@ -83,13 +87,17 @@
     if (!file) return false;
     const type = String(file.type || '').toLowerCase();
     if (type.startsWith('image/')) return true;
+    if (type && type !== 'application/octet-stream') return false;
     return IMAGE_EXTENSIONS.test(String(file.name || ''));
   }
 
   function isJpegLikeFile(file) {
     if (!file) return false;
     const type = String(file.type || '').toLowerCase();
-    if (type === 'image/jpeg' || type === 'image/jpg') return true;
+    if (type.startsWith('image/')) {
+      return type === 'image/jpeg' || type === 'image/jpg';
+    }
+    if (type && type !== 'application/octet-stream') return false;
     return JPEG_EXTENSIONS.test(String(file.name || ''));
   }
 
@@ -157,16 +165,20 @@
     return files;
   }
 
+  function snapshotFiles(fileList) {
+    return Array.from(fileList || []);
+  }
+
   function filterImageFiles(fileList) {
     return Array.from(fileList || []).filter(isImageLikeFile);
   }
 
-  function createFileFromBlob(blob, name, win) {
+  function createFileFromBlob(blob, name, win, lastModified) {
     const FileCtor = win && win.File ? win.File : root.File;
     if (typeof FileCtor === 'function') {
       return new FileCtor([blob], name, {
         type: 'image/jpeg',
-        lastModified: Date.now(),
+        lastModified: typeof lastModified === 'number' ? lastModified : Date.now(),
       });
     }
 
@@ -186,16 +198,22 @@
   // panel stuck in its busy state and no way out.
   const DECODE_TIMEOUT_MS = 20000;
   const ENCODE_TIMEOUT_MS = 30000;
+  function createTimeoutError(message) {
+    const error = new Error(message);
+    error.name = 'TimeoutError';
+    return error;
+  }
+
 
   function withTimeout(promise, ms, message) {
     let timer = null;
     const timeout = new Promise(function (resolve, reject) {
       timer = setTimeout(function () {
-        reject(new Error(message));
+        reject(createTimeoutError(message));
       }, ms);
     });
     return Promise.race([promise, timeout]).finally(function () {
-      if (timer !== null) clearTimeout(timer);
+      clearTimeout(timer);
     });
   }
 
@@ -223,61 +241,78 @@
     });
   }
 
-  function loadImageElement(file, win) {
+  function loadImageElement(file, win, timeoutMs) {
     return new Promise(function (resolve, reject) {
       const doc = win.document || root.document;
       const ImageCtor = win.Image || root.Image;
       const urlApi = win.URL || root.URL;
-
       if (!doc || !ImageCtor || !urlApi || typeof urlApi.createObjectURL !== 'function') {
         reject(new Error('Image decoding is not available in this browser.'));
         return;
       }
-
       const url = urlApi.createObjectURL(file);
       const image = new ImageCtor();
+      const deadline = typeof timeoutMs === 'number' ? timeoutMs : DECODE_TIMEOUT_MS;
       let settled = false;
-
-      // Neither onload nor onerror is guaranteed to fire for a decode that
-      // stalls, so bound the wait ourselves.
-      const timer = setTimeout(function () {
+      let timer = null;
+      function cleanup() {
+        clearTimeout(timer);
+        image.onload = null;
+        image.onerror = null;
+        urlApi.revokeObjectURL(url);
+      }
+      timer = setTimeout(function () {
         if (settled) return;
         settled = true;
-        urlApi.revokeObjectURL(url);
-        reject(new Error('Decoding timed out: ' + (file.name || 'unnamed file')));
-      }, DECODE_TIMEOUT_MS);
-
+        cleanup();
+        try {
+          image.src = '';
+        } catch (error) {
+          // Ignore abort failures after the timeout has already been reported.
+        }
+        reject(createTimeoutError('Decoding timed out: ' + (file.name || 'unnamed file')));
+      }, deadline);
       image.onload = function () {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
-        urlApi.revokeObjectURL(url);
+        cleanup();
         resolve(image);
       };
       image.onerror = function () {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
-        urlApi.revokeObjectURL(url);
+        cleanup();
         reject(new Error('Could not decode image: ' + (file.name || 'unnamed file')));
       };
       image.src = url;
     });
   }
-
-  async function decodeImageForCanvas(file, win) {
+  async function decodeImageForCanvas(file, win, timeoutMs) {
+    const deadline = typeof timeoutMs === 'number' ? timeoutMs : DECODE_TIMEOUT_MS;
+    const startedAt = Date.now();
     if (win && typeof win.createImageBitmap === 'function') {
+      let bitmapPromise = null;
       try {
+        bitmapPromise = Promise.resolve(win.createImageBitmap(file));
         return await withTimeout(
-          win.createImageBitmap(file),
-          DECODE_TIMEOUT_MS,
+          bitmapPromise,
+          deadline,
           'Decoding timed out: ' + (file.name || 'unnamed file')
         );
       } catch (error) {
-        // createImageBitmap commonly fails on SVG and ICO; fall back to <img>.
+        if (error && error.name === 'TimeoutError') {
+          if (bitmapPromise) {
+            bitmapPromise.then(function (bitmap) {
+              if (bitmap && typeof bitmap.close === 'function') bitmap.close();
+            }, function () {});
+          }
+          throw error;
+        }
+        // createImageBitmap commonly rejects SVG and ICO; fall back to <img>.
       }
     }
-    return loadImageElement(file, win || root);
+    const remainingMs = Math.max(1, deadline - (Date.now() - startedAt));
+    return loadImageElement(file, win || root, remainingMs);
   }
 
   function isSvgFile(file) {
@@ -291,11 +326,19 @@
   // Pick a reasonable raster size in that case so the JPEG output is usable.
   const SVG_DEFAULT_RASTER_PX = 1024;
 
-  // Canvas dimensions beyond roughly 16384px (and beyond the total-pixel cap)
-  // make toBlob return null instead of throwing, which used to surface as an
-  // unexplained "conversion failed". iPhone panoramas hit this. 8192 is well
-  // past what iCloud's web viewer renders, so downscaling loses nothing visible.
+  // Large browser canvases can exhaust hundreds of MiB before JPEG encoding.
+  // Bound both dimensions and total pixels; report every downscale to the user.
   const MAX_CANVAS_EDGE_PX = 8192;
+  const MAX_CANVAS_PIXELS = 40000000;
+  function calculateCanvasSize(width, height, maxEdge, maxPixels) {
+    const edgeRatio = Math.min(1, maxEdge / Math.max(width, height));
+    const pixelRatio = Math.min(1, Math.sqrt(maxPixels / (width * height)));
+    const ratio = Math.min(edgeRatio, pixelRatio);
+    return {
+      width: Math.max(1, Math.floor(width * ratio)),
+      height: Math.max(1, Math.floor(height * ratio)),
+    };
+  }
 
   async function convertImageFileToJpeg(file, win, status) {
     const actualWindow = win || root;
@@ -303,44 +346,60 @@
     if (!doc || typeof doc.createElement !== 'function') {
       throw new Error('Canvas JPEG conversion is not available in this browser.');
     }
-
     const image = await decodeImageForCanvas(file, actualWindow);
-    let width = image.width || image.naturalWidth;
-    let height = image.height || image.naturalHeight;
-
-    if ((!width || !height) && isSvgFile(file)) {
-      width = SVG_DEFAULT_RASTER_PX;
-      height = SVG_DEFAULT_RASTER_PX;
-    }
-
-    if (!width || !height) throw new Error('Could not read image dimensions: ' + (file.name || 'unnamed file'));
-
-    const longestEdge = Math.max(width, height);
-    if (longestEdge > MAX_CANVAS_EDGE_PX) {
-      const ratio = MAX_CANVAS_EDGE_PX / longestEdge;
-      width = Math.max(1, Math.round(width * ratio));
-      height = Math.max(1, Math.round(height * ratio));
-      if (typeof status === 'function') {
-        status('已缩放至 ' + width + '×' + height + '（原图超出浏览器画布上限）');
+    let canvas = null;
+    try {
+      let width = image.width || image.naturalWidth;
+      let height = image.height || image.naturalHeight;
+      if ((!width || !height) && isSvgFile(file)) {
+        width = SVG_DEFAULT_RASTER_PX;
+        height = SVG_DEFAULT_RASTER_PX;
+      }
+      if (!width || !height) {
+        throw new Error('Could not read image dimensions: ' + (file.name || 'unnamed file'));
+      }
+      const sourceWidth = width;
+      const sourceHeight = height;
+      const canvasSize = calculateCanvasSize(
+        sourceWidth,
+        sourceHeight,
+        MAX_CANVAS_EDGE_PX,
+        MAX_CANVAS_PIXELS
+      );
+      width = canvasSize.width;
+      height = canvasSize.height;
+      if (width !== sourceWidth || height !== sourceHeight) {
+        if (typeof status === 'function') {
+          status(
+            '为避免浏览器转换崩溃，已将 ' +
+            sourceWidth + '×' + sourceHeight +
+            ' 缩放至 ' + width + '×' + height
+          );
+        }
+      }
+      canvas = doc.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('Canvas 2D rendering is not available in this browser.');
+      context.fillStyle = '#fff';
+      context.fillRect(0, 0, width, height);
+      context.imageSmoothingQuality = 'high';
+      context.drawImage(image, 0, 0, width, height);
+      const blob = await canvasToBlob(canvas, 'image/jpeg', JPEG_QUALITY);
+      return createFileFromBlob(
+        blob,
+        getConvertedJpegFileName(file.name),
+        actualWindow,
+        file && file.lastModified
+      );
+    } finally {
+      if (image && typeof image.close === 'function') image.close();
+      if (canvas) {
+        canvas.width = 1;
+        canvas.height = 1;
       }
     }
-
-    const canvas = doc.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-
-    const context = canvas.getContext('2d');
-    if (!context) throw new Error('Canvas 2D rendering is not available in this browser.');
-
-    context.fillStyle = '#fff';
-    context.fillRect(0, 0, width, height);
-    context.imageSmoothingQuality = 'high';
-    context.drawImage(image, 0, 0, width, height);
-
-    if (typeof image.close === 'function') image.close();
-
-    const blob = await canvasToBlob(canvas, 'image/jpeg', JPEG_QUALITY);
-    return createFileFromBlob(blob, getConvertedJpegFileName(file.name), actualWindow);
   }
 
   async function normalizeFilesForICloudWebUpload(files, win, status, converter) {
@@ -398,6 +457,22 @@
   function clamp(value, min, max) {
     return Math.min(Math.max(value, min), max);
   }
+  function createGenerationGate() {
+    let generation = 0;
+    return {
+      next() {
+        generation += 1;
+        return generation;
+      },
+      invalidate() {
+        generation += 1;
+      },
+      isCurrent(candidate) {
+        return candidate === generation;
+      },
+    };
+  }
+
 
   function calculateDraggedPanelPosition(options) {
     const margin = typeof options.margin === 'number' ? options.margin : 8;
@@ -452,11 +527,12 @@
   // queryAllDeep is expensive (it walks the entire DOM plus every shadow root and
   // same-origin frame), so remember what we found and let the polling loop below
   // use a cheap look-up until it is told to look properly again.
-  let cachedFileInput = null;
+  const fileInputCacheByDocument = new WeakMap();
 
   function findICloudFileInput(doc) {
-    if (cachedFileInput && cachedFileInput.isConnected) return cachedFileInput;
-    cachedFileInput = null;
+    const cached = fileInputCacheByDocument.get(doc);
+    if (cached && cached.isConnected) return cached;
+    fileInputCacheByDocument.delete(doc);
 
     const inputs = queryAllDeep(doc, 'input[type="file"]').filter(function (input) {
       return !(typeof input.closest === 'function' && input.closest('#' + PANEL_ID));
@@ -468,8 +544,9 @@
       return accept.includes('image') || accept.includes('video') || input.multiple;
     });
 
-    cachedFileInput = preferred || inputs[0];
-    return cachedFileInput;
+    const found = preferred || inputs[0];
+    fileInputCacheByDocument.set(doc, found);
+    return found;
   }
 
   // Shallow probe for the polling loop: one querySelector instead of a full
@@ -487,8 +564,9 @@
       return accept.includes('image') || accept.includes('video') || input.multiple;
     });
 
-    cachedFileInput = preferred || inputs[0];
-    return cachedFileInput;
+    const found = preferred || inputs[0];
+    fileInputCacheByDocument.set(doc, found);
+    return found;
   }
 
   function sleep(ms) {
@@ -520,6 +598,7 @@
     'album', '相簿', '共享', 'share', 'description', 'caption', 'comment',
     '评论', '标题', 'title', 'person', 'people', '人脸', '地点', 'location',
     'date', '日期', 'tag', '标签', 'folder', '文件夹', 'link', '链接',
+    'cancel upload', 'stop upload', 'abort upload', '取消上传', '停止上传', '终止上传',
   ];
 
   const UPLOAD_LABEL_MARKERS = [
@@ -734,42 +813,45 @@
 
   function transferFilesToInput(input, files, win) {
     if (!input || !files.length) return false;
-
     const WindowDataTransfer = win && win.DataTransfer;
     if (typeof WindowDataTransfer !== 'function') return false;
-
-    const transfer = new WindowDataTransfer();
-    files.forEach(function (file) {
-      transfer.items.add(file);
-    });
-
-    input.files = transfer.files;
-    // Assigning input.files is a silent no-op when the browser rejects it, so
-    // read the result back instead of claiming a success we cannot observe.
-    const attached = input.files ? input.files.length : 0;
-    if (attached !== files.length) return false;
-
-    const EventCtor = (win && win.Event) || root.Event;
-    const inputEvent = typeof EventCtor === 'function'
-      ? new EventCtor('input', { bubbles: true, composed: true })
-      : { type: 'input' };
-    const changeEvent = typeof EventCtor === 'function'
-      ? new EventCtor('change', { bubbles: true, composed: true })
-      : { type: 'change' };
-    input.dispatchEvent(inputEvent);
-    input.dispatchEvent(changeEvent);
-    return true;
+    try {
+      const transfer = new WindowDataTransfer();
+      files.forEach(function (file) {
+        transfer.items.add(file);
+      });
+      input.files = transfer.files;
+      // Assigning input.files is a silent no-op when the browser rejects it, so
+      // read the result back instead of claiming a success we cannot observe.
+      const attached = input.files ? input.files.length : 0;
+      if (attached !== files.length) return false;
+      const EventCtor = (win && win.Event) || root.Event;
+      const inputEvent = typeof EventCtor === 'function'
+        ? new EventCtor('input', { bubbles: true, composed: true })
+        : { type: 'input' };
+      const changeEvent = typeof EventCtor === 'function'
+        ? new EventCtor('change', { bubbles: true, composed: true })
+        : { type: 'change' };
+      input.dispatchEvent(inputEvent);
+      input.dispatchEvent(changeEvent);
+      return true;
+    } catch (error) {
+      return false;
+    }
   }
 
   function createDataTransfer(files, win) {
     const WindowDataTransfer = win && win.DataTransfer;
     if (typeof WindowDataTransfer !== 'function') return null;
-
-    const transfer = new WindowDataTransfer();
-    files.forEach(function (file) {
-      transfer.items.add(file);
-    });
-    return transfer;
+    try {
+      const transfer = new WindowDataTransfer();
+      files.forEach(function (file) {
+        transfer.items.add(file);
+      });
+      return transfer;
+    } catch (error) {
+      return null;
+    }
   }
 
   function createDragEvent(type, transfer, win) {
@@ -794,82 +876,91 @@
     return event;
   }
 
-  function getDropTargets(doc) {
-    const targets = [];
-    ['[data-testid*="drop" i]', '[class*="drop" i]', '[role="main"]', 'main', '#root', '#app'].forEach(function (selector) {
-      queryAllDeep(doc, selector).forEach(function (element) {
-        if (targets.indexOf(element) === -1) targets.push(element);
-      });
-    });
-
-    if (doc.body && targets.indexOf(doc.body) === -1) targets.push(doc.body);
-    if (doc.documentElement && targets.indexOf(doc.documentElement) === -1) targets.push(doc.documentElement);
-    return targets;
+  function findDropTarget(doc) {
+    const selectors = [
+      '[data-testid*="drop" i]',
+      '[role="main"]',
+      'main',
+      '#root',
+      '#app',
+    ];
+    for (let i = 0; i < selectors.length; i += 1) {
+      const candidates = queryAllDeep(doc, selectors[i]);
+      for (let j = 0; j < candidates.length; j += 1) {
+        const candidate = candidates[j];
+        if (
+          candidate &&
+          !(typeof candidate.closest === 'function' && candidate.closest('#' + PANEL_ID))
+        ) {
+          return candidate;
+        }
+      }
+    }
+    return doc.body || doc.documentElement || null;
   }
-
   function dropFilesOnICloudPage(files, doc, win) {
     const transfer = createDataTransfer(files, win);
-    if (!transfer) return false;
-
-    const targets = getDropTargets(doc);
-    if (!targets.length) return false;
-
-    const eventTypes = ['dragenter', 'dragover', 'drop'];
-    targets.forEach(function (target) {
-      eventTypes.forEach(function (type) {
+    const target = transfer && findDropTarget(doc);
+    if (!target || typeof target.dispatchEvent !== 'function') return false;
+    let accepted = false;
+    try {
+      ['dragenter', 'dragover', 'drop'].forEach(function (type) {
         const event = createDragEvent(type, transfer, win);
-        if (type === 'dragover' && typeof event.preventDefault === 'function') event.preventDefault();
         target.dispatchEvent(event);
+        if (
+          (type === 'dragover' || type === 'drop') &&
+          event.defaultPrevented
+        ) {
+          accepted = true;
+        }
       });
-    });
-
-    return true;
+    } catch (error) {
+      return false;
+    }
+    return accepted;
   }
 
   // Returns the number of images actually handed to iCloud (0 on failure) so the
   // caller reports what happened instead of what was attempted.
-  async function uploadViaICloudPage(files, doc, win, status) {
+  async function uploadViaICloudPage(files, doc, win, status, options) {
     let images = filterImageFiles(files);
     if (!images.length) {
       status('这里只能上传图片文件。', true);
       return 0;
     }
-
     try {
       images = await normalizeFilesForICloudWebUpload(images, win, status);
     } catch (error) {
       status(error.message, true);
       return 0;
     }
-
     if (!images.length) {
       status('没有图片可以上传：全部转换失败。', true);
       return 0;
     }
-
     let input = findICloudFileInput(doc);
     if (!input) {
       status('正在打开 iCloud 上传控件...');
       const clickedUploadTrigger = clickPossibleUploadTrigger(doc);
       input = clickedUploadTrigger ? await waitForICloudFileInput(doc, 3000) : null;
     }
-
+    const beforeDispatch = options && options.beforeDispatch;
+    if (typeof beforeDispatch === 'function') await beforeDispatch();
     if (!input) {
       status('找不到 iCloud 上传控件，正在尝试拖拽上传通道...');
       if (dropFilesOnICloudPage(images, doc, win)) {
-        status('已通过拖拽上传通道发送：' + images.length + ' 张图片（未经验证）。');
+        status('iCloud 页面已接受拖拽上传：' + images.length + ' 张图片。');
         return images.length;
       }
       status('找不到可用的 iCloud 上传入口。请确认当前页面已经登录并停留在“照片”图库视图。', true);
       return 0;
     }
-
-    const transferred = transferFilesToInput(input, images, input.ownerDocument && input.ownerDocument.defaultView || win);
+    const inputWindow = input.ownerDocument && input.ownerDocument.defaultView || win;
+    const transferred = transferFilesToInput(input, images, inputWindow);
     if (!transferred) {
       status('浏览器阻止了自动交接。请使用“选择图片”按钮手动选择。', true);
       return 0;
     }
-
     status('已发送到 iCloud 上传队列：' + images.length + ' 张图片。');
     return images.length;
   }
@@ -908,10 +999,9 @@
       'font:12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;',
       'padding:6px 10px;border-radius:8px;pointer-events:none;opacity:0;',
       'transition:opacity .2s ease,transform .2s ease;max-width:320px;',
-      'max-height:40vh;overflow:hidden}',
-      '#' + PANEL_ID + ' .iu-toast.is-visible{opacity:1;transform:translate(0,50%)}',
+      'max-height:40vh;overflow:auto;overscroll-behavior:contain;cursor:default;text-align:left}',
+      '#' + PANEL_ID + ' .iu-toast.is-visible{opacity:1;transform:translate(0,50%);pointer-events:auto}',
       '#' + PANEL_ID + ' .iu-toast.is-error{background:rgba(176,0,32,.92)}',
-      '#' + PANEL_ID + '.is-zoomed .iu-toast.is-visible{opacity:.92}',
       '#' + PANEL_ID + ' input[type="file"]{display:none}',
     ].join('');
     doc.head.appendChild(style);
@@ -1202,191 +1292,261 @@
 
     const picker = panel.querySelector('input[type="file"]');
     const toast = panel.querySelector('.iu-toast');
+    toast.setAttribute('role', 'status');
+    toast.setAttribute('aria-live', 'polite');
     let toastTimer = null;
 
     enableFabDragging(panel, win);
 
     function status(message, isError) {
       toast.textContent = message;
+      toast.scrollTop = 0;
       toast.classList.toggle('is-error', Boolean(isError));
       toast.classList.add('is-visible');
-      if (toastTimer) clearTimeout(toastTimer);
+      clearTimeout(toastTimer);
       toastTimer = setTimeout(function () {
         toast.classList.remove('is-visible');
       }, isError ? 6000 : 2800);
       if (isError) console.warn(LOG_PREFIX, message);
       else console.log(LOG_PREFIX, message);
     }
+    panel._showUploaderStatus = status;
 
     let reloadTimer = null;
-    let pollActive = false;
-    let reloadInFlight = false;
+    let activeRefreshGeneration = null;
+    let reloadInFlight = null;
+    let sendQueue = Promise.resolve();
+    const refreshGate = createGenerationGate();
 
-    async function doReload() {
-      clearPendingReload();
-      if (reloadInFlight) return;
-      reloadInFlight = true;
-      let softened = false;
-      try {
-        softened = await softRefreshLibraryView(doc, win);
-        if (softened) {
-          status('已刷新图库');
-          return;
-        }
-      } catch (error) {
-        console.warn(LOG_PREFIX, 'Soft refresh failed:', error && error.message ? error.message : error);
-      } finally {
-        reloadInFlight = false;
-      }
-      // A full reload throws away everything the page is holding — an open
-      // editor, the upload queue, scroll position. Only do it when the soft
-      // refresh could not remount the grid at all.
-      try {
-        if (win.location && typeof win.location.reload === 'function') {
-          status('无法软刷新，正在重新加载页面…', true);
-          win.location.reload();
-        }
-      } catch (error) {
-        console.warn(LOG_PREFIX, 'Reload failed:', error && error.message ? error.message : error);
-      }
+    function isRefreshCurrent(generation) {
+      return activeRefreshGeneration === generation && refreshGate.isCurrent(generation);
+    }
+
+    function isRefreshActive() {
+      return activeRefreshGeneration !== null && isRefreshCurrent(activeRefreshGeneration);
     }
 
     function clearPendingReload() {
-      if (reloadTimer) {
-        clearTimeout(reloadTimer);
-        reloadTimer = null;
-      }
-      pollActive = false;
+      clearTimeout(reloadTimer);
+      reloadTimer = null;
+      refreshGate.invalidate();
+      activeRefreshGeneration = null;
       panel.classList.remove('is-pending-reload');
       panel.title = text.tooltip;
     }
 
-    function scheduleRefresh() {
+    function doReload() {
+      if (reloadInFlight) return reloadInFlight;
       clearPendingReload();
-      panel.classList.add('is-pending-reload');
-      panel.title = '点击立即刷新图库';
-      pollSyncTokenAndRefresh();
+      reloadInFlight = Promise.resolve().then(async function () {
+        try {
+          const softened = await softRefreshLibraryView(doc, win);
+          if (softened) {
+            status('已刷新图库');
+            return;
+          }
+          status('无法自动刷新图库，请使用 iCloud 侧边栏切换视图后返回。', true);
+        } catch (error) {
+          status('刷新图库失败，请手动切换视图。', true);
+          console.warn(LOG_PREFIX, 'Soft refresh failed:', error && error.message ? error.message : error);
+        }
+      }).finally(function () {
+        reloadInFlight = null;
+      });
+      return reloadInFlight;
     }
 
     async function fetchSyncToken() {
-      // Find the CloudKit zones/list URL from performance entries
-      var perf = (win && win.performance) || root.performance;
-      if (!perf || typeof perf.getEntriesByType !== 'function') return null;
-      var entries = perf.getEntriesByType('resource');
-      var ckEntry = null;
-      for (var i = entries.length - 1; i >= 0; i--) {
-        if (entries[i].name.indexOf('ckdatabasews') !== -1 &&
-            entries[i].name.indexOf('photos.cloud') !== -1 &&
-            entries[i].name.indexOf('zones/list') !== -1) {
-          ckEntry = entries[i]; break;
+      const perf = (win && win.performance) || root.performance;
+      if (
+        !perf ||
+        typeof perf.getEntriesByType !== 'function' ||
+        !win ||
+        typeof win.fetch !== 'function'
+      ) {
+        return null;
+      }
+      const entries = perf.getEntriesByType('resource');
+      let ckEntry = null;
+      for (let i = entries.length - 1; i >= 0; i -= 1) {
+        if (
+          entries[i].name.indexOf('ckdatabasews') !== -1 &&
+          entries[i].name.indexOf('photos.cloud') !== -1 &&
+          entries[i].name.indexOf('zones/list') !== -1
+        ) {
+          ckEntry = entries[i];
+          break;
         }
       }
       if (!ckEntry) return null;
       try {
-        var resp = await win.fetch(ckEntry.name, { credentials: 'include' });
-        if (!resp.ok) return null;
-        var data = await resp.json();
+        const response = await win.fetch(ckEntry.name, { credentials: 'include' });
+        if (!response.ok) return null;
+        const data = await response.json();
         return data.zones && data.zones[0] ? data.zones[0].syncToken : null;
       } catch (error) {
         return null;
       }
     }
 
-    async function pollSyncTokenAndRefresh() {
-      pollActive = true;
-      var baseToken = await fetchSyncToken();
-      if (!pollActive) return;
-      if (!baseToken) {
-        // No baseline to compare against; the resource-timing entry may simply
-        // have been evicted from the buffer. Fall back to one timed refresh.
-        status('⏳ 无法读取同步状态，稍后刷新…');
-        reloadTimer = setTimeout(function () { reloadTimer = null; doReload(); }, 5000);
-        return;
-      }
-      status('⏳ 等待服务器确认…');
-      var attempts = 0;
-      var maxAttempts = 12;
-      var delay = 2000;
-
-      function poll() {
-        attempts += 1;
-        fetchSyncToken().then(function (token) {
-          if (!pollActive) return; // cancelled or already refreshed
-          if (token && token !== baseToken) {
-            // Sync token changed — the server has processed something in this zone.
-            status('✓ 服务器已确认，刷新中…');
-            doReload();
-          } else if (attempts >= maxAttempts) {
-            // Timed out. The token may legitimately never change if the upload
-            // landed elsewhere, so refresh gently rather than force-reloading a
-            // page that may still be uploading.
-            status('⏳ 等待超时，尝试软刷新…');
-            doReload();
-          } else {
-            delay = Math.min(delay + 1000, 5000);
-            reloadTimer = setTimeout(poll, delay);
-          }
-        }).catch(function () {
-          if (!pollActive) return;
-          reloadTimer = setTimeout(function () { reloadTimer = null; doReload(); }, 3000);
-        });
-      }
-      reloadTimer = setTimeout(poll, delay);
+    function captureBaselineToken() {
+      return withTimeout(fetchSyncToken(), 1500, 'Sync baseline timed out.').catch(function () {
+        return null;
+      });
     }
 
-    async function send(files) {
+    function scheduleRefresh(baseToken) {
+      clearPendingReload();
+      const generation = refreshGate.next();
+      activeRefreshGeneration = generation;
+      panel.classList.add('is-pending-reload');
+      panel.title = '点击立即刷新图库';
+      void pollSyncTokenAndRefresh(baseToken, generation).catch(function (error) {
+        console.warn(LOG_PREFIX, 'Sync polling failed:', error);
+        if (isRefreshCurrent(generation)) void doReload();
+      });
+    }
+
+    async function pollSyncTokenAndRefresh(baseToken, generation) {
+      if (!isRefreshCurrent(generation)) return;
+      if (!baseToken) {
+        status('无法读取同步状态，将在 5 秒后尝试软刷新。');
+        reloadTimer = setTimeout(function () {
+          reloadTimer = null;
+          if (isRefreshCurrent(generation)) void doReload();
+        }, 5000);
+        return;
+      }
+
+      status('等待服务器确认…');
+      const expiresAt = Date.now() + 30000;
+      let delay = 2000;
+
+      function scheduleNextPoll() {
+        if (!isRefreshCurrent(generation)) return;
+        const remaining = expiresAt - Date.now();
+        if (remaining <= 0) {
+          status('等待确认超时，尝试软刷新…');
+          void doReload();
+          return;
+        }
+        reloadTimer = setTimeout(function () {
+          reloadTimer = null;
+          void poll();
+        }, Math.min(delay, remaining));
+      }
+
+      async function poll() {
+        if (!isRefreshCurrent(generation)) return;
+        const remaining = expiresAt - Date.now();
+        if (remaining <= 0) {
+          scheduleNextPoll();
+          return;
+        }
+        const token = await withTimeout(
+          fetchSyncToken(),
+          Math.min(5000, remaining),
+          'Sync check timed out.'
+        ).catch(function () {
+          return null;
+        });
+        if (!isRefreshCurrent(generation)) return;
+        if (token && token !== baseToken) {
+          status('服务器已确认，正在刷新…');
+          void doReload();
+          return;
+        }
+        delay = Math.min(delay + 1000, 5000);
+        scheduleNextPoll();
+      }
+
+      scheduleNextPoll();
+    }
+
+    async function sendBatch(files) {
       const images = filterImageFiles(files);
       if (!images.length) {
         status('只能上传图片', true);
         return;
       }
-      // A new upload cancels any queued auto-refresh so we refresh only once at the end.
+      if (reloadInFlight) await reloadInFlight;
+
+      // A new batch cancels the previous batch's refresh generation. Queued
+      // batches run serially so their busy state and refresh timers cannot race.
       clearPendingReload();
       panel.classList.add('is-busy');
       let uploadedCount = 0;
+      let baseToken = null;
       try {
-        uploadedCount = await uploadViaICloudPage(files, doc, win, status);
+        uploadedCount = await uploadViaICloudPage(images, doc, win, status, {
+          beforeDispatch: async function () {
+            baseToken = await captureBaselineToken();
+          },
+        });
+      } catch (error) {
+        const detail = error && error.message ? error.message : String(error);
+        status('上传处理失败：' + detail, true);
+        console.warn(LOG_PREFIX, 'Upload failed:', error);
       } finally {
         panel.classList.remove('is-busy');
       }
       if (uploadedCount > 0) {
-        status('✓ 已发送 ' + uploadedCount + ' 张，等待服务器确认…');
-        scheduleRefresh();
+        status('已发送 ' + uploadedCount + ' 张，等待服务器确认…');
+        scheduleRefresh(baseToken);
       }
     }
 
+    function send(files) {
+      const queuedFiles = snapshotFiles(files);
+      sendQueue = sendQueue.then(
+        function () { return sendBatch(queuedFiles); },
+        function () { return sendBatch(queuedFiles); }
+      ).catch(function (error) {
+        const detail = error && error.message ? error.message : String(error);
+        status('上传处理失败：' + detail, true);
+        console.warn(LOG_PREFIX, 'Queued upload failed:', error);
+      });
+      return sendQueue;
+    }
+
     panel.addEventListener('click', function (event) {
-      // Suppress the click that follows a drag.
-      if (panel._recentDrag) {
+      // Suppress the click that follows a drag, and never open the picker when
+      // the user is scrolling or selecting text inside a long status message.
+      if (panel._recentDrag || event.target === toast) {
         event.preventDefault();
         event.stopPropagation();
         return;
       }
       if (event.target === picker) return;
-      if (pollActive || panel.classList.contains('is-pending-reload')) {
+      if (isRefreshActive() || panel.classList.contains('is-pending-reload')) {
         event.preventDefault();
-        doReload();
+        void doReload();
         return;
       }
       picker.click();
     });
 
-    panel.addEventListener('contextmenu', async function (event) {
+    panel.addEventListener('contextmenu', function (event) {
       // Right-click: quick detection debug.
       event.preventDefault();
       status('检测 iCloud 上传控件…');
-      let found = findICloudFileInput(doc);
-      if (!found) {
-        clickPossibleUploadTrigger(doc);
-        found = await waitForICloudFileInput(doc, 3000);
-      }
-      status(found ? '已找到 iCloud 上传控件' : '未找到上传控件', !found);
+      Promise.resolve().then(async function () {
+        let found = findICloudFileInput(doc);
+        if (!found) {
+          clickPossibleUploadTrigger(doc);
+          found = await waitForICloudFileInput(doc, 3000);
+        }
+        status(found ? '已找到 iCloud 上传控件' : '未找到上传控件', !found);
+      }).catch(function (error) {
+        status('检测上传控件失败。', true);
+        console.warn(LOG_PREFIX, 'Upload input detection failed:', error);
+      });
     });
 
     picker.addEventListener('change', function () {
-      const files = picker.files;
+      const files = snapshotFiles(picker.files);
       picker.value = '';
-      send(files);
+      void send(files);
     });
 
     panel.addEventListener('dragover', function (event) {
@@ -1404,7 +1564,7 @@
       // enqueue the very same DataTransfer a second time.
       event.stopPropagation();
       panel.classList.remove('is-dragging');
-      send(event.dataTransfer && event.dataTransfer.files);
+      void send(event.dataTransfer && event.dataTransfer.files);
     });
 
     // Expose the current panel's upload handler so the shared paste listener
@@ -1417,60 +1577,76 @@
   }
 
   function installPasteListener(doc, win) {
-    // Registered on every mount rather than once per page: the first mount can
-    // happen before <body> exists, and a listener that silently went missing
-    // would disable paste upload for the rest of the session. The event tag
-    // below keeps duplicate registrations from handling the same paste twice.
-    const PASTE_FLAG = '__iCloudUploaderPasteHandler';
+    let dispatchPaste = pasteDispatcherByDocument.get(doc);
+    if (!dispatchPaste) {
+      dispatchPaste = function (event) {
+        // One paste bubbles through body, document and window. A WeakSet dedupes
+        // it without mutating browser-owned Event objects.
+        if (handledPasteEvents.has(event)) return;
+        handledPasteEvents.add(event);
 
-    function dispatchPaste(event) {
-      // The same paste event bubbles to window/document/body — each has our
-      // capture-phase listener. Dedupe by tagging the event once.
-      if (event.__iCloudUploaderPasteHandled) return;
-      event.__iCloudUploaderPasteHandled = true;
-
-      // Ignore pastes targeted at native editable fields (text inputs, textareas,
-      // contenteditable) so we do not hijack users typing into iCloud search or rename dialogs.
-      const target = event.target;
-      if (target && typeof target.matches === 'function') {
-        try {
-          if (target.matches('input:not([type]), input[type="text"], input[type="search"], input[type="email"], input[type="url"], input[type="password"], textarea')) {
-            return;
+        // Do not hijack text entry in iCloud search, rename, or description UI.
+        const target = event.target;
+        if (target && typeof target.matches === 'function') {
+          try {
+            if (target.matches('input:not([type]), input[type="text"], input[type="search"], input[type="email"], input[type="url"], input[type="password"], textarea')) {
+              return;
+            }
+          } catch (error) {
+            // Ignore selector failures and continue with the file payload.
           }
-        } catch (error) {
-          // ignore selector errors and continue
+          if (target.isContentEditable) return;
         }
-        if (target.isContentEditable) return;
-      }
 
-      const files = extractImageFilesFromPaste(event);
-      if (!files.length) return;
-      const panel = doc.getElementById(PANEL_ID);
-      if (!panel || typeof panel._handlePasteUpload !== 'function') return;
-      event.preventDefault();
-      try {
-        panel._handlePasteUpload(files);
-      } catch (error) {
-        console.warn(LOG_PREFIX, 'Paste handler failed:', error && error.message ? error.message : error);
-      }
+        const files = extractImageFilesFromPaste(event);
+        if (!files.length) return;
+        const panel = doc.getElementById(PANEL_ID);
+        if (!panel || typeof panel._handlePasteUpload !== 'function') return;
+        event.preventDefault();
+        Promise.resolve().then(function () {
+          return panel._handlePasteUpload(files);
+        }).catch(function (error) {
+          console.warn(LOG_PREFIX, 'Paste handler failed:', error && error.message ? error.message : error);
+        });
+      };
+      pasteDispatcherByDocument.set(doc, dispatchPaste);
     }
 
-    // Listen on multiple targets in capture phase so that we get the event
-    // regardless of which layer iCloud's own code subscribed to.
+    // Body can be replaced by the app shell, so inspect all three targets on
+    // every mount while registering each concrete EventTarget only once.
     const targets = [];
     if (win && typeof win.addEventListener === 'function') targets.push(win);
     if (doc && typeof doc.addEventListener === 'function' && doc !== win) targets.push(doc);
     if (doc && doc.body && typeof doc.body.addEventListener === 'function') targets.push(doc.body);
 
     targets.forEach(function (target) {
+      if (registeredPasteTargets.has(target)) return;
       try {
-        if (target[PASTE_FLAG] === dispatchPaste) return;
-        target[PASTE_FLAG] = dispatchPaste;
         target.addEventListener('paste', dispatchPaste, true);
+        registeredPasteTargets.add(target);
       } catch (error) {
-        // ignore registration failures
+        // A later mount can retry a target that rejected registration.
       }
     });
+  }
+
+  function calculatePanLimits(baseWidth, baseHeight, scale) {
+    return {
+      x: Math.max(0, ((scale - 1) * baseWidth) / 2),
+      y: Math.max(0, ((scale - 1) * baseHeight) / 2),
+    };
+  }
+
+  function resolveZoomMedia(element, zoomTarget, eventTarget, findAtPoint) {
+    const overAttachedTarget = Boolean(
+      element &&
+      zoomTarget &&
+      eventTarget &&
+      typeof zoomTarget.contains === 'function' &&
+      zoomTarget.contains(eventTarget)
+    );
+    if (overAttachedTarget) return element;
+    return typeof findAtPoint === 'function' ? findAtPoint() : null;
   }
 
   let zoomPanInstalled = false;
@@ -1485,6 +1661,7 @@
 
     const state = {
       element: null,
+      zoomTarget: null,
       scale: 1,
       tx: 0,
       ty: 0,
@@ -1493,15 +1670,15 @@
       startY: 0,
       origTx: 0,
       origTy: 0,
-      dragWidth: 0,
-      dragHeight: 0,
-      rafActive: false,
-      rafId: null,
-      savedTransform: '',
+      baseWidth: 0,
+      baseHeight: 0,
+      savedInlineTransform: '',
+      baseTransform: '',
       savedTransition: '',
-      savedOrigin: '',
       savedCursor: '',
-      savedUserSelect: '',
+      savedWillChange: '',
+      watchdogObserver: null,
+      watchdogFrame: null,
     };
 
     let zoomHintShown = false;
@@ -1510,25 +1687,22 @@
       if (zoomHintShown) return;
       zoomHintShown = true;
       const panel = doc.getElementById ? doc.getElementById(PANEL_ID) : null;
-      const toast = panel && panel.querySelector ? panel.querySelector('.iu-toast') : null;
-      if (!toast) return;
-      toast.textContent = '滚轮缩放 · 拖动平移 · Esc 复位';
-      toast.classList.remove('is-error');
-      toast.classList.add('is-visible');
-      panel.classList.add('is-zoomed');
-      setTimeout(function () {
-        toast.classList.remove('is-visible');
-        panel.classList.remove('is-zoomed');
-      }, 3600);
+      if (panel && typeof panel._showUploaderStatus === 'function') {
+        panel._showUploaderStatus('滚轮缩放 · 拖动平移 · 双击或 Esc 复位');
+      }
+    }
+
+    function getLargeMediaRect(el) {
+      if (!el || !el.tagName) return null;
+      const tag = el.tagName;
+      if (tag !== 'IMG' && tag !== 'CANVAS' && tag !== 'VIDEO') return null;
+      if (typeof el.getBoundingClientRect !== 'function') return null;
+      const rect = el.getBoundingClientRect();
+      return rect.width >= MIN_PREVIEW_PX && rect.height >= MIN_PREVIEW_PX ? rect : null;
     }
 
     function isLargeMedia(el) {
-      if (!el || !el.tagName) return false;
-      const tag = el.tagName;
-      if (tag !== 'IMG' && tag !== 'CANVAS' && tag !== 'VIDEO') return false;
-      if (typeof el.getBoundingClientRect !== 'function') return false;
-      const rect = el.getBoundingClientRect();
-      return rect.width >= MIN_PREVIEW_PX && rect.height >= MIN_PREVIEW_PX;
+      return Boolean(getLargeMediaRect(el));
     }
 
     function findLargestMediaAtPoint(x, y) {
@@ -1538,9 +1712,8 @@
       let bestArea = 0;
       for (let i = 0; i < stack.length; i += 1) {
         const el = stack[i];
-        if (!isLargeMedia(el)) continue;
-        // isLargeMedia already measured the element; do not force a second reflow.
-        const rect = el.getBoundingClientRect();
+        const rect = getLargeMediaRect(el);
+        if (!rect) continue;
         const area = rect.width * rect.height;
         if (area > bestArea) {
           best = el;
@@ -1597,8 +1770,7 @@
         const found = findLargestMediaAtPoint(x, y);
         if (found) return found;
       }
-      // 3. Fall back to the largest visible IMG/CANVAS/VIDEO in the viewport.
-      return findLargestMediaInViewport();
+      return null;
     }
 
     // ── Overlay approach ──────────────────────────────────────────────────────
@@ -1615,20 +1787,18 @@
       return el; // fallback to the image itself
     }
 
-    // The inline value is empty whenever iCloud styles the wrapper through a
-    // class instead, and restoring '' in that case would strip a transform we
-    // never set. Fall back to the computed value.
     function readCurrentTransform(el) {
-      if (el.style && el.style.transform) return el.style.transform;
       try {
         const getStyle = (win && win.getComputedStyle) || (root.getComputedStyle || null);
-        if (typeof getStyle !== 'function') return '';
-        const computed = getStyle(el);
-        const value = computed && computed.transform;
-        return value && value !== 'none' ? value : '';
+        if (typeof getStyle === 'function') {
+          const computed = getStyle(el);
+          const value = computed && computed.transform;
+          if (value && value !== 'none') return value;
+        }
       } catch (error) {
-        return '';
+        // Fall back to the exact inline value below.
       }
+      return el.style && el.style.transform ? el.style.transform : '';
     }
 
     function resetView() {
@@ -1640,15 +1810,19 @@
 
     function attach(el) {
       if (state.element === el && state.zoomTarget && state.zoomTarget.isConnected) return;
-      if (state.element) detach();
+      if (state.element || state.zoomTarget) detach();
       state.element = el;
       resetView();
 
-      // Find the wrapper that iCloud uses for its native zoom transform
       state.zoomTarget = findZoomTarget(el);
-      state.savedTransform = readCurrentTransform(state.zoomTarget);
+      const rect = state.zoomTarget.getBoundingClientRect();
+      state.baseWidth = rect.width;
+      state.baseHeight = rect.height;
+      state.savedInlineTransform = state.zoomTarget.style.transform || '';
+      state.baseTransform = readCurrentTransform(state.zoomTarget);
       state.savedTransition = state.zoomTarget.style.transition || '';
       state.savedCursor = state.zoomTarget.style.cursor || '';
+      state.savedWillChange = state.zoomTarget.style.willChange || '';
 
       state.zoomTarget.style.transition = 'none';
       state.zoomTarget.style.willChange = 'transform';
@@ -1657,34 +1831,30 @@
 
     function detach() {
       stopWatchdog();
-      if (!state.element) return;
       if (state.zoomTarget) {
-        state.zoomTarget.style.transform = state.savedTransform;
+        // Restore only the inline values we replaced. Writing a computed matrix
+        // here would freeze transforms that iCloud owns through CSS classes.
+        state.zoomTarget.style.transform = state.savedInlineTransform;
         state.zoomTarget.style.transition = state.savedTransition;
         state.zoomTarget.style.cursor = state.savedCursor;
-        state.zoomTarget.style.willChange = '';
+        state.zoomTarget.style.willChange = state.savedWillChange;
       }
       state.zoomTarget = null;
       state.element = null;
+      state.baseWidth = 0;
+      state.baseHeight = 0;
+      state.baseTransform = '';
       resetView();
     }
 
     function expectedTransform() {
-      return 'translate(' + state.tx + 'px, ' + state.ty + 'px) scale(' + state.scale + ')';
-    }
-
-    // Pan bounds for the currently rendered box. Without this the image can be
-    // dragged completely out of view at high zoom with no way back except Esc.
-    function translationLimit(rect, scale) {
-      return {
-        x: Math.max(0, ((scale - 1) * rect.width) / 2),
-        y: Math.max(0, ((scale - 1) * rect.height) / 2),
-      };
+      const relative =
+        'translate(' + state.tx + 'px, ' + state.ty + 'px) scale(' + state.scale + ')';
+      return state.baseTransform ? relative + ' ' + state.baseTransform : relative;
     }
 
     function clampTranslation() {
-      if (!state.zoomTarget || typeof state.zoomTarget.getBoundingClientRect !== 'function') return;
-      const limit = translationLimit(state.zoomTarget.getBoundingClientRect(), state.scale);
+      const limit = calculatePanLimits(state.baseWidth, state.baseHeight, state.scale);
       state.tx = Math.max(-limit.x, Math.min(limit.x, state.tx));
       state.ty = Math.max(-limit.y, Math.min(limit.y, state.ty));
     }
@@ -1692,96 +1862,67 @@
     function applyTransform() {
       if (!state.zoomTarget) return;
       state.zoomTarget.style.transform = expectedTransform();
-      state.zoomTarget.style.cursor = state.scale > 1 ? (state.dragging ? 'grabbing' : 'grab') : '';
+      state.zoomTarget.style.cursor = state.scale > 1
+        ? (state.dragging ? 'grabbing' : 'grab')
+        : state.savedCursor;
+    }
+
+    function checkZoomMount() {
+      state.watchdogFrame = null;
+      if (!state.element) return;
+      const elementGone = !state.element.isConnected;
+      const targetGone = !state.zoomTarget || !state.zoomTarget.isConnected;
+      if (!elementGone && !targetGone) return;
+
+      const oldSrc = (state.element.currentSrc || state.element.src) || '';
+      mediaCache = { at: 0, el: null };
+      const replacement = findLargestMediaInViewport();
+      const newSrc = (replacement && (replacement.currentSrc || replacement.src)) || '';
+      const sameImage = replacement &&
+        ((oldSrc && newSrc && oldSrc === newSrc) || (targetGone && !elementGone));
+      if (!sameImage) {
+        debugLog('user navigated away, detaching');
+        detach();
+        return;
+      }
+
+      debugLog('element re-rendered, re-anchoring zoom');
+      const camera = { scale: state.scale, tx: state.tx, ty: state.ty };
+      detach();
+      attach(replacement);
+      state.scale = camera.scale;
+      state.tx = camera.tx;
+      state.ty = camera.ty;
+      clampTranslation();
+      applyTransform();
     }
 
     function startWatchdog() {
-      const raf = (win && win.requestAnimationFrame) || root.requestAnimationFrame;
-      if (typeof raf !== 'function' || state.rafActive) return;
-      state.rafActive = true;
-      let idleFrames = 0;
+      const MutationObserverCtor = (win && win.MutationObserver) || root.MutationObserver;
+      const observeTarget = doc.body || doc.documentElement;
+      if (typeof MutationObserverCtor !== 'function' || !observeTarget) return;
 
-      function tick() {
-        if (!state.element || state.scale <= MIN_SCALE + 0.001) {
-          state.rafActive = false;
+      state.watchdogObserver = new MutationObserverCtor(function () {
+        if (state.watchdogFrame !== null) return;
+        const raf = (win && win.requestAnimationFrame) || root.requestAnimationFrame;
+        if (typeof raf === 'function') {
+          state.watchdogFrame = raf(checkZoomMount);
           return;
         }
-        // If the element or the wrapper it lives in was replaced by React, decide
-        // whether to migrate. Checking both matters: a replaced wrapper leaves the
-        // transform on a detached node while the visible one stays at 1×.
-        const elementGone = !state.element.isConnected;
-        const targetGone = !state.zoomTarget || !state.zoomTarget.isConnected;
-        if (elementGone || targetGone) {
-          const oldSrc = (state.element.currentSrc || state.element.src) || '';
-          const replacement = findLargestMediaInViewport();
-          const newSrc = (replacement && (replacement.currentSrc || replacement.src)) || '';
-          const sameImage = replacement &&
-            ((oldSrc && newSrc && oldSrc === newSrc) || (targetGone && !elementGone));
-          if (sameImage) {
-            debugLog('element re-rendered, re-anchoring zoom');
-            const camera = { scale: state.scale, tx: state.tx, ty: state.ty };
-            state.element = null;
-            attach(replacement);
-            state.scale = camera.scale;
-            state.tx = camera.tx;
-            state.ty = camera.ty;
-            clampTranslation();
-          } else {
-            debugLog('user navigated away, detaching');
-            detach();
-            return;
-          }
-        }
-        // Keep the zoom target's transform in sync, but do not rewrite it every
-        // frame: only repair it when something else changed it, and stop the
-        // loop once the DOM has been quiet for a while.
-        if (state.zoomTarget) {
-          const expected = expectedTransform();
-          if (state.zoomTarget.style.transform !== expected) {
-            state.zoomTarget.style.transform = expected;
-            idleFrames = 0;
-          } else {
-            idleFrames += 1;
-          }
-          if (state.zoomTarget.style.transition !== 'none') {
-            state.zoomTarget.style.transition = 'none';
-          }
-          if (idleFrames > 180) {
-            debugLog('watchdog idle, parking');
-            state.rafActive = false;
-            startWatchdogLater();
-            return;
-          }
-        }
-        state.rafId = raf(tick);
-      }
-      state.rafId = raf(tick);
-    }
-
-    // Parked watchdog: re-arm lazily so a long-lived zoom does not burn a frame
-    // callback forever, but a React re-render is still picked up quickly.
-    function startWatchdogLater() {
-      if (state.watchdogTimer) clearTimeout(state.watchdogTimer);
-      state.watchdogTimer = setTimeout(function () {
-        state.watchdogTimer = null;
-        if (state.element && state.scale > MIN_SCALE + 0.001) {
-          mediaCache = { at: 0, el: null };
-          startWatchdog();
-        }
-      }, 1000);
+        state.watchdogFrame = 0;
+        Promise.resolve().then(checkZoomMount);
+      });
+      state.watchdogObserver.observe(observeTarget, { childList: true, subtree: true });
     }
 
     function stopWatchdog() {
+      if (state.watchdogObserver) state.watchdogObserver.disconnect();
+      state.watchdogObserver = null;
       const cancel = (win && win.cancelAnimationFrame) || root.cancelAnimationFrame;
-      if (typeof cancel === 'function' && state.rafId != null) {
-        cancel(state.rafId);
+      if (typeof cancel === 'function' && state.watchdogFrame !== null) {
+        cancel(state.watchdogFrame);
       }
-      if (state.watchdogTimer) {
-        clearTimeout(state.watchdogTimer);
-        state.watchdogTimer = null;
-      }
-      state.rafActive = false;
-      state.rafId = null;
+      state.watchdogFrame = null;
     }
 
     function debugLog() {
@@ -1796,17 +1937,24 @@
     }
 
     function onWheel(event) {
-      // Only reuse the attached element while the cursor is actually over it:
-      // otherwise a single zoom would hijack the page scroll everywhere on the
-      // page (and zoom the wrong photo while hovering a thumbnail).
-      let img = null;
-      if (state.element && state.zoomTarget && state.element.isConnected) {
-        const overTarget = event.target &&
-          typeof state.zoomTarget.contains === 'function' &&
-          state.zoomTarget.contains(event.target);
-        if (overTarget) img = state.element;
+      if (
+        event.target &&
+        typeof event.target.closest === 'function' &&
+        event.target.closest('#' + PANEL_ID)
+      ) {
+        return;
       }
-      if (!img) img = findPreviewImage(event.target, event.clientX, event.clientY);
+      // A user wheel event may only select media under the pointer. The
+      // viewport-wide fallback is reserved for React re-mount recovery.
+      const attached = state.element && state.element.isConnected ? state.element : null;
+      const img = resolveZoomMedia(
+        attached,
+        state.zoomTarget,
+        event.target,
+        function () {
+          return findPreviewImage(event.target, event.clientX, event.clientY);
+        }
+      );
       if (!img) {
         debugLog('no preview img', event.target && event.target.tagName, event.target && event.target.className);
         return;
@@ -1815,27 +1963,24 @@
       const rect = img.getBoundingClientRect();
       const px = event.clientX - rect.left - rect.width / 2;
       const py = event.clientY - rect.top - rect.height / 2;
-
       const delta = -event.deltaY;
       const factor = Math.exp(delta * 0.0015);
-      const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, state.scale * factor));
-      if (newScale === state.scale) {
-        // Already at the clamp boundary in the requested direction; let the
-        // page scroll naturally so the user is not stuck.
+      const currentScale = state.element === img ? state.scale : MIN_SCALE;
+      const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, currentScale * factor));
+      if (newScale === currentScale) {
+        // At a clamp boundary, preserve normal page scrolling.
         debugLog('clamped at', newScale);
         return;
       }
 
       event.preventDefault();
       event.stopPropagation();
-
       if (state.element !== img) attach(img);
 
       const scaleRatio = newScale / state.scale;
       state.tx = px - (px - state.tx) * scaleRatio;
       state.ty = py - (py - state.ty) * scaleRatio;
       state.scale = newScale;
-
       if (state.scale <= MIN_SCALE + 0.001) {
         debugLog('detach (back to 1x)');
         detach();
@@ -1860,8 +2005,6 @@
       state.startY = event.clientY;
       state.origTx = state.tx;
       state.origTy = state.ty;
-      state.dragWidth = rect.width;
-      state.dragHeight = rect.height;
       state.zoomTarget.style.cursor = 'grabbing';
       event.preventDefault();
       event.stopPropagation();
@@ -1871,9 +2014,8 @@
       if (!state.dragging || !state.element) return;
       state.tx = state.origTx + (event.clientX - state.startX);
       state.ty = state.origTy + (event.clientY - state.startY);
-      // Bound the pan against the box measured at drag start so the image cannot
-      // be pushed out of view.
-      const limit = translationLimit({ width: state.dragWidth, height: state.dragHeight }, state.scale);
+      // Bound the pan with the unscaled dimensions captured at attach time.
+      const limit = calculatePanLimits(state.baseWidth, state.baseHeight, state.scale);
       state.tx = Math.max(-limit.x, Math.min(limit.x, state.tx));
       state.ty = Math.max(-limit.y, Math.min(limit.y, state.ty));
       applyTransform();
@@ -2077,10 +2219,14 @@
 
   return {
     bootstrap,
-    createNamedImageFile,
+    calculateCanvasSize,
     calculateDraggedPanelPosition,
     calculatePanelSize,
+    calculatePanLimits,
     convertImageFileToJpeg,
+    createGenerationGate,
+    createNamedImageFile,
+    decodeImageForCanvas,
     dropFilesOnICloudPage,
     extractImageFilesFromPaste,
     filterImageFiles,
@@ -2090,13 +2236,16 @@
     findSidebarItem,
     getConvertedJpegFileName,
     getPanelText,
+    installPasteListener,
     isInICloudPhotosAppFrame,
     isJpegLikeFile,
     isImageLikeFile,
     isUploadTrigger,
     looksLikePhotosAppDom,
     normalizeFilesForICloudWebUpload,
+    resolveZoomMedia,
     shouldConvertForICloudWeb,
+    snapshotFiles,
     softRefreshLibraryView,
     transferFilesToInput,
     uploadViaICloudPage,

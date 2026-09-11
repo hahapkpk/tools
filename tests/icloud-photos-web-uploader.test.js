@@ -45,6 +45,18 @@ test('上传触发器不会把相簿/描述等“添加”按钮误判为上传�
   assert.equal(api.isUploadTrigger(fakeElement({}, '新建共享相簿')), false);
   assert.equal(api.isUploadTrigger(fakeElement({})), false);
 });
+test('上传触发器排除取消和停止上传操作', () => {
+  assert.equal(api.isUploadTrigger(fakeElement({}, '取消上传')), false);
+  assert.equal(api.isUploadTrigger(fakeElement({}, '停止上传')), false);
+  assert.equal(api.isUploadTrigger(fakeElement({ 'aria-label': 'Cancel upload' })), false);
+  assert.equal(api.isUploadTrigger(fakeElement({ title: 'Stop uploading' })), false);
+});
+
+test('图片 MIME 与扩展名冲突时优先使用 MIME 判断是否转码', () => {
+  assert.equal(api.shouldConvertForICloudWeb(fakeFile('wrong.jpg', 'image/png')), true);
+  assert.equal(api.shouldConvertForICloudWeb(fakeFile('wrong.png', 'image/jpeg')), false);
+});
+
 
 test('转换失败只跳过该文件，其余图片继续上传', async () => {
   const good = fakeFile('good.png', 'image/png');
@@ -245,6 +257,29 @@ test('浅层查找会排除脚本自身的文件输入框', () => {
     null
   );
 });
+test('文件输入缓存按 document 隔离', () => {
+  function makeInput() {
+    return {
+      isConnected: true,
+      multiple: true,
+      getAttribute: () => 'image/*',
+      closest: () => null,
+    };
+  }
+  function makeDocument(input) {
+    return {
+      querySelectorAll(selector) {
+        return selector === 'input[type="file"]' ? [input] : [];
+      },
+    };
+  }
+
+  const first = makeInput();
+  const second = makeInput();
+  assert.equal(api.findICloudFileInput(makeDocument(first)), first);
+  assert.equal(api.findICloudFileInput(makeDocument(second)), second);
+});
+
 
 test('应用帧判定对未知路由保留 DOM 兜底', () => {
   const inApp = { location: { pathname: '/applications/photos3/current/zh-cn/index.html' } };
@@ -507,6 +542,100 @@ test('画布尺寸同时受长边和总像素限制', () => {
   assert.ok(square.width * square.height <= 40000000);
   assert.ok(Math.abs(landscape.width / landscape.height - 1.5) < 0.001);
 });
+test('转码成功保留源时间并释放位图和画布', async () => {
+  let bitmapClosed = false;
+  let drawnSize = null;
+  const canvas = {
+    width: 0,
+    height: 0,
+    getContext() {
+      return {
+        fillStyle: '',
+        fillRect() {},
+        imageSmoothingQuality: '',
+        drawImage(image, x, y, width, height) {
+          void image;
+          void x;
+          void y;
+          drawnSize = { width, height };
+        },
+      };
+    },
+    toBlob(callback) {
+      callback({ type: 'image/jpeg', size: 8 });
+    },
+  };
+  class FileStub {
+    constructor(parts, name, options) {
+      this.parts = parts;
+      this.name = name;
+      Object.assign(this, options);
+    }
+  }
+  const sourceFile = {
+    name: 'source.png',
+    type: 'image/png',
+    lastModified: 123456,
+  };
+
+  const converted = await api.convertImageFileToJpeg(sourceFile, {
+    async createImageBitmap() {
+      return {
+        width: 400,
+        height: 300,
+        close() {
+          bitmapClosed = true;
+        },
+      };
+    },
+    document: {
+      createElement() {
+        return canvas;
+      },
+    },
+    File: FileStub,
+  });
+
+  assert.equal(converted.name, 'source.jpg');
+  assert.equal(converted.lastModified, sourceFile.lastModified);
+  assert.deepEqual(drawnSize, { width: 400, height: 300 });
+  assert.equal(bitmapClosed, true);
+  assert.deepEqual({ width: canvas.width, height: canvas.height }, { width: 1, height: 1 });
+});
+
+test('画布初始化失败时仍释放已解码位图', async () => {
+  let bitmapClosed = false;
+  await assert.rejects(
+    api.convertImageFileToJpeg(
+      fakeFile('source.png', 'image/png'),
+      {
+        async createImageBitmap() {
+          return {
+            width: 10,
+            height: 10,
+            close() {
+              bitmapClosed = true;
+            },
+          };
+        },
+        document: {
+          createElement() {
+            return {
+              width: 0,
+              height: 0,
+              getContext() {
+                return null;
+              },
+            };
+          },
+        },
+      }
+    ),
+    /Canvas 2D rendering/
+  );
+  assert.equal(bitmapClosed, true);
+});
+
 
 test('面板拖拽会阻止 drop 冒泡，避免 iCloud 重复入队', () => {
   assert.match(
