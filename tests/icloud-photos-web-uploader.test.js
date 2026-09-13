@@ -1193,6 +1193,25 @@ test('自定义菜单容器可由下载项的类名定位', () => {
   assert.deepEqual(api.findPhotoContextMenus(doc), [menu]);
 });
 
+test('繁体中文照片菜单可由下载项定位', () => {
+  const menu = {
+    className: 'PhotosMenu-pane',
+    textContent: '加入喜好項目 下載 更多下載選項 隱藏 刪除',
+    parentElement: null,
+    getAttribute() { return null; },
+  };
+  const download = {
+    textContent: '下載',
+    parentElement: menu,
+    closest() { return null; },
+  };
+  const doc = {
+    querySelectorAll() { return [download]; },
+  };
+
+  assert.deepEqual(api.findPhotoContextMenus(doc), [menu]);
+});
+
 test('拷贝图片以当前渲染源读取二进制并写入系统剪贴板', async () => {
   let request = null;
   let clipboardItem = null;
