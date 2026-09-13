@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         夸克网盘链接预检
 // @namespace    local.codex
-// @version      0.6.5
+// @version      0.6.6
 // @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。支持从 GitHub 公共白名单文件自动读取启动地址，并在非白名单页面快速退出。
 // @match        https://www.xn--wcv59z.com/*
 // @match        https://www.wdku.net/*
+// @match        https://www.qmp4.com/*
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
 // @connect      drive-h.quark.cn
@@ -34,7 +35,9 @@
   const WHITELIST_CACHE_KEY = `${SCRIPT_ID}:remote-whitelist-cache`;
   const WHITELIST_CACHE_TTL = 30 * 60 * 1000;
   let CONCURRENCY = Number(GM_getValue('concurrency', 6));
+  if (!Number.isFinite(CONCURRENCY) || CONCURRENCY < 1) CONCURRENCY = 6;
   let CHECK_INTERVAL = Number(GM_getValue('interval', 200));
+  if (!Number.isFinite(CHECK_INTERVAL) || CHECK_INTERVAL < 0) CHECK_INTERVAL = 200;
   let AUTO_START_WHITELIST = LOCAL_FALLBACK_WHITELIST.slice();
   let whitelistSource = 'local';
   const DEBUG = false;
@@ -130,10 +133,10 @@
         throw new Error('HTTP ' + response.status);
       }
       const parsed = safeJson(response.text);
-      const nextList = normalizeWhitelist(parsed);
       if (!Array.isArray(parsed)) {
         throw new Error('白名单 JSON 不是数组');
       }
+      const nextList = normalizeWhitelist(parsed);
       applyWhitelist(nextList, 'remote-live');
       saveWhitelistCache(nextList);
       return true;
@@ -301,13 +304,23 @@
     ].join(';');
   }
 
+  let renderTimer = null;
+  function scheduleRender() {
+    if (renderTimer) return;
+    renderTimer = setTimeout(() => {
+      renderTimer = null;
+      // 设置面板展开时跳过重建，避免正在输入的配置值被整块重渲染冲掉。
+      if (!settingsVisible) renderPanel();
+    }, 150);
+  }
+
   function updateItem(item, status, message, extra = {}) {
     Object.assign(item, extra, { status, message: message || '' });
     for (const badge of document.querySelectorAll(`.${SCRIPT_ID}-badge[data-quark-id="${cssEscape(item.id)}"]`)) {
       paintBadge(badge, status);
       badge.title = message || '';
     }
-    renderPanel();
+    scheduleRender();
   }
 
   function cacheKey(id, passcode) {
@@ -324,7 +337,11 @@
     }
   }
 
+  const CACHEABLE_STATUS = new Set(['ok', 'partial', 'invalid', 'passcode']);
+
   async function writeCache(item, result) {
+    // 只缓存终态结果；unknown/error 多为限流等瞬时异常，缓存会把它们钉死到 TTL 过期。
+    if (!result || !CACHEABLE_STATUS.has(result.status)) return;
     try {
       await GM_setValue(cacheKey(item.id, item.passcode), { time: Date.now(), result });
     } catch (_) {
@@ -370,8 +387,13 @@
   function classifyTokenResponse(body) {
     const message = String(body?.message || body?.code || '');
     if (!body) return { status: 'unknown', message: '空响应' };
-    if (message.includes('需要提取码') || message.includes('PASS_CODE')) {
-      return { status: 'passcode', message: '分享存在，但需要提取码' };
+    if (message.includes('需要提取码') || message.includes('提取码错误') || message.includes('PASS_CODE')) {
+      return {
+        status: 'passcode',
+        message: message.includes('提取码错误')
+          ? '分享存在，但页面识别到的提取码不正确'
+          : '分享存在，但需要提取码'
+      };
     }
     if (message.toLowerCase().includes('ok') && body?.data?.stoken) {
       return { status: 'token', stoken: body.data.stoken, title: body.data.title || '' };
@@ -421,11 +443,17 @@
     return { status: 'unknown', message: title ? `未知分享状态：${title}` : '未知分享状态', title, fileNum };
   }
 
-  async function checkOne(item) {
-    const cached = await readCache(item);
-    if (cached) {
-      updateItem(item, cached.status, `${cached.message}（缓存）`, cached);
-      return cached;
+  function isHttpOk(resp) {
+    return resp.status >= 200 && resp.status < 300;
+  }
+
+  async function checkOne(item, force = false) {
+    if (!force) {
+      const cached = await readCache(item);
+      if (cached) {
+        updateItem(item, cached.status, `${cached.message}（缓存）`, cached);
+        return cached;
+      }
     }
 
     updateItem(item, 'checking', '正在请求夸克分享 token');
@@ -437,11 +465,12 @@
       data: JSON.stringify({ pwd_id: item.id, passcode: item.passcode || '' })
     });
 
-    if (tokenResp.status < 200 || tokenResp.status >= 300) {
+    // 夸克接口对“分享不存在/已失效/提取码错误”返回 HTTP 404，
+    // 业务结果在响应体里，必须先分类响应体，无法识别时才按服务错误抛出。
+    const tokenResult = classifyTokenResponse(tokenResp.body);
+    if (!isHttpOk(tokenResp) && tokenResult.status !== 'invalid' && tokenResult.status !== 'passcode') {
       throw new Error(`HTTP ${tokenResp.status}`);
     }
-
-    const tokenResult = classifyTokenResponse(tokenResp.body);
     if (tokenResult.status !== 'token') {
       await writeCache(item, tokenResult);
       updateItem(item, tokenResult.status, tokenResult.message, tokenResult);
@@ -454,11 +483,10 @@
       url: `https://drive-h.quark.cn/1/clouddrive/share/sharepage/detail?pwd_id=${encodeURIComponent(item.id)}&stoken=${stoken}&_fetch_share=1`
     });
 
-    if (detailResp.status < 200 || detailResp.status >= 300) {
+    const detailResult = classifyDetailResponse(detailResp.body);
+    if (!isHttpOk(detailResp) && detailResult.status !== 'invalid') {
       throw new Error(`HTTP ${detailResp.status}`);
     }
-
-    const detailResult = classifyDetailResponse(detailResp.body);
     await writeCache(item, detailResult);
     updateItem(item, detailResult.status, detailResult.message, detailResult);
     return detailResult;
@@ -467,29 +495,32 @@
   async function runChecks(force = false) {
     if (checking) return;
     checking = true;
-    hasRunChecks = true;
-    collectLinks();
-    renderPanel();
+    try {
+      hasRunChecks = true;
+      collectLinks();
+      renderPanel();
 
-    const queue = links.filter((item) => force || item.status === 'idle' || item.status === 'unknown' || item.status === 'error');
-    let index = 0;
+      const queue = links.filter((item) => force || item.status === 'idle' || item.status === 'unknown' || item.status === 'error');
+      let index = 0;
 
-    async function worker() {
-      while (index < queue.length) {
-        const item = queue[index++];
-        try {
-          await checkOne(item);
-        } catch (err) {
-          updateItem(item, 'error', err.message || '检测失败');
+      async function worker() {
+        while (index < queue.length) {
+          const item = queue[index++];
+          try {
+            await checkOne(item, force);
+          } catch (err) {
+            updateItem(item, 'error', err.message || '检测失败');
+          }
+          await sleep(CHECK_INTERVAL);
         }
-        await sleep(CHECK_INTERVAL);
       }
-    }
 
-    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
-    checking = false;
-    panelVisible = false;
-    renderPanel();
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
+    } finally {
+      checking = false;
+      panelVisible = false;
+      renderPanel();
+    }
   }
 
   function sleep(ms) {
@@ -751,10 +782,12 @@
     ].join(';');
     btn.addEventListener('click', () => runChecks(false));
 
-    if (/^(H1|H2|H3|H4|DIV|SECTION)$/i.test(target.tagName)) {
-      target.insertAdjacentElement('afterend', btn);
-    } else {
+    // “网盘下载”常是 button/span，appendChild 会把按钮嵌进去（非法嵌套，
+    // 且点击会冒泡触发站点自己的按钮），改为插在目标元素之后。
+    if (target === document.body || !target.parentElement) {
       target.appendChild(btn);
+    } else {
+      target.insertAdjacentElement('afterend', btn);
     }
   }
 
@@ -877,6 +910,8 @@
 
     if (!shouldActivate()) {
       log('not in auto-start whitelist', location.href);
+      // 页面内容（或 SPA 路由）稍后才出现夸克链接时，观察 10 秒内是否转为可激活。
+      waitForActivation();
       return;
     }
 
