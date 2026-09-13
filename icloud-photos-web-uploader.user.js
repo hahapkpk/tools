@@ -1792,25 +1792,24 @@
         return node;
       }
       if (typeof node.querySelectorAll === 'function') {
-        const images = node.querySelectorAll('img');
-        for (let i = 0; i < images.length; i += 1) {
-          if (getCopyablePhotoImageSource(images[i])) return images[i];
-        }
+        const images = Array.prototype.filter.call(
+          node.querySelectorAll('img'),
+          function (image) { return Boolean(getCopyablePhotoImageSource(image)); }
+        );
+        // A photo tile has exactly one rendered image. Stop at a container with
+        // several images rather than falling through to the page-wide grid.
+        if (images.length === 1) return images[0];
+        if (images.length > 1) return null;
       }
       node = node.parentElement || node.parentNode;
     }
     return null;
   }
 
-  async function copyPhotoImageToClipboard(image, win) {
+  async function fetchCopyablePhotoImageBlob(image, win) {
     const source = getCopyablePhotoImageSource(image);
     const fetchFn = win && win.fetch;
-    const clipboard = win && win.navigator && win.navigator.clipboard;
-    const ClipboardItemCtor = (win && win.ClipboardItem) || root.ClipboardItem;
-    if (!source || typeof fetchFn !== 'function' || !clipboard ||
-        typeof clipboard.write !== 'function' || typeof ClipboardItemCtor !== 'function') {
-      return false;
-    }
+    if (!source || typeof fetchFn !== 'function') throw new Error('无法读取图片数据。');
     const response = await fetchFn(source, {
       credentials: 'include',
       cache: 'no-store',
@@ -1819,26 +1818,49 @@
       throw new Error('无法读取图片数据。');
     }
     const blob = await response.blob();
+    if (!/^image\//i.test(String(blob && blob.type || ''))) {
+      throw new Error('图片数据格式无效。');
+    }
+    return blob;
+  }
+
+  async function copyPhotoImageToClipboard(image, win, preparedBlob) {
+    const clipboard = win && win.navigator && win.navigator.clipboard;
+    const ClipboardItemCtor = (win && win.ClipboardItem) || root.ClipboardItem;
+    if (!clipboard || typeof clipboard.write !== 'function' || typeof ClipboardItemCtor !== 'function') {
+      return false;
+    }
+    const blob = preparedBlob || await fetchCopyablePhotoImageBlob(image, win);
     const type = String(blob && blob.type || '');
     if (!/^image\//i.test(type)) throw new Error('图片数据格式无效。');
     await clipboard.write([new ClipboardItemCtor({ [type]: blob })]);
     return true;
   }
 
-  function findPhotoContextMenu(doc) {
-    if (!doc || typeof doc.querySelectorAll !== 'function') return null;
+  function isVisibleMenu(menu) {
+    if (!menu || typeof menu.getBoundingClientRect !== 'function') return true;
+    const rect = menu.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function findPhotoContextMenus(doc) {
+    if (!doc || typeof doc.querySelectorAll !== 'function') return [];
+    const menus = [];
+    const seen = new Set();
     const items = doc.querySelectorAll('[role="menuitem"], button, [role="menu"]');
     for (let i = 0; i < items.length; i += 1) {
       const item = items[i];
       const label = String(item.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
       if (!/(下载|更多下载选项|download|more download options)/.test(label)) continue;
-      if (typeof item.closest === 'function') {
-        const menu = item.closest('[role="menu"]');
-        if (menu) return menu;
+      const menu = typeof item.closest === 'function'
+        ? item.closest('[role="menu"]')
+        : (item.parentElement || item.parentNode);
+      if (menu && !seen.has(menu)) {
+        seen.add(menu);
+        menus.push(menu);
       }
-      return item.parentElement || item.parentNode || null;
     }
-    return null;
+    return menus;
   }
 
   function showCopyPhotoStatus(doc, message, isError) {
@@ -1848,9 +1870,8 @@
     }
   }
 
-  function addCopyPhotoMenuItem(doc, win, state) {
-    const menu = findPhotoContextMenu(doc);
-    if (!menu || !state.image || typeof doc.createElement !== 'function') return false;
+  function addCopyPhotoMenuItem(doc, win, menu, image, blob) {
+    if (!menu || !image || !blob || !doc || typeof doc.createElement !== 'function') return false;
     const menuLabel = String(menu.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
     if (/(拷贝图像|copy image)/.test(menuLabel)) return false;
     const existing = typeof menu.querySelector === 'function'
@@ -1878,7 +1899,7 @@
     item.addEventListener('click', function (event) {
       event.preventDefault();
       event.stopPropagation();
-      void copyPhotoImageToClipboard(state.image, win).then(function (copied) {
+      void copyPhotoImageToClipboard(image, win, blob).then(function (copied) {
         showCopyPhotoStatus(doc, copied ? '图像已拷贝到剪贴板' : '浏览器不支持图像拷贝', !copied);
       }).catch(function (error) {
         const detail = error && error.message ? error.message : '未知错误';
@@ -1902,27 +1923,62 @@
 
   function installGridPhotoCopyMenu(doc, win) {
     if (!doc || gridCopyMenuStateByDocument.has(doc)) return;
-    const state = { image: null, timer: null };
+    const state = { image: null, blob: null, observer: null, timer: null, knownMenus: null, token: 0 };
     gridCopyMenuStateByDocument.set(doc, state);
-    const install = function () {
+
+    function clearPending() {
       if (state.timer) clearTimeout(state.timer);
-      state.timer = setTimeout(function () {
-        state.timer = null;
-        addCopyPhotoMenuItem(doc, win, state);
-      }, 0);
-    };
+      state.timer = null;
+      if (state.observer) state.observer.disconnect();
+      state.observer = null;
+      state.image = null;
+      state.blob = null;
+      state.knownMenus = null;
+    }
+
+    function findOpenedMenu() {
+      const menus = findPhotoContextMenus(doc);
+      return menus.find(function (menu) {
+        return isVisibleMenu(menu) && (!state.knownMenus || !state.knownMenus.get(menu));
+      }) || null;
+    }
+
+    function tryInstall(token) {
+      if (token !== state.token || !state.image || !state.blob) return;
+      const menu = findOpenedMenu();
+      if (!menu) return;
+      addCopyPhotoMenuItem(doc, win, menu, state.image, state.blob);
+      clearPending();
+    }
+
     doc.addEventListener('contextmenu', function (event) {
+      clearPending();
       const image = findCopyablePhotoImage(event.target);
       if (!image) return;
+      const token = state.token + 1;
+      state.token = token;
       state.image = image;
-      install();
+      state.knownMenus = new Map(findPhotoContextMenus(doc).map(function (menu) {
+        return [menu, isVisibleMenu(menu)];
+      }));
+      const MutationObserverCtor = (win && win.MutationObserver) || root.MutationObserver;
+      const rootNode = doc.documentElement || doc.body;
+      if (typeof MutationObserverCtor === 'function' && rootNode) {
+        state.observer = new MutationObserverCtor(function () { tryInstall(token); });
+        state.observer.observe(rootNode, { childList: true, subtree: true });
+      }
+      void fetchCopyablePhotoImageBlob(image, win).then(function (blob) {
+        if (token !== state.token) return;
+        state.blob = blob;
+        tryInstall(token);
+      }).catch(function () {
+        if (token !== state.token) return;
+        clearPending();
+      });
+      state.timer = setTimeout(function () {
+        if (token === state.token) clearPending();
+      }, 5000);
     }, true);
-    const MutationObserverCtor = (win && win.MutationObserver) || root.MutationObserver;
-    const rootNode = doc.documentElement || doc.body;
-    if (typeof MutationObserverCtor === 'function' && rootNode) {
-      const observer = new MutationObserverCtor(install);
-      observer.observe(rootNode, { childList: true, subtree: true });
-    }
   }
 
   function calculatePanLimits(baseWidth, baseHeight, scale) {

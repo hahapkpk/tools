@@ -1148,6 +1148,14 @@ test('图库右键目标只从当前照片项提取可复制图片', () => {
 
   assert.equal(api.findCopyablePhotoImage(tile), image);
   assert.equal(api.findCopyablePhotoImage({ tagName: 'DIV', parentElement: null }), null);
+  const multiImageContainer = {
+    tagName: 'DIV',
+    querySelectorAll() {
+      return [image, { currentSrc: 'https://photos.example/other.jpg', src: '' }];
+    },
+    parentElement: null,
+  };
+  assert.equal(api.findCopyablePhotoImage(multiImageContainer), null);
 });
 
 test('拷贝图片以当前渲染源读取二进制并写入系统剪贴板', async () => {
@@ -1177,6 +1185,19 @@ test('拷贝图片以当前渲染源读取二进制并写入系统剪贴板', as
   assert.equal(request.url, 'https://photos.example/full.jpg');
   assert.equal(request.options.credentials, 'include');
   assert.equal(clipboardItem.items['image/jpeg'], blob);
+
+  const preparedBlob = { type: 'image/png' };
+  const preparedWin = {
+    fetch: async () => { throw new Error('不应重新读取已验证的图片'); },
+    ClipboardItem: function ClipboardItem(items) { this.items = items; },
+    navigator: {
+      clipboard: {
+        write: async (items) => { clipboardItem = items[0]; },
+      },
+    },
+  };
+  assert.equal(await api.copyPhotoImageToClipboard(image, preparedWin, preparedBlob), true);
+  assert.equal(clipboardItem.items['image/png'], preparedBlob);
 });
 test('面板拖拽会阻止 drop 冒泡，避免 iCloud 重复入队', () => {
   assert.match(
