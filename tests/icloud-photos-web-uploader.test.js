@@ -1185,6 +1185,6 @@ test('面板拖拽会阻止 drop 冒泡，避免 iCloud 重复入队', () => {
   );
 });
 
-test('版本号已升级到 1.13.2', () => {
-  assert.match(source, /\/\/ @version\s+1\.13\.2/);
+test('版本号已升级到 1.14.0', () => {
+  assert.match(source, /\/\/ @version\s+1\.14\.0/);
 });

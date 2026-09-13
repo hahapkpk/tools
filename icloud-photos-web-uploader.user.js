@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.13.2
+// @version      1.14.0
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -33,6 +33,7 @@
   const pasteDispatcherByDocument = new WeakMap();
   const registeredPasteTargets = new WeakSet();
   const handledPasteEvents = new WeakSet();
+  const gridCopyMenuStateByDocument = new WeakMap();
 
   function getPanelText() {
     return {
@@ -1779,6 +1780,151 @@
     });
   }
 
+  function getCopyablePhotoImageSource(image) {
+    if (!image) return '';
+    return String(image.currentSrc || image.src || '').trim();
+  }
+
+  function findCopyablePhotoImage(target) {
+    let node = target;
+    for (let depth = 0; node && depth < 7; depth += 1) {
+      if (String(node.tagName || '').toUpperCase() === 'IMG' && getCopyablePhotoImageSource(node)) {
+        return node;
+      }
+      if (typeof node.querySelectorAll === 'function') {
+        const images = node.querySelectorAll('img');
+        for (let i = 0; i < images.length; i += 1) {
+          if (getCopyablePhotoImageSource(images[i])) return images[i];
+        }
+      }
+      node = node.parentElement || node.parentNode;
+    }
+    return null;
+  }
+
+  async function copyPhotoImageToClipboard(image, win) {
+    const source = getCopyablePhotoImageSource(image);
+    const fetchFn = win && win.fetch;
+    const clipboard = win && win.navigator && win.navigator.clipboard;
+    const ClipboardItemCtor = (win && win.ClipboardItem) || root.ClipboardItem;
+    if (!source || typeof fetchFn !== 'function' || !clipboard ||
+        typeof clipboard.write !== 'function' || typeof ClipboardItemCtor !== 'function') {
+      return false;
+    }
+    const response = await fetchFn(source, {
+      credentials: 'include',
+      cache: 'no-store',
+    });
+    if (!response || !response.ok || typeof response.blob !== 'function') {
+      throw new Error('无法读取图片数据。');
+    }
+    const blob = await response.blob();
+    const type = String(blob && blob.type || '');
+    if (!/^image\//i.test(type)) throw new Error('图片数据格式无效。');
+    await clipboard.write([new ClipboardItemCtor({ [type]: blob })]);
+    return true;
+  }
+
+  function findPhotoContextMenu(doc) {
+    if (!doc || typeof doc.querySelectorAll !== 'function') return null;
+    const items = doc.querySelectorAll('[role="menuitem"], button, [role="menu"]');
+    for (let i = 0; i < items.length; i += 1) {
+      const item = items[i];
+      const label = String(item.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      if (!/(下载|更多下载选项|download|more download options)/.test(label)) continue;
+      if (typeof item.closest === 'function') {
+        const menu = item.closest('[role="menu"]');
+        if (menu) return menu;
+      }
+      return item.parentElement || item.parentNode || null;
+    }
+    return null;
+  }
+
+  function showCopyPhotoStatus(doc, message, isError) {
+    const panel = doc && typeof doc.getElementById === 'function' ? doc.getElementById(PANEL_ID) : null;
+    if (panel && typeof panel._showUploaderStatus === 'function') {
+      panel._showUploaderStatus(message, Boolean(isError));
+    }
+  }
+
+  function addCopyPhotoMenuItem(doc, win, state) {
+    const menu = findPhotoContextMenu(doc);
+    if (!menu || !state.image || typeof doc.createElement !== 'function') return false;
+    const menuLabel = String(menu.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (/(拷贝图像|copy image)/.test(menuLabel)) return false;
+    const existing = typeof menu.querySelector === 'function'
+      ? menu.querySelector('[data-icloud-copy-photo]')
+      : null;
+    if (existing) return true;
+
+    const item = doc.createElement('button');
+    item.type = 'button';
+    item.setAttribute('role', 'menuitem');
+    item.setAttribute('data-icloud-copy-photo', '');
+    item.textContent = '拷贝图像';
+    item.style.cssText = [
+      'display:flex',
+      'width:100%',
+      'align-items:center',
+      'padding:10px 16px',
+      'border:0',
+      'background:transparent',
+      'color:inherit',
+      'font:inherit',
+      'text-align:left',
+      'cursor:pointer',
+    ].join(';');
+    item.addEventListener('click', function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      void copyPhotoImageToClipboard(state.image, win).then(function (copied) {
+        showCopyPhotoStatus(doc, copied ? '图像已拷贝到剪贴板' : '浏览器不支持图像拷贝', !copied);
+      }).catch(function (error) {
+        const detail = error && error.message ? error.message : '未知错误';
+        showCopyPhotoStatus(doc, '拷贝图像失败：' + detail, true);
+      });
+    });
+
+    const children = menu.querySelectorAll ? menu.querySelectorAll('[role="menuitem"], button') : [];
+    let before = null;
+    for (let i = 0; i < children.length; i += 1) {
+      const label = String(children[i].textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      if (/(下载|download)/.test(label)) {
+        before = children[i];
+        break;
+      }
+    }
+    if (before && before.parentNode) before.parentNode.insertBefore(item, before);
+    else menu.appendChild(item);
+    return true;
+  }
+
+  function installGridPhotoCopyMenu(doc, win) {
+    if (!doc || gridCopyMenuStateByDocument.has(doc)) return;
+    const state = { image: null, timer: null };
+    gridCopyMenuStateByDocument.set(doc, state);
+    const install = function () {
+      if (state.timer) clearTimeout(state.timer);
+      state.timer = setTimeout(function () {
+        state.timer = null;
+        addCopyPhotoMenuItem(doc, win, state);
+      }, 0);
+    };
+    doc.addEventListener('contextmenu', function (event) {
+      const image = findCopyablePhotoImage(event.target);
+      if (!image) return;
+      state.image = image;
+      install();
+    }, true);
+    const MutationObserverCtor = (win && win.MutationObserver) || root.MutationObserver;
+    const rootNode = doc.documentElement || doc.body;
+    if (typeof MutationObserverCtor === 'function' && rootNode) {
+      const observer = new MutationObserverCtor(install);
+      observer.observe(rootNode, { childList: true, subtree: true });
+    }
+  }
+
   function calculatePanLimits(baseWidth, baseHeight, scale) {
     return {
       x: Math.max(0, ((scale - 1) * baseWidth) / 2),
@@ -2394,6 +2540,7 @@
   function mountPanel(doc, win) {
     createPanel(doc, win);
     installPasteListener(doc, win);
+    installGridPhotoCopyMenu(doc, win);
     installImageZoomPan(doc, win);
     observeAndRemount(doc, win);
     return true;
@@ -2471,7 +2618,9 @@
     extractImageFilesFromPaste,
     fetchCloudKitSyncState,
     filterImageFiles,
+    copyPhotoImageToClipboard,
     findActiveSidebarItem,
+    findCopyablePhotoImage,
     findICloudFileInput,
     findICloudFileInputShallow,
     findSidebarItem,
@@ -2479,6 +2628,7 @@
     getPanelText,
     hasMediaSourceChanged,
     installPasteListener,
+    installGridPhotoCopyMenu,
     isInICloudPhotosAppFrame,
     isJpegLikeFile,
     isImageLikeFile,
