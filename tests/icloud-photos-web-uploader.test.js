@@ -1168,6 +1168,43 @@ test('网格照片的遮罩事件可从事件路径解析实际图片', () => {
   );
 });
 
+test('照片 img 被 pointer-events 穿透时从容器按坐标解析', () => {
+  const image = {
+    tagName: 'IMG',
+    currentSrc: 'blob:https://www.icloud.com/photo',
+    src: '',
+    getBoundingClientRect() {
+      return { width: 115, height: 115, left: 100, top: 50, right: 215, bottom: 165 };
+    },
+  };
+  const tile = {
+    tagName: 'DIV',
+    querySelectorAll(selector) {
+      assert.equal(selector, 'img');
+      return [image];
+    },
+    closest() {
+      return null;
+    },
+  };
+
+  const hit = api.findCopyablePhotoImageFromEvent({
+    target: tile,
+    composedPath: () => [tile],
+    clientX: 150,
+    clientY: 100,
+  });
+  assert.equal(hit, image);
+
+  const miss = api.findCopyablePhotoImageFromEvent({
+    target: tile,
+    composedPath: () => [tile],
+    clientX: 500,
+    clientY: 500,
+  });
+  assert.equal(miss, null);
+});
+
 test('自定义菜单容器可由下载项的类名定位', () => {
   const menu = {
     id: 'menu',
@@ -1335,6 +1372,194 @@ test('对象地址回收且画布无法重绘时报告读取失败', async () =>
   await assert.rejects(api.copyPhotoImageToClipboard(image, win), /无法读取图片数据/);
 });
 
+function fakeKeydownEvent(overrides) {
+  return Object.assign(
+    {
+      key: 'c',
+      ctrlKey: true,
+      metaKey: false,
+      altKey: false,
+      shiftKey: false,
+      repeat: false,
+      defaultPrevented: false,
+      target: { tagName: 'DIV' },
+      preventDefault() {
+        this.defaultPrevented = true;
+      },
+      stopPropagation() {
+        this.propagationStopped = true;
+      },
+    },
+    overrides || {}
+  );
+}
+
+function setupKeyboardCopyEnv() {
+  const handlers = {};
+  const messages = [];
+  let written = null;
+  const canvasBlob = { type: 'image/png', size: 2400 };
+  const image = {
+    tagName: 'IMG',
+    src: 'blob:https://www.icloud.com/revoked',
+    currentSrc: 'blob:https://www.icloud.com/revoked',
+    naturalWidth: 480,
+    naturalHeight: 360,
+    getBoundingClientRect() {
+      return { width: 115, height: 115, left: 0, top: 0, right: 115, bottom: 115 };
+    },
+    ownerDocument: {
+      createElement() {
+        return {
+          width: 0,
+          height: 0,
+          getContext() {
+            return { drawImage() {} };
+          },
+          toBlob(callback) {
+            callback(canvasBlob);
+          },
+        };
+      },
+    },
+  };
+  // iCloud marks tile <img>s as pointer-events:none, so hit testing returns
+  // the tile container and the photo must be resolved from its descendants.
+  const tile = {
+    tagName: 'DIV',
+    querySelectorAll() {
+      return [image];
+    },
+  };
+  const doc = {
+    addEventListener(type, handler) {
+      handlers[type] = handlers[type] || [];
+      handlers[type].push(handler);
+    },
+    elementsFromPoint() {
+      return [tile];
+    },
+    getElementById() {
+      return {
+        _showUploaderStatus(message, isError) {
+          messages.push({ message, isError });
+        },
+      };
+    },
+  };
+  const win = {
+    fetch: async () => {
+      throw new TypeError('Failed to fetch');
+    },
+    ClipboardItem: function ClipboardItem(items) {
+      this.items = items;
+    },
+    navigator: {
+      clipboard: {
+        write: async (items) => {
+          written = items[0];
+        },
+      },
+    },
+    getSelection: () => ({ isCollapsed: true, toString: () => '' }),
+  };
+  return { handlers, messages, doc, win, image, canvasBlob, getWritten: () => written };
+}
+
+async function flushKeyboardCopy() {
+  await new Promise((resolve) => setTimeout(resolve, 20));
+}
+
+test('快捷键 Ctrl+C 拷贝鼠标下的照片并写入剪贴板', async () => {
+  const env = setupKeyboardCopyEnv();
+  api.installGridPhotoKeyboardCopy(env.doc, env.win);
+  env.handlers.mousemove[0]({ clientX: 50, clientY: 50 });
+  const event = fakeKeydownEvent();
+  env.handlers.keydown[0](event);
+  assert.equal(event.defaultPrevented, true);
+
+  await flushKeyboardCopy();
+  assert.equal(env.getWritten().items['image/png'], env.canvasBlob);
+  const last = env.messages[env.messages.length - 1];
+  assert.equal(last.message, '图像已拷贝到剪贴板');
+});
+
+test('快捷键 Alt+C 同样触发照片拷贝', async () => {
+  const env = setupKeyboardCopyEnv();
+  api.installGridPhotoKeyboardCopy(env.doc, env.win);
+  env.handlers.mousemove[0]({ clientX: 50, clientY: 50 });
+  const event = fakeKeydownEvent({ ctrlKey: false, altKey: true });
+  env.handlers.keydown[0](event);
+  assert.equal(event.defaultPrevented, true);
+
+  await flushKeyboardCopy();
+  assert.equal(env.getWritten().items['image/png'], env.canvasBlob);
+});
+
+test('快捷键在输入框内或有文本选择时不拦截', async () => {
+  const env = setupKeyboardCopyEnv();
+  api.installGridPhotoKeyboardCopy(env.doc, env.win);
+  env.handlers.mousemove[0]({ clientX: 50, clientY: 50 });
+
+  const inInput = fakeKeydownEvent({ target: { tagName: 'INPUT' } });
+  env.handlers.keydown[0](inInput);
+  assert.equal(inInput.defaultPrevented, false);
+
+  env.win.getSelection = () => ({ isCollapsed: false, toString: () => 'hello' });
+  const withSelection = fakeKeydownEvent();
+  env.handlers.keydown[0](withSelection);
+  assert.equal(withSelection.defaultPrevented, false);
+
+  await flushKeyboardCopy();
+  assert.equal(env.getWritten(), null);
+});
+
+test('鼠标下没有照片时快捷键不拦截', () => {
+  const env = setupKeyboardCopyEnv();
+  env.doc.elementsFromPoint = () => [{ tagName: 'DIV' }];
+  api.installGridPhotoKeyboardCopy(env.doc, env.win);
+  env.handlers.mousemove[0]({ clientX: 50, clientY: 50 });
+  const event = fakeKeydownEvent();
+  env.handlers.keydown[0](event);
+  assert.equal(event.defaultPrevented, false);
+});
+
+test('鼠标下的小图标不会被当作照片', () => {
+  const icon = {
+    tagName: 'IMG',
+    src: 'https://www.icloud.com/system/icon.png',
+    getBoundingClientRect() {
+      return { width: 24, height: 24 };
+    },
+  };
+  assert.equal(api.findGridPhotoImageAtPoint({ elementsFromPoint: () => [icon] }, 10, 10), null);
+  const photo = {
+    tagName: 'IMG',
+    src: 'blob:https://www.icloud.com/photo',
+    getBoundingClientRect() {
+      return { width: 115, height: 115 };
+    },
+  };
+  assert.equal(api.findGridPhotoImageAtPoint({ elementsFromPoint: () => [photo] }, 10, 10), photo);
+});
+
+test('首次悬停到照片时提示一次快捷键用法', () => {
+  const env = setupKeyboardCopyEnv();
+  api.installGridPhotoKeyboardCopy(env.doc, env.win);
+  env.handlers.mouseover[0]({ clientX: 50, clientY: 50 });
+  assert.ok(env.messages.some((entry) => entry.message.includes('Ctrl+C')));
+  const count = env.messages.length;
+  env.handlers.mouseover[0]({ clientX: 60, clientY: 60 });
+  assert.equal(env.messages.length, count);
+});
+
+test('编辑控件判定覆盖输入框与 contenteditable', () => {
+  assert.equal(api.isEditablePhotoCopyTarget({ tagName: 'INPUT' }), true);
+  assert.equal(api.isEditablePhotoCopyTarget({ tagName: 'DIV', isContentEditable: true }), true);
+  assert.equal(api.isEditablePhotoCopyTarget({ tagName: 'DIV' }), false);
+  assert.equal(api.isEditablePhotoCopyTarget(null), false);
+});
+
 test('面板拖拽会阻止 drop 冒泡，避免 iCloud 重复入队', () => {
   assert.match(
     source,
@@ -1342,6 +1567,6 @@ test('面板拖拽会阻止 drop 冒泡，避免 iCloud 重复入队', () => {
   );
 });
 
-test('版本号已升级到 1.14.3', () => {
-  assert.match(source, /\/\/ @version\s+1\.14\.3/);
+test('版本号已升级到 1.15.0', () => {
+  assert.match(source, /\/\/ @version\s+1\.15\.0/);
 });

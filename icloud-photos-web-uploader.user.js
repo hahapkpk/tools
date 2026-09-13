@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.14.3
-// @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click copy, and mouse-wheel zoom / drag-pan in the image preview.
+// @version      1.15.0
+// @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click & Ctrl+C photo copy, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
 // @match        https://www.icloud.com.cn/photos*
@@ -34,11 +34,12 @@
   const registeredPasteTargets = new WeakSet();
   const handledPasteEvents = new WeakSet();
   const gridCopyMenuStateByDocument = new WeakMap();
+  const keyboardPhotoCopyStateByDocument = new WeakMap();
 
   function getPanelText() {
     return {
       title: 'iCloud 上传',
-      tooltip: '点击选择 · 粘贴 · 拖拽',
+      tooltip: '点击选择 · 粘贴 · 拖拽 · Ctrl+C 拷贝图像',
     };
   }
 
@@ -1793,15 +1794,40 @@
     return getCopyablePhotoImageSource(target) ? target : null;
   }
 
+  function findPhotoImageInNode(node, x, y) {
+    if (!node) return null;
+    const direct = findCopyablePhotoImage(node);
+    if (direct) {
+      // Direct hits keep the historic behavior (thin stubs lack layout), but
+      // small UI artwork must never count as a photo.
+      const rect = typeof direct.getBoundingClientRect === 'function'
+        ? direct.getBoundingClientRect()
+        : null;
+      if (!rect || rect.width >= 64) return direct;
+      return null;
+    }
+    if (typeof node.querySelectorAll !== 'function') return null;
+    if (typeof x !== 'number' || typeof y !== 'number') return null;
+    const candidates = node.querySelectorAll('img');
+    for (let i = 0; i < candidates.length; i += 1) {
+      const image = candidates[i];
+      if (!getCopyablePhotoImageSource(image)) continue;
+      const rect = typeof image.getBoundingClientRect === 'function'
+        ? image.getBoundingClientRect()
+        : null;
+      if (!rect || rect.width < 64 || rect.height < 64) continue;
+      if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) continue;
+      return image;
+    }
+    return null;
+  }
+
   function findCopyablePhotoImageFromEvent(event, doc) {
     if (!event) return null;
+    const x = typeof event.clientX === 'number' ? event.clientX : undefined;
+    const y = typeof event.clientY === 'number' ? event.clientY : undefined;
     const direct = findCopyablePhotoImage(event.target);
     if (direct) return direct;
-    const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
-    for (let i = 0; i < path.length; i += 1) {
-      const image = findCopyablePhotoImage(path[i]);
-      if (image) return image;
-    }
     const target = event.target;
     if (target && typeof target.closest === 'function') {
       try {
@@ -1810,11 +1836,24 @@
         // Fall through to the coordinate lookup when the host rejects a selector.
       }
     }
-    if (!doc || typeof doc.elementsFromPoint !== 'function') return null;
-    const stack = doc.elementsFromPoint(event.clientX, event.clientY) || [];
+    // iCloud sets pointer-events:none on tile images, so hit testing never
+    // returns the <img> itself. Resolve it from the containing tile instead,
+    // matching by pointer coordinates so blank grid areas never copy an
+    // unrelated thumbnail.
+    const fromTarget = findPhotoImageInNode(target, x, y);
+    if (fromTarget) return fromTarget;
+    const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+    for (let i = 0; i < path.length; i += 1) {
+      const found = findPhotoImageInNode(path[i], x, y);
+      if (found) return found;
+    }
+    if (!doc || typeof doc.elementsFromPoint !== 'function' || x === undefined || y === undefined) {
+      return null;
+    }
+    const stack = doc.elementsFromPoint(x, y) || [];
     for (let i = 0; i < stack.length; i += 1) {
-      const image = findCopyablePhotoImage(stack[i]);
-      if (image) return image;
+      const found = findPhotoImageInNode(stack[i], x, y);
+      if (found) return found;
     }
     return null;
   }
@@ -2065,6 +2104,90 @@
       state.timer = setTimeout(function () {
         if (token === state.token) clearPending();
       }, 5000);
+    }, true);
+  }
+
+  function isEditablePhotoCopyTarget(target) {
+    if (!target) return false;
+    const tag = String(target.tagName || '').toUpperCase();
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+    return Boolean(target.isContentEditable);
+  }
+
+  function findGridPhotoImageAtPoint(doc, x, y) {
+    if (!doc || typeof doc.elementsFromPoint !== 'function') return null;
+    if (typeof x !== 'number' || typeof y !== 'number' || x < 0 || y < 0) return null;
+    const stack = doc.elementsFromPoint(x, y) || [];
+    for (let i = 0; i < stack.length; i += 1) {
+      const found = findPhotoImageInNode(stack[i], x, y);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function installGridPhotoKeyboardCopy(doc, win) {
+    if (!doc || keyboardPhotoCopyStateByDocument.has(doc)) return;
+    const state = { x: -1, y: -1, busy: false, hintShown: false };
+    keyboardPhotoCopyStateByDocument.set(doc, state);
+
+    function findPhotoUnderPointer() {
+      if (state.x < 0 || state.y < 0) return null;
+      return findGridPhotoImageAtPoint(doc, state.x, state.y);
+    }
+
+    function isCopyShortcut(event) {
+      if (String(event.key || '').toLowerCase() !== 'c') return false;
+      const primary = (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;
+      const alt = event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+      return Boolean(primary || alt);
+    }
+
+    function hasTextSelection() {
+      const selection = win && typeof win.getSelection === 'function' ? win.getSelection() : null;
+      return Boolean(selection && selection.isCollapsed === false && String(selection).length > 0);
+    }
+
+    function copyPhotoUnderPointer(image) {
+      state.busy = true;
+      showCopyPhotoStatus(doc, '正在拷贝图像…');
+      fetchCopyablePhotoImageBlob(image, win).then(function (blob) {
+        return copyPhotoImageToClipboard(image, win, blob);
+      }).then(function (copied) {
+        showCopyPhotoStatus(doc, copied ? '图像已拷贝到剪贴板' : '浏览器不支持图像拷贝', !copied);
+      }).catch(function (error) {
+        const detail = error && error.message ? error.message : '未知错误';
+        showCopyPhotoStatus(doc, '拷贝图像失败：' + detail, true);
+      }).then(function () {
+        state.busy = false;
+      });
+    }
+
+    doc.addEventListener('mousemove', function (event) {
+      state.x = typeof event.clientX === 'number' ? event.clientX : -1;
+      state.y = typeof event.clientY === 'number' ? event.clientY : -1;
+    }, true);
+
+    doc.addEventListener('mouseover', function (event) {
+      if (state.hintShown) return;
+      const image = findGridPhotoImageAtPoint(doc, event.clientX, event.clientY);
+      if (!image) return;
+      state.hintShown = true;
+      showCopyPhotoStatus(doc, '提示：鼠标悬停在照片上按 Ctrl+C 可拷贝图像');
+    }, true);
+
+    doc.addEventListener('keydown', function (event) {
+      if (event.defaultPrevented || event.repeat) return;
+      if (!isCopyShortcut(event)) return;
+      if (isEditablePhotoCopyTarget(event.target)) return;
+      if (hasTextSelection()) return;
+      const image = findPhotoUnderPointer();
+      if (!image) return;
+      // The real keystroke carries the user activation that the clipboard
+      // write below depends on, so claim the event before the page sees it.
+      event.preventDefault();
+      event.stopPropagation();
+      if (state.busy) return;
+      copyPhotoUnderPointer(image);
     }, true);
   }
 
@@ -2684,6 +2807,7 @@
     createPanel(doc, win);
     installPasteListener(doc, win);
     installGridPhotoCopyMenu(doc, win);
+    installGridPhotoKeyboardCopy(doc, win);
     installImageZoomPan(doc, win);
     observeAndRemount(doc, win);
     return true;
@@ -2774,11 +2898,14 @@
     hasMediaSourceChanged,
     installPasteListener,
     installGridPhotoCopyMenu,
+    installGridPhotoKeyboardCopy,
+    isEditablePhotoCopyTarget,
     isInICloudPhotosAppFrame,
     isJpegLikeFile,
     isImageLikeFile,
     isUploadTrigger,
     looksLikePhotosAppDom,
+    findGridPhotoImageAtPoint,
     normalizeFilesForICloudWebUpload,
     resolveZoomMedia,
     restoreOwnedInlineStyle,
