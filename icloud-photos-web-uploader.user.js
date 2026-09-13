@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.15.0
+// @version      1.15.1
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click & Ctrl+C photo copy, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -1781,6 +1781,12 @@
     });
   }
 
+  // iCloud sets pointer-events:none on the popover wrapper and re-enables it only
+  // inside ui-popover-content, so an injected row has to live in the menu list
+  // (and carry its own pointer-events) to be reachable by a real mouse click.
+  const COPY_MENU_BASE_HEIGHT_ATTR = 'data-icloud-copy-menu-base-height';
+  const COPY_MENU_APPLIED_HEIGHT_ATTR = 'data-icloud-copy-menu-applied-height';
+
   function getCopyablePhotoImageSource(image) {
     if (!image) return '';
     return String(image.currentSrc || image.src || '').trim();
@@ -1984,6 +1990,71 @@
     }
   }
 
+  // The popover node is reused across opens and iCloud rewrites its inline height
+  // for each menu it shows, so work out whether the current height still carries
+  // our previous offset before adding ours again. Returns the height iCloud
+  // itself wants, or null when it is auto-sized.
+  function resolveCopyMenuBaseHeight(options) {
+    const current = options ? options.current : NaN;
+    const storedBase = options ? options.storedBase : NaN;
+    const storedApplied = options ? options.storedApplied : NaN;
+    const inflated =
+      isFinite(storedBase) &&
+      isFinite(storedApplied) &&
+      isFinite(current) &&
+      Math.abs(current - (storedBase + storedApplied)) < 0.5;
+    if (inflated) return storedBase;
+    return isFinite(current) ? current : null;
+  }
+
+  function readCopyMenuAttr(element, name) {
+    return element && typeof element.getAttribute === 'function' ? element.getAttribute(name) : null;
+  }
+
+  function applyCopyMenuHeight(element, extra) {
+    if (!element || !element.style || !extra) return;
+    const base = resolveCopyMenuBaseHeight({
+      current: parseFloat(element.style.height),
+      storedBase: parseFloat(readCopyMenuAttr(element, COPY_MENU_BASE_HEIGHT_ATTR)),
+      storedApplied: parseFloat(readCopyMenuAttr(element, COPY_MENU_APPLIED_HEIGHT_ATTR)),
+    });
+    if (base === null) return;
+    if (typeof element.setAttribute === 'function') {
+      element.setAttribute(COPY_MENU_BASE_HEIGHT_ATTR, String(base));
+      element.setAttribute(COPY_MENU_APPLIED_HEIGHT_ATTR, String(extra));
+    }
+    element.style.height = base + extra + 'px';
+  }
+
+  // iCloud's popover wrapper is pointer-events:none; only ui-popover-content
+  // restores interaction, so the row must be inserted into the list it owns.
+  function findCopyMenuItemList(menu) {
+    if (!menu || typeof menu.querySelector !== 'function') return menu || null;
+    return (
+      menu.querySelector('ui-menu-scroll-container[role="menu"]') ||
+      menu.querySelector('[role="menu"]') ||
+      menu
+    );
+  }
+
+  // An extra row would otherwise push the last entry into the menu's scroll area
+  // and clip it, because iCloud pins an explicit pixel height on the popover.
+  function growCopyMenuHeight(menu, item) {
+    const height =
+      item && typeof item.getBoundingClientRect === 'function'
+        ? Math.round(item.getBoundingClientRect().height)
+        : 0;
+    if (!height) return;
+    const popover =
+      menu && typeof menu.closest === 'function' ? menu.closest('ui-popover') || menu : menu;
+    applyCopyMenuHeight(popover, height);
+    const content =
+      popover && typeof popover.querySelector === 'function'
+        ? popover.querySelector('ui-popover-content')
+        : null;
+    applyCopyMenuHeight(content, height);
+  }
+
   function addCopyPhotoMenuItem(doc, win, menu, image, blobTask) {
     if (!menu || !image || !blobTask || !doc || typeof doc.createElement !== 'function') return false;
     const menuLabel = String(menu.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -2002,13 +2073,14 @@
       'display:flex',
       'width:100%',
       'align-items:center',
-      'padding:10px 16px',
+      'padding:5px 16px',
       'border:0',
       'background:transparent',
       'color:inherit',
       'font:inherit',
       'text-align:left',
       'cursor:pointer',
+      'pointer-events:auto',
     ].join(';');
     item.disabled = true;
     let blob = null;
@@ -2031,17 +2103,26 @@
       item.textContent = '拷贝图像不可用';
     });
 
-    const children = menu.querySelectorAll ? menu.querySelectorAll('*') : [];
+    // Match a real menu row, not any descendant: the first element whose text
+    // contains 下载 can be ui-popover-content itself, which would drop the row
+    // outside the interactive area (and make it unclickable).
+    const list = findCopyMenuItemList(menu);
+    const rows =
+      list && typeof list.querySelectorAll === 'function'
+        ? list.querySelectorAll('[role="menuitem"]')
+        : [];
     let before = null;
-    for (let i = 0; i < children.length; i += 1) {
-      const label = String(children[i].textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    for (let i = 0; i < rows.length; i += 1) {
+      const label = String(rows[i].textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
       if (/(下载|下載|download)/.test(label)) {
-        before = children[i];
+        before = rows[i];
         break;
       }
     }
     if (before && before.parentNode) before.parentNode.insertBefore(item, before);
+    else if (list && typeof list.insertBefore === 'function') list.insertBefore(item, list.firstChild);
     else menu.appendChild(item);
+    growCopyMenuHeight(menu, item);
     return true;
   }
 
@@ -2871,6 +2952,7 @@
   }
 
   return {
+    addCopyPhotoMenuItem,
     bootstrap,
     calculateCanvasSize,
     calculateDraggedPanelPosition,
@@ -2889,6 +2971,7 @@
     findActiveSidebarItem,
     findCopyablePhotoImage,
     findCopyablePhotoImageFromEvent,
+    findCopyMenuItemList,
     findICloudFileInput,
     findPhotoContextMenus,
     findICloudFileInputShallow,
@@ -2909,6 +2992,7 @@
     normalizeFilesForICloudWebUpload,
     resolveZoomMedia,
     restoreOwnedInlineStyle,
+    resolveCopyMenuBaseHeight,
     renderPhotoImageToBlob,
     selectICloudFileInput,
     serializeZoneSyncState,

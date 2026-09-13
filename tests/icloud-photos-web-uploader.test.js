@@ -1567,6 +1567,108 @@ test('面板拖拽会阻止 drop 冒泡，避免 iCloud 重复入队', () => {
   );
 });
 
-test('版本号已升级到 1.15.0', () => {
-  assert.match(source, /\/\/ @version\s+1\.15\.0/);
+test('版本号已升级到 1.15.1', () => {
+  assert.match(source, /\/\/ @version\s+1\.15\.1/);
 });
+
+test('弹层基准高度能区分“我们已加高”和“iCloud 重写了高度”', () => {
+  assert.equal(api.resolveCopyMenuBaseHeight({ current: 247.905 }), 247.905);
+  assert.equal(
+    api.resolveCopyMenuBaseHeight({ current: 277.905, storedBase: 247.905, storedApplied: 30 }),
+    247.905
+  );
+  assert.equal(
+    api.resolveCopyMenuBaseHeight({ current: 180, storedBase: 247.905, storedApplied: 30 }),
+    180
+  );
+  assert.equal(api.resolveCopyMenuBaseHeight({ current: NaN, storedBase: 247.905, storedApplied: 30 }), null);
+  assert.equal(api.resolveCopyMenuBaseHeight({}), null);
+});
+
+test('拷贝图像行插进可交互的菜单列表，而不是 pointer-events:none 的 popover 外层', () => {
+  const created = [];
+  const makeNode = (tag) => {
+    const node = {
+      tagName: String(tag).toUpperCase(),
+      children: [],
+      attrs: {},
+      style: { cssText: '' },
+      textContent: '',
+      disabled: false,
+      parentNode: null,
+      setAttribute(name, value) {
+        this.attrs[name] = value;
+      },
+      getAttribute(name) {
+        return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null;
+      },
+      addEventListener() {},
+      getBoundingClientRect() {
+        return { width: 169, height: 30, top: 0, left: 0, right: 169, bottom: 30 };
+      },
+      insertBefore(child, ref) {
+        const index = ref ? this.children.indexOf(ref) : 0;
+        this.children.splice(index < 0 ? 0 : index, 0, child);
+        child.parentNode = this;
+        return child;
+      },
+      appendChild(child) {
+        this.children.push(child);
+        child.parentNode = this;
+        return child;
+      },
+      get firstChild() {
+        return this.children[0] || null;
+      },
+      querySelector() {
+        return null;
+      },
+      querySelectorAll(selector) {
+        return selector === '[role="menuitem"]'
+          ? this.children.filter((child) => child.getAttribute('role') === 'menuitem')
+          : [];
+      },
+    };
+    created.push(node);
+    return node;
+  };
+
+  const doc = { createElement: (tag) => makeNode(tag) };
+  const list = makeNode('div');
+  list.className = 'ui-menu-scroll-container';
+  list.style.height = '237px';
+  const downloadRow = makeNode('div');
+  downloadRow.setAttribute('role', 'menuitem');
+  downloadRow.textContent = '下载';
+  const deleteRow = makeNode('div');
+  deleteRow.setAttribute('role', 'menuitem');
+  deleteRow.textContent = '刪除';
+  list.appendChild(downloadRow);
+  list.appendChild(deleteRow);
+
+  const content = makeNode('div');
+  content.style.height = '247.905px';
+
+  const popover = makeNode('ui-popover');
+  popover.style.height = '247.905px';
+  popover.textContent = '个人收藏下载更多下载选项…播放幻灯片添加到相簿…隐藏刪除';
+  popover.closest = (selector) => (selector === 'ui-popover' ? popover : null);
+  popover.querySelector = (selector) => {
+    if (selector === '[data-icloud-copy-photo]') return null;
+    if (selector === 'ui-menu-scroll-container[role="menu"]') return list;
+    if (selector === 'ui-popover-content') return content;
+    return null;
+  };
+
+  const added = api.addCopyPhotoMenuItem(doc, {}, popover, { tagName: 'IMG' }, Promise.resolve({ type: 'image/png' }));
+
+  assert.equal(added, true);
+  const inserted = list.children.find((child) => child.getAttribute('data-icloud-copy-photo') !== null);
+  assert.ok(inserted, '应插入到可交互的菜单列表里');
+  assert.equal(inserted.parentNode, list);
+  assert.equal(list.children.indexOf(inserted), 0, '应插在下载行之前');
+  assert.match(inserted.style.cssText, /pointer-events:auto/);
+  assert.equal(popover.style.height, '277.905px');
+  assert.equal(content.style.height, '277.905px');
+});
+
