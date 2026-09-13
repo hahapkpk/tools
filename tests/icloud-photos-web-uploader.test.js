@@ -1169,12 +1169,13 @@ test('网格照片的遮罩事件可从事件路径解析实际图片', () => {
 });
 
 test('自定义菜单容器可由下载项的类名定位', () => {
-  const menu = { id: 'menu' };
+  const menu = { id: 'menu', textContent: '个人收藏 下载', parentElement: null };
   const download = {
     textContent: '下载',
+    parentElement: menu,
     closest(selector) {
-      assert.match(selector, /class\*="menu"/i);
-      return menu;
+      assert.match(selector, /role="menu"/i);
+      return null;
     },
   };
   const doc = {

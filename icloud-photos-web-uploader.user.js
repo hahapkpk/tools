@@ -1856,6 +1856,12 @@
     return rect.width > 0 && rect.height > 0;
   }
 
+  function isPhotoMenuContainer(node) {
+    const label = String((node || {}).textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const commands = label.match(/下载|download|个人收藏|favorite|隐藏|hide|删除|delete|添加到相簿|add to album/g) || [];
+    return new Set(commands).size >= 2;
+  }
+
   function findPhotoContextMenus(doc) {
     if (!doc || typeof doc.querySelectorAll !== 'function') return [];
     const menus = [];
@@ -1868,12 +1874,17 @@
       const item = items[i];
       const label = String(item.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
       if (!/(下载|更多下载选项|download|more download options)/.test(label)) continue;
-      const menu = typeof item.closest === 'function'
-        ? item.closest('[role="menu"], [class*="menu" i], [class*="context" i], [data-testid*="menu" i]')
-        : (item.parentElement || item.parentNode);
-      if (menu && !seen.has(menu)) {
-        seen.add(menu);
-        menus.push(menu);
+      let menu = typeof item.closest === 'function' ? item.closest('[role="menu"]') : null;
+      let node = menu || item;
+      for (let depth = 0; node && depth < 7; depth += 1) {
+        if (isPhotoMenuContainer(node)) {
+          if (!seen.has(node)) {
+            seen.add(node);
+            menus.push(node);
+          }
+          break;
+        }
+        node = node.parentElement || node.parentNode;
       }
     }
     return menus;
@@ -1886,8 +1897,8 @@
     }
   }
 
-  function addCopyPhotoMenuItem(doc, win, menu, image) {
-    if (!menu || !image || !doc || typeof doc.createElement !== 'function') return false;
+  function addCopyPhotoMenuItem(doc, win, menu, image, blobTask) {
+    if (!menu || !image || !blobTask || !doc || typeof doc.createElement !== 'function') return false;
     const menuLabel = String(menu.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
     if (/(拷贝图像|copy image)/.test(menuLabel)) return false;
     const existing = typeof menu.querySelector === 'function'
@@ -1899,7 +1910,7 @@
     item.type = 'button';
     item.setAttribute('role', 'menuitem');
     item.setAttribute('data-icloud-copy-photo', '');
-    item.textContent = '拷贝图像';
+    item.textContent = '拷贝图像（准备中…）';
     item.style.cssText = [
       'display:flex',
       'width:100%',
@@ -1912,15 +1923,25 @@
       'text-align:left',
       'cursor:pointer',
     ].join(';');
+    item.disabled = true;
+    let blob = null;
     item.addEventListener('click', function (event) {
       event.preventDefault();
       event.stopPropagation();
-      void copyPhotoImageToClipboard(image, win).then(function (copied) {
+      if (!blob) return;
+      void copyPhotoImageToClipboard(image, win, blob).then(function (copied) {
         showCopyPhotoStatus(doc, copied ? '图像已拷贝到剪贴板' : '浏览器不支持图像拷贝', !copied);
       }).catch(function (error) {
         const detail = error && error.message ? error.message : '未知错误';
         showCopyPhotoStatus(doc, '拷贝图像失败：' + detail, true);
       });
+    });
+    void blobTask.then(function (resolvedBlob) {
+      blob = resolvedBlob;
+      item.disabled = false;
+      item.textContent = '拷贝图像';
+    }).catch(function () {
+      item.textContent = '拷贝图像不可用';
     });
 
     const children = menu.querySelectorAll ? menu.querySelectorAll('*') : [];
@@ -1939,7 +1960,7 @@
 
   function installGridPhotoCopyMenu(doc, win) {
     if (!doc || gridCopyMenuStateByDocument.has(doc)) return;
-    const state = { image: null, observer: null, timer: null, knownMenus: null, token: 0 };
+    const state = { image: null, blobTask: null, observer: null, timer: null, knownMenus: null, token: 0 };
     gridCopyMenuStateByDocument.set(doc, state);
 
     function clearPending() {
@@ -1948,6 +1969,7 @@
       if (state.observer) state.observer.disconnect();
       state.observer = null;
       state.image = null;
+      state.blobTask = null;
       state.knownMenus = null;
     }
 
@@ -1959,10 +1981,10 @@
     }
 
     function tryInstall(token) {
-      if (token !== state.token || !state.image) return;
+      if (token !== state.token || !state.image || !state.blobTask) return;
       const menu = findOpenedMenu();
       if (!menu) return;
-      addCopyPhotoMenuItem(doc, win, menu, state.image);
+      addCopyPhotoMenuItem(doc, win, menu, state.image, state.blobTask);
       clearPending();
     }
 
@@ -1973,6 +1995,8 @@
       const token = state.token + 1;
       state.token = token;
       state.image = image;
+      state.blobTask = fetchCopyablePhotoImageBlob(image, win);
+      void state.blobTask.catch(function () {});
       state.knownMenus = new Map(findPhotoContextMenus(doc).map(function (menu) {
         return [menu, isVisibleMenu(menu)];
       }));
@@ -1980,10 +2004,15 @@
       const rootNode = doc.documentElement || doc.body;
       if (typeof MutationObserverCtor === 'function' && rootNode) {
         state.observer = new MutationObserverCtor(function () { tryInstall(token); });
-        state.observer.observe(rootNode, { childList: true, subtree: true });
+        state.observer.observe(rootNode, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['class', 'style', 'hidden', 'aria-hidden'],
+        });
       }
-      // Add the menu row as soon as iCloud renders the popup. Fetching before
-      // insertion makes the option appear late or never on slow/CDN-backed photos.
+      // Insert immediately, but wait for a verified blob before enabling the
+      // command so clipboard.write remains inside the click activation.
       tryInstall(token);
       state.timer = setTimeout(function () {
         if (token === state.token) clearPending();
