@@ -1567,8 +1567,8 @@ test('面板拖拽会阻止 drop 冒泡，避免 iCloud 重复入队', () => {
   );
 });
 
-test('版本号已升级到 1.15.2', () => {
-  assert.match(source, /\/\/ @version\s+1\.15\.2/);
+test('版本号已升级到 1.15.3', () => {
+  assert.match(source, /\/\/ @version\s+1\.15\.3/);
 });
 
 test('弹层基准高度能区分“我们已加高”和“iCloud 重写了高度”', () => {

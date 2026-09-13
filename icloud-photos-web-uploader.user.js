@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.15.2
+// @version      1.15.3
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click & Ctrl+C photo copy, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -2056,7 +2056,10 @@
     applyCopyMenuHeight(content, height);
   }
 
-  const MENU_ROW_STYLE = [
+  // A plain <button> inherits the popover's dimmed colour and has no icon slot,
+  // so it looks nothing like iCloud's own rows. Clone a real row instead and
+  // swap its label/icon: that keeps typography, colour and hover behaviour.
+  const MENU_ROW_FALLBACK_STYLE = [
     'display:flex',
     'width:100%',
     'align-items:center',
@@ -2072,35 +2075,83 @@
     'pointer-events:auto',
   ].join(';');
 
+  function isInjectedMenuRow(row) {
+    if (!row || typeof row.getAttribute !== 'function') return false;
+    return (
+      row.getAttribute(GRID_COPY_MENU_ATTR) !== null ||
+      row.getAttribute(GRID_DOWNLOAD_MENU_ATTR) !== null
+    );
+  }
+
+  function findNativeMenuRow(container, matcher) {
+    if (!container || typeof container.querySelectorAll !== 'function') return null;
+    const rows = container.querySelectorAll('[role="menuitem"]');
+    for (let i = 0; i < rows.length; i += 1) {
+      const row = rows[i];
+      if (isInjectedMenuRow(row)) continue;
+      const label = String(row.textContent || '').replace(/\s+/g, ' ').trim();
+      if (matcher.test(label)) return row;
+    }
+    return null;
+  }
+
+  // iCloud's own 下载 row, excluding the ones this script injects.
+  function findNativeDownloadItem(container) {
+    return findNativeMenuRow(container, /^(下载|下載|download)/i);
+  }
+
   function buildMenuRow(doc, label, marker) {
     const item = doc.createElement('button');
     item.type = 'button';
     item.setAttribute('role', 'menuitem');
     item.setAttribute(marker, '');
     item.textContent = label;
-    item.style.cssText = MENU_ROW_STYLE;
+    item.style.cssText = MENU_ROW_FALLBACK_STYLE;
     return item;
   }
 
   function setMenuRowLabel(row, label) {
     if (!row) return;
-    row.textContent = label;
+    const title = typeof row.querySelector === 'function' ? row.querySelector('.menuItem-title') : null;
+    if (title) title.textContent = label;
+    else row.textContent = label;
   }
 
-  // iCloud's own 下载 row, excluding the ones this script injects.
-  function findNativeDownloadItem(container) {
-    if (!container || typeof container.querySelectorAll !== 'function') return null;
-    const rows = container.querySelectorAll('[role="menuitem"]');
-    for (let i = 0; i < rows.length; i += 1) {
-      const row = rows[i];
-      if (typeof row.getAttribute === 'function') {
-        if (row.getAttribute(GRID_COPY_MENU_ATTR) !== null) continue;
-        if (row.getAttribute(GRID_DOWNLOAD_MENU_ATTR) !== null) continue;
+  function copyMenuRowIcon(row, source) {
+    if (!row || !source || typeof row.querySelector !== 'function') return;
+    const target = row.querySelector('.menuItem-icon');
+    const sourceIcon =
+      typeof source.querySelector === 'function' ? source.querySelector('.menuItem-icon') : null;
+    if (!target || !sourceIcon) return;
+    const svg = typeof sourceIcon.querySelector === 'function' ? sourceIcon.querySelector('svg') : null;
+    if (!svg || typeof svg.cloneNode !== 'function') return;
+    target.textContent = '';
+    target.appendChild(svg.cloneNode(true));
+  }
+
+  function createMenuRow(doc, container, label, marker, iconSourceRow) {
+    const existing =
+      container && typeof container.querySelector === 'function'
+        ? container.querySelector('[' + marker + ']')
+        : null;
+    if (existing) return existing;
+    const template = findNativeMenuRow(container, /./);
+    let item = null;
+    if (template && typeof template.cloneNode === 'function') {
+      item = template.cloneNode(true);
+      item.setAttribute(marker, '');
+      item.setAttribute('role', 'menuitem');
+      item.setAttribute('tabindex', '-1');
+      if (typeof item.removeAttribute === 'function') {
+        item.removeAttribute('aria-selected');
+        item.removeAttribute('aria-disabled');
       }
-      const label = String(row.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
-      if (/^(下载|下載|download)/.test(label)) return row;
+      if (item.style) item.style.pointerEvents = 'auto';
+      setMenuRowLabel(item, label);
+      if (iconSourceRow) copyMenuRowIcon(item, iconSourceRow);
     }
-    return null;
+    if (!item) item = buildMenuRow(doc, label, marker);
+    return item;
   }
 
   // Delegate the download to iCloud's own command: its TCC/asset mapping is the
@@ -2128,9 +2179,20 @@
       if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
       const blob = row.__icloudBlob;
       if (!blob) return;
-      void copyPhotoImageToClipboard(row.__icloudImage, win, blob)
+      const image = row.__icloudImage;
+      const width = image ? image.naturalWidth || image.width || 0 : 0;
+      const height = image ? image.naturalHeight || image.height || 0 : 0;
+      void copyPhotoImageToClipboard(image, win, blob)
         .then(function (copied) {
-          showCopyPhotoStatus(doc, copied ? '图像已拷贝到剪贴板' : '浏览器不支持图像拷贝', !copied);
+          if (!copied) {
+            showCopyPhotoStatus(doc, '浏览器不支持图像拷贝', true);
+            return;
+          }
+          const size = width && height ? ' ' + width + '×' + height : '';
+          // The grid only renders a small derivative, so say so instead of
+          // letting the user paste a thumbnail thinking it is the original.
+          const hint = width && height && Math.max(width, height) < 1600 ? '；原片请用「下载原片」' : '';
+          showCopyPhotoStatus(doc, '已拷贝图像' + size + hint);
         })
         .catch(function (error) {
           const detail = error && error.message ? error.message : '未知错误';
@@ -2170,14 +2232,28 @@
 
     let copyRow = list.querySelector('[' + GRID_COPY_MENU_ATTR + ']');
     let downloadRow = list.querySelector('[' + GRID_DOWNLOAD_MENU_ATTR + ']');
+    const nativeDownload = findNativeDownloadItem(list);
+    const nativeMoreOptions = findNativeMenuRow(list, /更多下载|更多下載|more download/i);
     const freshRows = [];
     if (!copyRow && !hasNativeCopy) {
-      copyRow = buildMenuRow(doc, '拷贝图像', GRID_COPY_MENU_ATTR);
+      copyRow = createMenuRow(
+        doc,
+        list,
+        '拷贝图像',
+        GRID_COPY_MENU_ATTR,
+        nativeMoreOptions || nativeDownload
+      );
       copyRow.addEventListener('click', makeCopyRowHandler(doc, win, copyRow), true);
       freshRows.push(copyRow);
     }
     if (!downloadRow) {
-      downloadRow = buildMenuRow(doc, DOWNLOAD_MENU_LABEL, GRID_DOWNLOAD_MENU_ATTR);
+      downloadRow = createMenuRow(
+        doc,
+        list,
+        DOWNLOAD_MENU_LABEL,
+        GRID_DOWNLOAD_MENU_ATTR,
+        nativeDownload
+      );
       downloadRow.addEventListener('click', makeDownloadRowHandler(doc, win, list), true);
       freshRows.push(downloadRow);
     }
@@ -2189,13 +2265,11 @@
       copyRow.__icloudToken = token;
       copyRow.__icloudImage = image;
       copyRow.__icloudBlob = null;
-      copyRow.disabled = true;
       setMenuRowLabel(copyRow, '拷贝图像（准备中…）');
       void blobTask
         .then(function (resolved) {
           if (copyRow.__icloudToken !== token) return;
           copyRow.__icloudBlob = resolved;
-          copyRow.disabled = false;
           setMenuRowLabel(copyRow, '拷贝图像');
         })
         .catch(function () {
@@ -2208,7 +2282,7 @@
     // contains 下载 can be ui-popover-content itself, which would drop them
     // outside the hit-testable area.
     if (freshRows.length) {
-      const anchor = findNativeDownloadItem(list);
+      const anchor = nativeDownload;
       const place = function (node) {
         if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(node, anchor);
         else if (typeof list.insertBefore === 'function') list.insertBefore(node, list.firstChild);
