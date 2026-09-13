@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.14.0
+// @version      1.14.1
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -1793,6 +1793,32 @@
     return getCopyablePhotoImageSource(target) ? target : null;
   }
 
+  function findCopyablePhotoImageFromEvent(event, doc) {
+    if (!event) return null;
+    const direct = findCopyablePhotoImage(event.target);
+    if (direct) return direct;
+    const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+    for (let i = 0; i < path.length; i += 1) {
+      const image = findCopyablePhotoImage(path[i]);
+      if (image) return image;
+    }
+    const target = event.target;
+    if (target && typeof target.closest === 'function') {
+      try {
+        if (target.closest('button, input, [role="button"], [role="checkbox"]')) return null;
+      } catch (error) {
+        // Fall through to the coordinate lookup when the host rejects a selector.
+      }
+    }
+    if (!doc || typeof doc.elementsFromPoint !== 'function') return null;
+    const stack = doc.elementsFromPoint(event.clientX, event.clientY) || [];
+    for (let i = 0; i < stack.length; i += 1) {
+      const image = findCopyablePhotoImage(stack[i]);
+      if (image) return image;
+    }
+    return null;
+  }
+
   async function fetchCopyablePhotoImageBlob(image, win) {
     const source = getCopyablePhotoImageSource(image);
     const fetchFn = win && win.fetch;
@@ -1834,13 +1860,16 @@
     if (!doc || typeof doc.querySelectorAll !== 'function') return [];
     const menus = [];
     const seen = new Set();
-    const items = doc.querySelectorAll('[role="menuitem"], button, [role="menu"]');
+    const items = doc.querySelectorAll(
+      '[role="menuitem"], button, [role="menu"], [class*="menu" i], ' +
+      '[class*="context" i], [data-testid*="menu" i]'
+    );
     for (let i = 0; i < items.length; i += 1) {
       const item = items[i];
       const label = String(item.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
       if (!/(下载|更多下载选项|download|more download options)/.test(label)) continue;
       const menu = typeof item.closest === 'function'
-        ? item.closest('[role="menu"]')
+        ? item.closest('[role="menu"], [class*="menu" i], [class*="context" i], [data-testid*="menu" i]')
         : (item.parentElement || item.parentNode);
       if (menu && !seen.has(menu)) {
         seen.add(menu);
@@ -1857,8 +1886,8 @@
     }
   }
 
-  function addCopyPhotoMenuItem(doc, win, menu, image, blob) {
-    if (!menu || !image || !blob || !doc || typeof doc.createElement !== 'function') return false;
+  function addCopyPhotoMenuItem(doc, win, menu, image) {
+    if (!menu || !image || !doc || typeof doc.createElement !== 'function') return false;
     const menuLabel = String(menu.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
     if (/(拷贝图像|copy image)/.test(menuLabel)) return false;
     const existing = typeof menu.querySelector === 'function'
@@ -1886,7 +1915,7 @@
     item.addEventListener('click', function (event) {
       event.preventDefault();
       event.stopPropagation();
-      void copyPhotoImageToClipboard(image, win, blob).then(function (copied) {
+      void copyPhotoImageToClipboard(image, win).then(function (copied) {
         showCopyPhotoStatus(doc, copied ? '图像已拷贝到剪贴板' : '浏览器不支持图像拷贝', !copied);
       }).catch(function (error) {
         const detail = error && error.message ? error.message : '未知错误';
@@ -1894,7 +1923,7 @@
       });
     });
 
-    const children = menu.querySelectorAll ? menu.querySelectorAll('[role="menuitem"], button') : [];
+    const children = menu.querySelectorAll ? menu.querySelectorAll('*') : [];
     let before = null;
     for (let i = 0; i < children.length; i += 1) {
       const label = String(children[i].textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -1910,7 +1939,7 @@
 
   function installGridPhotoCopyMenu(doc, win) {
     if (!doc || gridCopyMenuStateByDocument.has(doc)) return;
-    const state = { image: null, blob: null, observer: null, timer: null, knownMenus: null, token: 0 };
+    const state = { image: null, observer: null, timer: null, knownMenus: null, token: 0 };
     gridCopyMenuStateByDocument.set(doc, state);
 
     function clearPending() {
@@ -1919,7 +1948,6 @@
       if (state.observer) state.observer.disconnect();
       state.observer = null;
       state.image = null;
-      state.blob = null;
       state.knownMenus = null;
     }
 
@@ -1931,16 +1959,16 @@
     }
 
     function tryInstall(token) {
-      if (token !== state.token || !state.image || !state.blob) return;
+      if (token !== state.token || !state.image) return;
       const menu = findOpenedMenu();
       if (!menu) return;
-      addCopyPhotoMenuItem(doc, win, menu, state.image, state.blob);
+      addCopyPhotoMenuItem(doc, win, menu, state.image);
       clearPending();
     }
 
     doc.addEventListener('contextmenu', function (event) {
       clearPending();
-      const image = findCopyablePhotoImage(event.target);
+      const image = findCopyablePhotoImageFromEvent(event, doc);
       if (!image) return;
       const token = state.token + 1;
       state.token = token;
@@ -1954,16 +1982,9 @@
         state.observer = new MutationObserverCtor(function () { tryInstall(token); });
         state.observer.observe(rootNode, { childList: true, subtree: true });
       }
-      void fetchCopyablePhotoImageBlob(image, win).then(function (blob) {
-        if (token !== state.token) return;
-        state.blob = blob;
-        tryInstall(token);
-      }).catch(function (error) {
-        if (token !== state.token) return;
-        const detail = error && error.message ? error.message : '浏览器拒绝读取图片数据。';
-        showCopyPhotoStatus(doc, '拷贝图像不可用：' + detail, true);
-        clearPending();
-      });
+      // Add the menu row as soon as iCloud renders the popup. Fetching before
+      // insertion makes the option appear late or never on slow/CDN-backed photos.
+      tryInstall(token);
       state.timer = setTimeout(function () {
         if (token === state.token) clearPending();
       }, 5000);
@@ -2666,7 +2687,9 @@
     copyPhotoImageToClipboard,
     findActiveSidebarItem,
     findCopyablePhotoImage,
+    findCopyablePhotoImageFromEvent,
     findICloudFileInput,
+    findPhotoContextMenus,
     findICloudFileInputShallow,
     findSidebarItem,
     getConvertedJpegFileName,
