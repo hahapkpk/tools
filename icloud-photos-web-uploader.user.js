@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.15.1
+// @version      1.15.2
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click & Ctrl+C photo copy, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -1786,6 +1786,9 @@
   // (and carry its own pointer-events) to be reachable by a real mouse click.
   const COPY_MENU_BASE_HEIGHT_ATTR = 'data-icloud-copy-menu-base-height';
   const COPY_MENU_APPLIED_HEIGHT_ATTR = 'data-icloud-copy-menu-applied-height';
+  const GRID_COPY_MENU_ATTR = 'data-icloud-copy-photo';
+  const GRID_DOWNLOAD_MENU_ATTR = 'data-icloud-download-photo';
+  const DOWNLOAD_MENU_LABEL = '下载原片';
 
   function getCopyablePhotoImageSource(image) {
     if (!image) return '';
@@ -2039,11 +2042,9 @@
 
   // An extra row would otherwise push the last entry into the menu's scroll area
   // and clip it, because iCloud pins an explicit pixel height on the popover.
-  function growCopyMenuHeight(menu, item) {
-    const height =
-      item && typeof item.getBoundingClientRect === 'function'
-        ? Math.round(item.getBoundingClientRect().height)
-        : 0;
+  // `extra` is the combined height of every row we injected this time.
+  function growCopyMenuHeight(menu, extra) {
+    const height = Math.round(extra || 0);
     if (!height) return;
     const popover =
       menu && typeof menu.closest === 'function' ? menu.closest('ui-popover') || menu : menu;
@@ -2055,74 +2056,177 @@
     applyCopyMenuHeight(content, height);
   }
 
-  function addCopyPhotoMenuItem(doc, win, menu, image, blobTask) {
-    if (!menu || !image || !blobTask || !doc || typeof doc.createElement !== 'function') return false;
-    const menuLabel = String(menu.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
-    if (/(拷贝图像|copy image)/.test(menuLabel)) return false;
-    const existing = typeof menu.querySelector === 'function'
-      ? menu.querySelector('[data-icloud-copy-photo]')
-      : null;
-    if (existing) return true;
+  const MENU_ROW_STYLE = [
+    'display:flex',
+    'width:100%',
+    'align-items:center',
+    'padding:5px 16px',
+    'border:0',
+    'background:transparent',
+    'color:inherit',
+    'font:inherit',
+    'text-align:left',
+    'cursor:pointer',
+    // iCloud sets pointer-events:none on the popover wrapper, so the row must
+    // re-enable hit testing for itself to be reachable by a real mouse click.
+    'pointer-events:auto',
+  ].join(';');
 
+  function buildMenuRow(doc, label, marker) {
     const item = doc.createElement('button');
     item.type = 'button';
     item.setAttribute('role', 'menuitem');
-    item.setAttribute('data-icloud-copy-photo', '');
-    item.textContent = '拷贝图像（准备中…）';
-    item.style.cssText = [
-      'display:flex',
-      'width:100%',
-      'align-items:center',
-      'padding:5px 16px',
-      'border:0',
-      'background:transparent',
-      'color:inherit',
-      'font:inherit',
-      'text-align:left',
-      'cursor:pointer',
-      'pointer-events:auto',
-    ].join(';');
-    item.disabled = true;
-    let blob = null;
-    item.addEventListener('click', function (event) {
+    item.setAttribute(marker, '');
+    item.textContent = label;
+    item.style.cssText = MENU_ROW_STYLE;
+    return item;
+  }
+
+  function setMenuRowLabel(row, label) {
+    if (!row) return;
+    row.textContent = label;
+  }
+
+  // iCloud's own 下载 row, excluding the ones this script injects.
+  function findNativeDownloadItem(container) {
+    if (!container || typeof container.querySelectorAll !== 'function') return null;
+    const rows = container.querySelectorAll('[role="menuitem"]');
+    for (let i = 0; i < rows.length; i += 1) {
+      const row = rows[i];
+      if (typeof row.getAttribute === 'function') {
+        if (row.getAttribute(GRID_COPY_MENU_ATTR) !== null) continue;
+        if (row.getAttribute(GRID_DOWNLOAD_MENU_ATTR) !== null) continue;
+      }
+      const label = String(row.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      if (/^(下载|下載|download)/.test(label)) return row;
+    }
+    return null;
+  }
+
+  // Delegate the download to iCloud's own command: its TCC/asset mapping is the
+  // only reliable way to fetch true originals (multi-select downloads a zip).
+  function triggerNativeDownload(doc, win, container) {
+    const native = findNativeDownloadItem(container);
+    if (!native || typeof native.dispatchEvent !== 'function') return false;
+    const MouseEventCtor = win && win.MouseEvent ? win.MouseEvent : root.MouseEvent;
+    let event = null;
+    if (typeof MouseEventCtor === 'function') {
+      event = new MouseEventCtor('click', { bubbles: true, cancelable: true });
+    } else if (doc && typeof doc.createEvent === 'function') {
+      event = doc.createEvent('MouseEvents');
+      event.initEvent('click', true, true);
+    }
+    if (!event) return false;
+    native.dispatchEvent(event);
+    return true;
+  }
+
+  function makeCopyRowHandler(doc, win, row) {
+    return function (event) {
       event.preventDefault();
       event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+      const blob = row.__icloudBlob;
       if (!blob) return;
-      void copyPhotoImageToClipboard(image, win, blob).then(function (copied) {
-        showCopyPhotoStatus(doc, copied ? '图像已拷贝到剪贴板' : '浏览器不支持图像拷贝', !copied);
-      }).catch(function (error) {
-        const detail = error && error.message ? error.message : '未知错误';
-        showCopyPhotoStatus(doc, '拷贝图像失败：' + detail, true);
-      });
-    });
-    void blobTask.then(function (resolvedBlob) {
-      blob = resolvedBlob;
-      item.disabled = false;
-      item.textContent = '拷贝图像';
-    }).catch(function () {
-      item.textContent = '拷贝图像不可用';
-    });
+      void copyPhotoImageToClipboard(row.__icloudImage, win, blob)
+        .then(function (copied) {
+          showCopyPhotoStatus(doc, copied ? '图像已拷贝到剪贴板' : '浏览器不支持图像拷贝', !copied);
+        })
+        .catch(function (error) {
+          const detail = error && error.message ? error.message : '未知错误';
+          showCopyPhotoStatus(doc, '拷贝图像失败：' + detail, true);
+        });
+    };
+  }
 
-    // Match a real menu row, not any descendant: the first element whose text
-    // contains 下载 can be ui-popover-content itself, which would drop the row
-    // outside the interactive area (and make it unclickable).
-    const list = findCopyMenuItemList(menu);
-    const rows =
-      list && typeof list.querySelectorAll === 'function'
-        ? list.querySelectorAll('[role="menuitem"]')
-        : [];
-    let before = null;
-    for (let i = 0; i < rows.length; i += 1) {
-      const label = String(rows[i].textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
-      if (/(下载|下載|download)/.test(label)) {
-        before = rows[i];
-        break;
+  function makeDownloadRowHandler(doc, win, list) {
+    return function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+      if (!triggerNativeDownload(doc, win, list)) {
+        showCopyPhotoStatus(doc, '未找到 iCloud 的下载项，请使用菜单中的“下载”', true);
       }
+    };
+  }
+
+  function addCopyPhotoMenuItem(doc, win, menu, image, blobTask) {
+    if (!menu || !image || !blobTask || !doc || typeof doc.createElement !== 'function') return false;
+    const list = findCopyMenuItemList(menu);
+    if (!list || typeof list.querySelector !== 'function') return false;
+
+    const hasNativeCopy = (function () {
+      const rows =
+        typeof list.querySelectorAll === 'function' ? list.querySelectorAll('[role="menuitem"]') : [];
+      for (let i = 0; i < rows.length; i += 1) {
+        const row = rows[i];
+        if (typeof row.getAttribute === 'function' && row.getAttribute(GRID_COPY_MENU_ATTR) !== null) {
+          continue;
+        }
+        if (/(拷贝图像|copy image)/i.test(String(row.textContent || ''))) return true;
+      }
+      return false;
+    })();
+
+    let copyRow = list.querySelector('[' + GRID_COPY_MENU_ATTR + ']');
+    let downloadRow = list.querySelector('[' + GRID_DOWNLOAD_MENU_ATTR + ']');
+    const freshRows = [];
+    if (!copyRow && !hasNativeCopy) {
+      copyRow = buildMenuRow(doc, '拷贝图像', GRID_COPY_MENU_ATTR);
+      copyRow.addEventListener('click', makeCopyRowHandler(doc, win, copyRow), true);
+      freshRows.push(copyRow);
     }
-    if (before && before.parentNode) before.parentNode.insertBefore(item, before);
-    else if (list && typeof list.insertBefore === 'function') list.insertBefore(item, list.firstChild);
-    else menu.appendChild(item);
-    growCopyMenuHeight(menu, item);
+    if (!downloadRow) {
+      downloadRow = buildMenuRow(doc, DOWNLOAD_MENU_LABEL, GRID_DOWNLOAD_MENU_ATTR);
+      downloadRow.addEventListener('click', makeDownloadRowHandler(doc, win, list), true);
+      freshRows.push(downloadRow);
+    }
+
+    // The popover node survives across opens, so rebind the copy row to the
+    // photo under the cursor instead of keeping the first photo's blob forever.
+    if (copyRow) {
+      const token = (copyRow.__icloudToken || 0) + 1;
+      copyRow.__icloudToken = token;
+      copyRow.__icloudImage = image;
+      copyRow.__icloudBlob = null;
+      copyRow.disabled = true;
+      setMenuRowLabel(copyRow, '拷贝图像（准备中…）');
+      void blobTask
+        .then(function (resolved) {
+          if (copyRow.__icloudToken !== token) return;
+          copyRow.__icloudBlob = resolved;
+          copyRow.disabled = false;
+          setMenuRowLabel(copyRow, '拷贝图像');
+        })
+        .catch(function () {
+          if (copyRow.__icloudToken !== token) return;
+          setMenuRowLabel(copyRow, '拷贝图像不可用');
+        });
+    }
+
+    // Rows must live inside the interactive list: the first element whose text
+    // contains 下载 can be ui-popover-content itself, which would drop them
+    // outside the hit-testable area.
+    if (freshRows.length) {
+      const anchor = findNativeDownloadItem(list);
+      const place = function (node) {
+        if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(node, anchor);
+        else if (typeof list.insertBefore === 'function') list.insertBefore(node, list.firstChild);
+      };
+      if (anchor) freshRows.forEach(place);
+      else freshRows.slice().reverse().forEach(place);
+    }
+    const presentRows = [copyRow, downloadRow].filter(Boolean);
+    growCopyMenuHeight(
+      menu,
+      presentRows.reduce(function (sum, row) {
+        const height =
+          row && typeof row.getBoundingClientRect === 'function'
+            ? row.getBoundingClientRect().height
+            : 0;
+        return sum + (height || 0);
+      }, 0)
+    );
     return true;
   }
 
@@ -2972,6 +3076,7 @@
     findCopyablePhotoImage,
     findCopyablePhotoImageFromEvent,
     findCopyMenuItemList,
+    findNativeDownloadItem,
     findICloudFileInput,
     findPhotoContextMenus,
     findICloudFileInputShallow,
