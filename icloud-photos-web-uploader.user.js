@@ -1857,7 +1857,12 @@
   }
 
   function isPhotoMenuContainer(node) {
-    const label = String((node || {}).textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!node) return false;
+    const role = typeof node.getAttribute === 'function' ? String(node.getAttribute('role') || '') : '';
+    const marker = [node.className, node.id, typeof node.getAttribute === 'function' ? node.getAttribute('data-testid') : '']
+      .join(' ');
+    if (role !== 'menu' && !/(menu|context|popup)/i.test(marker)) return false;
+    const label = String(node.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
     const commands = label.match(/下载|download|个人收藏|favorite|隐藏|hide|删除|delete|添加到相簿|add to album/g) || [];
     return new Set(commands).size >= 2;
   }
