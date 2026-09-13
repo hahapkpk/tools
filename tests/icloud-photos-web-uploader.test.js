@@ -1131,7 +1131,7 @@ test('缩放清理只恢复脚本仍然拥有的内联样式', () => {
 });
 
 
-test('图库右键目标只从当前照片项提取可复制图片', () => {
+test('图库右键目标只接受直接命中的照片', () => {
   const image = {
     tagName: 'IMG',
     currentSrc: 'https://photos.example/full.jpg',
@@ -1146,16 +1146,9 @@ test('图库右键目标只从当前照片项提取可复制图片', () => {
     parentElement: null,
   };
 
-  assert.equal(api.findCopyablePhotoImage(tile), image);
+  assert.equal(api.findCopyablePhotoImage(image), image);
+  assert.equal(api.findCopyablePhotoImage(tile), null);
   assert.equal(api.findCopyablePhotoImage({ tagName: 'DIV', parentElement: null }), null);
-  const multiImageContainer = {
-    tagName: 'DIV',
-    querySelectorAll() {
-      return [image, { currentSrc: 'https://photos.example/other.jpg', src: '' }];
-    },
-    parentElement: null,
-  };
-  assert.equal(api.findCopyablePhotoImage(multiImageContainer), null);
 });
 
 test('拷贝图片以当前渲染源读取二进制并写入系统剪贴板', async () => {
