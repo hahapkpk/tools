@@ -1786,24 +1786,11 @@
   }
 
   function findCopyablePhotoImage(target) {
-    let node = target;
-    for (let depth = 0; node && depth < 7; depth += 1) {
-      if (String(node.tagName || '').toUpperCase() === 'IMG' && getCopyablePhotoImageSource(node)) {
-        return node;
-      }
-      if (typeof node.querySelectorAll === 'function') {
-        const images = Array.prototype.filter.call(
-          node.querySelectorAll('img'),
-          function (image) { return Boolean(getCopyablePhotoImageSource(image)); }
-        );
-        // A photo tile has exactly one rendered image. Stop at a container with
-        // several images rather than falling through to the page-wide grid.
-        if (images.length === 1) return images[0];
-        if (images.length > 1) return null;
-      }
-      node = node.parentElement || node.parentNode;
-    }
-    return null;
+    // iCloud dispatches the tile contextmenu from its <img>. Accepting a parent
+    // could otherwise turn a checkbox, title, or blank grid area into a copy
+    // action for an unrelated thumbnail.
+    if (String((target || {}).tagName || '').toUpperCase() !== 'IMG') return null;
+    return getCopyablePhotoImageSource(target) ? target : null;
   }
 
   async function fetchCopyablePhotoImageBlob(image, win) {
@@ -1971,8 +1958,10 @@
         if (token !== state.token) return;
         state.blob = blob;
         tryInstall(token);
-      }).catch(function () {
+      }).catch(function (error) {
         if (token !== state.token) return;
+        const detail = error && error.message ? error.message : '浏览器拒绝读取图片数据。';
+        showCopyPhotoStatus(doc, '拷贝图像不可用：' + detail, true);
         clearPending();
       });
       state.timer = setTimeout(function () {
