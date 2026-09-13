@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.14.1
+// @version      1.14.2
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -1863,7 +1863,7 @@
       .join(' ');
     if (role !== 'menu' && !/(menu|context|popup)/i.test(marker)) return false;
     const label = String(node.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
-    const commands = label.match(/下载|download|个人收藏|favorite|隐藏|hide|删除|delete|添加到相簿|add to album/g) || [];
+    const commands = label.match(/下载|下載|download|个人收藏|個人收藏|加入喜好項目|favorite|隐藏|隱藏|hide|删除|刪除|delete|添加到相簿|加入相簿|加至相簿|add to album/g) || [];
     return new Set(commands).size >= 2;
   }
 
@@ -1878,7 +1878,7 @@
     for (let i = 0; i < items.length; i += 1) {
       const item = items[i];
       const label = String(item.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
-      if (!/(下载|更多下载选项|download|more download options)/.test(label)) continue;
+      if (!/(下载|下載|更多下载选项|更多下載選項|download|more download options)/.test(label)) continue;
       let menu = typeof item.closest === 'function' ? item.closest('[role="menu"]') : null;
       let node = menu || item;
       for (let depth = 0; node && depth < 7; depth += 1) {
@@ -1953,7 +1953,7 @@
     let before = null;
     for (let i = 0; i < children.length; i += 1) {
       const label = String(children[i].textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
-      if (/(下载|download)/.test(label)) {
+      if (/(下载|下載|download)/.test(label)) {
         before = children[i];
         break;
       }

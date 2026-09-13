@@ -10,6 +10,12 @@ Tampermonkey 脚本，为 iCloud 网页版照片添加快速上传、自动转�
 https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader.user.js
 ```
 
+## 1.14.2 修复说明
+
+- 已按真实 iCloud Photos 页面菜单结构复现并修复繁体中文识别。
+- 识别“加入喜好項目 / 下載 / 更多下載選項 / 隱藏 / 刪除 / 加至相簿”等繁体命令。
+- “拷贝图像”现在会插入繁体菜单的“下載”之前。
+
 ## 1.14.1 修复说明
 
 - 兼容照片缩略图上的遮罩事件：从事件路径和鼠标命中层识别实际图片。
