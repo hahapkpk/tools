@@ -1130,6 +1130,54 @@ test('缩放清理只恢复脚本仍然拥有的内联样式', () => {
   assert.equal(stillOwned.transform, 'matrix(1.2, 0, 0, 1.2, 0, 0)');
 });
 
+
+test('图库右键目标只从当前照片项提取可复制图片', () => {
+  const image = {
+    tagName: 'IMG',
+    currentSrc: 'https://photos.example/full.jpg',
+    src: 'https://photos.example/thumb.jpg',
+  };
+  const tile = {
+    tagName: 'DIV',
+    querySelectorAll(selector) {
+      assert.equal(selector, 'img');
+      return [image];
+    },
+    parentElement: null,
+  };
+
+  assert.equal(api.findCopyablePhotoImage(tile), image);
+  assert.equal(api.findCopyablePhotoImage({ tagName: 'DIV', parentElement: null }), null);
+});
+
+test('拷贝图片以当前渲染源读取二进制并写入系统剪贴板', async () => {
+  let request = null;
+  let clipboardItem = null;
+  const blob = { type: 'image/jpeg' };
+  const image = {
+    currentSrc: 'https://photos.example/full.jpg',
+    src: 'https://photos.example/thumb.jpg',
+  };
+  const win = {
+    fetch: async (url, options) => {
+      request = { url, options };
+      return { ok: true, blob: async () => blob };
+    },
+    ClipboardItem: function ClipboardItem(items) {
+      this.items = items;
+    },
+    navigator: {
+      clipboard: {
+        write: async (items) => { clipboardItem = items[0]; },
+      },
+    },
+  };
+
+  assert.equal(await api.copyPhotoImageToClipboard(image, win), true);
+  assert.equal(request.url, 'https://photos.example/full.jpg');
+  assert.equal(request.options.credentials, 'include');
+  assert.equal(clipboardItem.items['image/jpeg'], blob);
+});
 test('面板拖拽会阻止 drop 冒泡，避免 iCloud 重复入队', () => {
   assert.match(
     source,
