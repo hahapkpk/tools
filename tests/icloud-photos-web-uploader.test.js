@@ -1254,6 +1254,87 @@ test('拷贝图片以当前渲染源读取二进制并写入系统剪贴板', as
   assert.equal(clipboardItem.items['image/png'], preparedBlob);
 });
 
+test('照片对象地址被回收后改用 canvas 重绘读取二进制', async () => {
+  let clipboardItem = null;
+  const drawCalls = [];
+  const canvasBlob = { type: 'image/png', size: 4096 };
+  const image = {
+    currentSrc: 'blob:https://www.icloud.com/revoked',
+    src: '',
+    naturalWidth: 480,
+    naturalHeight: 360,
+    ownerDocument: {
+      createElement(tag) {
+        assert.equal(tag, 'canvas');
+        return {
+          width: 0,
+          height: 0,
+          getContext() {
+            return {
+              drawImage(el, x, y, w, h) {
+                drawCalls.push({ el, x, y, w, h });
+              },
+            };
+          },
+          toBlob(callback, type) {
+            drawCalls.push({ type });
+            callback(canvasBlob);
+          },
+        };
+      },
+    },
+  };
+  const win = {
+    fetch: async () => {
+      throw new TypeError('Failed to fetch');
+    },
+    ClipboardItem: function ClipboardItem(items) {
+      this.items = items;
+    },
+    navigator: {
+      clipboard: {
+        write: async (items) => { clipboardItem = items[0]; },
+      },
+    },
+  };
+
+  assert.equal(await api.copyPhotoImageToClipboard(image, win), true);
+  assert.equal(drawCalls.length, 2);
+  assert.equal(drawCalls[0].el, image);
+  assert.equal(drawCalls[0].w, 480);
+  assert.equal(drawCalls[0].h, 360);
+  assert.equal(drawCalls[1].type, 'image/png');
+  assert.equal(clipboardItem.items['image/png'], canvasBlob);
+});
+
+test('对象地址回收且画布无法重绘时报告读取失败', async () => {
+  const image = {
+    currentSrc: 'blob:https://www.icloud.com/revoked',
+    naturalWidth: 0,
+    naturalHeight: 0,
+    ownerDocument: {
+      createElement() {
+        throw new Error('canvas unavailable');
+      },
+    },
+  };
+  const win = {
+    fetch: async () => {
+      throw new TypeError('Failed to fetch');
+    },
+    ClipboardItem: function ClipboardItem(items) {
+      this.items = items;
+    },
+    navigator: {
+      clipboard: {
+        write: async () => {},
+      },
+    },
+  };
+
+  await assert.rejects(api.copyPhotoImageToClipboard(image, win), /无法读取图片数据/);
+});
+
 test('面板拖拽会阻止 drop 冒泡，避免 iCloud 重复入队', () => {
   assert.match(
     source,
@@ -1261,6 +1342,6 @@ test('面板拖拽会阻止 drop 冒泡，避免 iCloud 重复入队', () => {
   );
 });
 
-test('版本号已升级到 1.14.2', () => {
-  assert.match(source, /\/\/ @version\s+1\.14\.2/);
+test('版本号已升级到 1.14.3', () => {
+  assert.match(source, /\/\/ @version\s+1\.14\.3/);
 });

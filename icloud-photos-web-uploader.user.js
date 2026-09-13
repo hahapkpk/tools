@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.14.2
-// @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, and mouse-wheel zoom / drag-pan in the image preview.
+// @version      1.14.3
+// @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click copy, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
 // @match        https://www.icloud.com.cn/photos*
@@ -1819,22 +1819,65 @@
     return null;
   }
 
+  function renderPhotoImageToBlob(image, win) {
+    // iCloud revokes the object URL once a thumbnail has rendered: the <img>
+    // keeps painting but fetch() rejects with "Failed to fetch". Redraw the
+    // already-decoded image into a canvas to recover the same pixels.
+    return new Promise(function (resolve, reject) {
+      const doc = (image && image.ownerDocument) || (win && win.document);
+      const width = Number(image && image.naturalWidth) || 0;
+      const height = Number(image && image.naturalHeight) || 0;
+      let canvas = null;
+      let context = null;
+      try {
+        canvas = doc && typeof doc.createElement === 'function' ? doc.createElement('canvas') : null;
+        if (canvas) {
+          canvas.width = width;
+          canvas.height = height;
+          context = typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null;
+        }
+      } catch (error) {
+        canvas = null;
+        context = null;
+      }
+      if (!canvas || !context || !width || !height || typeof canvas.toBlob !== 'function') {
+        reject(new Error('无法读取图片数据。'));
+        return;
+      }
+      try {
+        context.drawImage(image, 0, 0, width, height);
+      } catch (error) {
+        reject(new Error('无法读取图片数据。'));
+        return;
+      }
+      canvas.toBlob(function (blob) {
+        if (blob && /^image\//i.test(String(blob.type || ''))) {
+          resolve(blob);
+        } else {
+          reject(new Error('无法读取图片数据。'));
+        }
+      }, 'image/png');
+    });
+  }
+
   async function fetchCopyablePhotoImageBlob(image, win) {
     const source = getCopyablePhotoImageSource(image);
     const fetchFn = win && win.fetch;
-    if (!source || typeof fetchFn !== 'function') throw new Error('无法读取图片数据。');
-    const response = await fetchFn(source, {
-      credentials: 'include',
-      cache: 'no-store',
-    });
-    if (!response || !response.ok || typeof response.blob !== 'function') {
-      throw new Error('无法读取图片数据。');
+    if (source && typeof fetchFn === 'function') {
+      try {
+        const response = await fetchFn(source, {
+          credentials: 'include',
+          cache: 'no-store',
+        });
+        if (response && response.ok && typeof response.blob === 'function') {
+          const blob = await response.blob();
+          if (/^image\//i.test(String(blob && blob.type || ''))) return blob;
+        }
+      } catch (error) {
+        // Revoked blob object URLs land here; fall through to the canvas path.
+      }
     }
-    const blob = await response.blob();
-    if (!/^image\//i.test(String(blob && blob.type || ''))) {
-      throw new Error('图片数据格式无效。');
-    }
-    return blob;
+    return renderPhotoImageToBlob(image, win);
   }
 
   async function copyPhotoImageToClipboard(image, win, preparedBlob) {
@@ -2739,6 +2782,7 @@
     normalizeFilesForICloudWebUpload,
     resolveZoomMedia,
     restoreOwnedInlineStyle,
+    renderPhotoImageToBlob,
     selectICloudFileInput,
     serializeZoneSyncState,
     shouldConvertForICloudWeb,
