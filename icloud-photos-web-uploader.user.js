@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.15.3
+// @version      1.15.4
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click & Ctrl+C photo copy, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -2172,141 +2172,64 @@
     return true;
   }
 
-  function makeCopyRowHandler(doc, win, row) {
+  // Resolve the list at click time: the popover content can be replaced between
+  // opens, so a list captured when the row was created may already be detached.
+  function makeDownloadRowHandler(doc, win, row) {
     return function (event) {
       event.preventDefault();
       event.stopPropagation();
       if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
-      const blob = row.__icloudBlob;
-      if (!blob) return;
-      const image = row.__icloudImage;
-      const width = image ? image.naturalWidth || image.width || 0 : 0;
-      const height = image ? image.naturalHeight || image.height || 0 : 0;
-      void copyPhotoImageToClipboard(image, win, blob)
-        .then(function (copied) {
-          if (!copied) {
-            showCopyPhotoStatus(doc, '浏览器不支持图像拷贝', true);
-            return;
-          }
-          const size = width && height ? ' ' + width + '×' + height : '';
-          // The grid only renders a small derivative, so say so instead of
-          // letting the user paste a thumbnail thinking it is the original.
-          const hint = width && height && Math.max(width, height) < 1600 ? '；原片请用「下载原片」' : '';
-          showCopyPhotoStatus(doc, '已拷贝图像' + size + hint);
-        })
-        .catch(function (error) {
-          const detail = error && error.message ? error.message : '未知错误';
-          showCopyPhotoStatus(doc, '拷贝图像失败：' + detail, true);
-        });
-    };
-  }
-
-  function makeDownloadRowHandler(doc, win, list) {
-    return function (event) {
-      event.preventDefault();
-      event.stopPropagation();
-      if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+      const menu = typeof row.closest === 'function' ? row.closest('ui-popover') : row.parentElement;
+      const list = findCopyMenuItemList(menu || row.parentElement) || row.parentElement;
       if (!triggerNativeDownload(doc, win, list)) {
         showCopyPhotoStatus(doc, '未找到 iCloud 的下载项，请使用菜单中的“下载”', true);
       }
     };
   }
 
-  function addCopyPhotoMenuItem(doc, win, menu, image, blobTask) {
-    if (!menu || !image || !blobTask || !doc || typeof doc.createElement !== 'function') return false;
+  // The grid only ever renders a small derivative, and neither the DOM nor the
+  // React tree exposes which asset a tile belongs to, so the clipboard cannot
+  // receive the original. Hand the job to iCloud's own 下载 command instead:
+  // it resolves the asset itself and yields the true original (a zip when
+  // several photos are selected).
+  function addGridDownloadMenuItem(doc, win, menu) {
+    if (!menu || !doc || typeof doc.createElement !== 'function') return false;
     const list = findCopyMenuItemList(menu);
     if (!list || typeof list.querySelector !== 'function') return false;
-
-    const hasNativeCopy = (function () {
-      const rows =
-        typeof list.querySelectorAll === 'function' ? list.querySelectorAll('[role="menuitem"]') : [];
-      for (let i = 0; i < rows.length; i += 1) {
-        const row = rows[i];
-        if (typeof row.getAttribute === 'function' && row.getAttribute(GRID_COPY_MENU_ATTR) !== null) {
-          continue;
-        }
-        if (/(拷贝图像|copy image)/i.test(String(row.textContent || ''))) return true;
-      }
-      return false;
-    })();
-
-    let copyRow = list.querySelector('[' + GRID_COPY_MENU_ATTR + ']');
-    let downloadRow = list.querySelector('[' + GRID_DOWNLOAD_MENU_ATTR + ']');
     const nativeDownload = findNativeDownloadItem(list);
-    const nativeMoreOptions = findNativeMenuRow(list, /更多下载|更多下載|more download/i);
-    const freshRows = [];
-    if (!copyRow && !hasNativeCopy) {
-      copyRow = createMenuRow(
-        doc,
-        list,
-        '拷贝图像',
-        GRID_COPY_MENU_ATTR,
-        nativeMoreOptions || nativeDownload
-      );
-      copyRow.addEventListener('click', makeCopyRowHandler(doc, win, copyRow), true);
-      freshRows.push(copyRow);
+    if (!nativeDownload) return false;
+    // Older builds injected a 拷贝图像 row that only copied the small on-screen
+    // derivative; drop it so an update without a page reload still matches.
+    if (typeof list.querySelectorAll === 'function') {
+      const stale = list.querySelectorAll('[' + GRID_COPY_MENU_ATTR + ']');
+      for (let i = 0; i < stale.length; i += 1) {
+        if (stale[i] && typeof stale[i].remove === 'function') stale[i].remove();
+      }
     }
-    if (!downloadRow) {
-      downloadRow = createMenuRow(
-        doc,
-        list,
-        DOWNLOAD_MENU_LABEL,
-        GRID_DOWNLOAD_MENU_ATTR,
-        nativeDownload
-      );
-      downloadRow.addEventListener('click', makeDownloadRowHandler(doc, win, list), true);
-      freshRows.push(downloadRow);
+    let row = list.querySelector('[' + GRID_DOWNLOAD_MENU_ATTR + ']');
+    // A row injected by an older build has no working click binding; rebuild it.
+    if (row && !row.__icloudDownloadBound && typeof row.remove === 'function') {
+      row.remove();
+      row = null;
     }
-
-    // The popover node survives across opens, so rebind the copy row to the
-    // photo under the cursor instead of keeping the first photo's blob forever.
-    if (copyRow) {
-      const token = (copyRow.__icloudToken || 0) + 1;
-      copyRow.__icloudToken = token;
-      copyRow.__icloudImage = image;
-      copyRow.__icloudBlob = null;
-      setMenuRowLabel(copyRow, '拷贝图像（准备中…）');
-      void blobTask
-        .then(function (resolved) {
-          if (copyRow.__icloudToken !== token) return;
-          copyRow.__icloudBlob = resolved;
-          setMenuRowLabel(copyRow, '拷贝图像');
-        })
-        .catch(function () {
-          if (copyRow.__icloudToken !== token) return;
-          setMenuRowLabel(copyRow, '拷贝图像不可用');
-        });
+    if (!row) {
+      row = createMenuRow(doc, list, DOWNLOAD_MENU_LABEL, GRID_DOWNLOAD_MENU_ATTR, nativeDownload);
+      row.addEventListener('click', makeDownloadRowHandler(doc, win, row), true);
+      row.__icloudDownloadBound = true;
+      // Insert as a sibling row before iCloud's own 下载: appending to the
+      // popover wrapper would land outside the hit-testable content.
+      if (nativeDownload.parentNode) nativeDownload.parentNode.insertBefore(row, nativeDownload);
+      else if (typeof list.insertBefore === 'function') list.insertBefore(row, list.firstChild);
     }
-
-    // Rows must live inside the interactive list: the first element whose text
-    // contains 下载 can be ui-popover-content itself, which would drop them
-    // outside the hit-testable area.
-    if (freshRows.length) {
-      const anchor = nativeDownload;
-      const place = function (node) {
-        if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(node, anchor);
-        else if (typeof list.insertBefore === 'function') list.insertBefore(node, list.firstChild);
-      };
-      if (anchor) freshRows.forEach(place);
-      else freshRows.slice().reverse().forEach(place);
+    if (row && typeof row.getBoundingClientRect === 'function') {
+      growCopyMenuHeight(menu, row.getBoundingClientRect().height || 0);
     }
-    const presentRows = [copyRow, downloadRow].filter(Boolean);
-    growCopyMenuHeight(
-      menu,
-      presentRows.reduce(function (sum, row) {
-        const height =
-          row && typeof row.getBoundingClientRect === 'function'
-            ? row.getBoundingClientRect().height
-            : 0;
-        return sum + (height || 0);
-      }, 0)
-    );
     return true;
   }
 
   function installGridPhotoCopyMenu(doc, win) {
     if (!doc || gridCopyMenuStateByDocument.has(doc)) return;
-    const state = { image: null, blobTask: null, observer: null, timer: null, knownMenus: null, token: 0 };
+    const state = { observer: null, timer: null, knownMenus: null };
     gridCopyMenuStateByDocument.set(doc, state);
 
     function clearPending() {
@@ -2314,56 +2237,53 @@
       state.timer = null;
       if (state.observer) state.observer.disconnect();
       state.observer = null;
-      state.image = null;
-      state.blobTask = null;
       state.knownMenus = null;
     }
 
     function findOpenedMenu() {
       const menus = findPhotoContextMenus(doc);
-      return menus.find(function (menu) {
-        return isVisibleMenu(menu) && (!state.knownMenus || !state.knownMenus.get(menu));
-      }) || null;
+      return (
+        menus.find(function (menu) {
+          return isVisibleMenu(menu) && (!state.knownMenus || !state.knownMenus.get(menu));
+        }) || null
+      );
     }
 
-    function tryInstall(token) {
-      if (token !== state.token || !state.image || !state.blobTask) return;
+    function tryInstall() {
       const menu = findOpenedMenu();
       if (!menu) return;
-      addCopyPhotoMenuItem(doc, win, menu, state.image, state.blobTask);
-      clearPending();
+      if (addGridDownloadMenuItem(doc, win, menu)) clearPending();
     }
 
-    doc.addEventListener('contextmenu', function (event) {
-      clearPending();
-      const image = findCopyablePhotoImageFromEvent(event, doc);
-      if (!image) return;
-      const token = state.token + 1;
-      state.token = token;
-      state.image = image;
-      state.blobTask = fetchCopyablePhotoImageBlob(image, win);
-      void state.blobTask.catch(function () {});
-      state.knownMenus = new Map(findPhotoContextMenus(doc).map(function (menu) {
-        return [menu, isVisibleMenu(menu)];
-      }));
-      const MutationObserverCtor = (win && win.MutationObserver) || root.MutationObserver;
-      const rootNode = doc.documentElement || doc.body;
-      if (typeof MutationObserverCtor === 'function' && rootNode) {
-        state.observer = new MutationObserverCtor(function () { tryInstall(token); });
-        state.observer.observe(rootNode, {
-          childList: true,
-          subtree: true,
-          attributes: true,
-          attributeFilter: ['class', 'style', 'hidden', 'aria-hidden'],
-        });
-      }
-      // Insert immediately, but wait for a verified blob before enabling the
-      // command so clipboard.write remains inside the click activation.
-      tryInstall(token);
-      state.timer = setTimeout(function () {
-        if (token === state.token) clearPending();
-      }, 5000);
-    }, true);
+    doc.addEventListener(
+      'contextmenu',
+      function () {
+        clearPending();
+        // Remember which menus were already on screen so a re-used popover is
+        // not mistaken for a freshly opened one.
+        state.knownMenus = new Map(
+          findPhotoContextMenus(doc).map(function (menu) {
+            return [menu, isVisibleMenu(menu)];
+          })
+        );
+        const MutationObserverCtor = (win && win.MutationObserver) || root.MutationObserver;
+        const rootNode = doc.documentElement || doc.body;
+        if (typeof MutationObserverCtor === 'function' && rootNode) {
+          state.observer = new MutationObserverCtor(function () {
+            tryInstall();
+          });
+          state.observer.observe(rootNode, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['class', 'style', 'hidden', 'aria-hidden'],
+          });
+        }
+        tryInstall();
+        state.timer = setTimeout(clearPending, 5000);
+      },
+      true
+    );
   }
 
   function isEditablePhotoCopyTarget(target) {
@@ -3130,7 +3050,7 @@
   }
 
   return {
-    addCopyPhotoMenuItem,
+    addGridDownloadMenuItem,
     bootstrap,
     calculateCanvasSize,
     calculateDraggedPanelPosition,

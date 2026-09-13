@@ -1567,8 +1567,8 @@ test('面板拖拽会阻止 drop 冒泡，避免 iCloud 重复入队', () => {
   );
 });
 
-test('版本号已升级到 1.15.3', () => {
-  assert.match(source, /\/\/ @version\s+1\.15\.3/);
+test('版本号已升级到 1.15.4', () => {
+  assert.match(source, /\/\/ @version\s+1\.15\.4/);
 });
 
 test('弹层基准高度能区分“我们已加高”和“iCloud 重写了高度”', () => {
@@ -1585,8 +1585,7 @@ test('弹层基准高度能区分“我们已加高”和“iCloud 重写了高�
   assert.equal(api.resolveCopyMenuBaseHeight({}), null);
 });
 
-test('拷贝图像/下载原片行插进可交互的菜单列表，而不是 pointer-events:none 的 popover 外层', async () => {
-  const created = [];
+test('下载原片行插进可交互的菜单列表，而不是 pointer-events:none 的 popover 外层', async () => {
   const makeNode = (tag) => {
     const node = {
       tagName: String(tag).toUpperCase(),
@@ -1594,7 +1593,6 @@ test('拷贝图像/下载原片行插进可交互的菜单列表，而不是 poi
       attrs: {},
       style: { cssText: '' },
       textContent: '',
-      disabled: false,
       parentNode: null,
       setAttribute(name, value) {
         this.attrs[name] = value;
@@ -1629,58 +1627,44 @@ test('拷贝图像/下载原片行插进可交互的菜单列表，而不是 poi
           : [];
       },
     };
-    created.push(node);
     return node;
   };
 
   const doc = { createElement: (tag) => makeNode(tag) };
   const list = makeNode('div');
   list.className = 'ui-menu-scroll-container';
-  list.style.height = '237px';
   const downloadRow = makeNode('div');
   downloadRow.setAttribute('role', 'menuitem');
   downloadRow.textContent = '下载';
-  const deleteRow = makeNode('div');
-  deleteRow.setAttribute('role', 'menuitem');
-  deleteRow.textContent = '刪除';
   list.appendChild(downloadRow);
-  list.appendChild(deleteRow);
 
   const content = makeNode('div');
   content.style.height = '247.905px';
 
   const popover = makeNode('ui-popover');
   popover.style.height = '247.905px';
-  popover.textContent = '个人收藏下载更多下载选项…播放幻灯片添加到相簿…隐藏刪除';
   popover.closest = (selector) => (selector === 'ui-popover' ? popover : null);
   popover.querySelector = (selector) => {
-    if (selector === '[data-icloud-copy-photo]') return null;
-    if (selector === '[data-icloud-download-photo]') return null;
     if (selector === 'ui-menu-scroll-container[role="menu"]') return list;
     if (selector === 'ui-popover-content') return content;
     return null;
   };
 
-  const added = api.addCopyPhotoMenuItem(doc, {}, popover, { tagName: 'IMG' }, Promise.resolve({ type: 'image/png' }));
+  const added = api.addGridDownloadMenuItem(doc, {}, popover);
 
   assert.equal(added, true);
-  const copyRow = list.children.find((child) => child.getAttribute('data-icloud-copy-photo') !== null);
-  const downloadItem = list.children.find((child) => child.getAttribute('data-icloud-download-photo') !== null);
-  assert.ok(copyRow, '应插入拷贝行到可交互的菜单列表里');
-  assert.ok(downloadItem, '应同时插入“下载原片”行');
-  assert.equal(copyRow.parentNode, list);
-  assert.equal(downloadItem.parentNode, list);
-  assert.equal(list.children.indexOf(copyRow), 0, '拷贝行应排在下载行之前');
-  assert.equal(list.children.indexOf(downloadItem), 1);
-  assert.equal(downloadItem.textContent, '下载原片');
-  assert.match(copyRow.style.cssText, /pointer-events:auto/);
-  assert.match(downloadItem.style.cssText, /pointer-events:auto/);
-  // two extra rows of 30px each
-  assert.equal(popover.style.height, '307.905px');
-  assert.equal(content.style.height, '307.905px');
-
-  await Promise.resolve();
-  assert.equal(copyRow.textContent, '拷贝图像');
+  const row = list.children.find((child) => child.getAttribute('data-icloud-download-photo') !== null);
+  assert.ok(row, '应插入“下载原片”行到可交互的菜单列表里');
+  assert.equal(row.parentNode, list);
+  assert.equal(list.children.indexOf(row), 0, '应排在 iCloud 自己的下载行之前');
+  assert.equal(row.textContent, '下载原片');
+  assert.match(row.style.cssText, /pointer-events:auto/);
+  assert.ok(
+    list.children.every((child) => child.getAttribute('data-icloud-copy-photo') === null),
+    '不再注入“拷贝图像”行'
+  );
+  assert.equal(popover.style.height, '277.905px');
+  assert.equal(content.style.height, '277.905px');
 });
 
 test('findNativeDownloadItem 只认 iCloud 自己的下载行', () => {
@@ -1699,8 +1683,7 @@ test('findNativeDownloadItem 只认 iCloud 自己的下载行', () => {
   assert.equal(api.findNativeDownloadItem(null), null);
 });
 
-test('复用弹层时拷贝行会改绑到当前照片，不会一直拷第一张', async () => {
-  const nodes = [];
+test('菜单被复用时不会重复插入“下载原片”，也不重复加高弹层', async () => {
   const makeNode = (tag) => {
     const node = {
       tagName: String(tag).toUpperCase(),
@@ -1708,7 +1691,6 @@ test('复用弹层时拷贝行会改绑到当前照片，不会一直拷第一�
       attrs: {},
       style: { cssText: '', height: '' },
       textContent: '',
-      disabled: false,
       parentNode: null,
       setAttribute(name, value) { this.attrs[name] = value; },
       getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; },
@@ -1718,15 +1700,23 @@ test('复用弹层时拷贝行会改绑到当前照片，不会一直拷第一�
       appendChild(child) { this.children.push(child); child.parentNode = this; return child; },
       get firstChild() { return this.children[0] || null; },
       querySelector(selector) {
-        if (selector.indexOf('[data-icloud-copy-photo]') === 0 || selector.indexOf('[data-icloud-download-photo]') === 0) {
-          const marker = selector.slice(1, -1);
+        const marker = selector.slice(1, -1);
+        if (selector[0] === '[' && selector[selector.length - 1] === ']') {
           return this.children.find((c) => c.getAttribute(marker) !== null) || null;
         }
         return null;
       },
-      querySelectorAll(selector) { return selector === '[role="menuitem"]' ? this.children.filter((c) => c.getAttribute('role') === 'menuitem') : []; },
+      querySelectorAll(selector) {
+        if (selector === '[role="menuitem"]') {
+          return this.children.filter((c) => c.getAttribute('role') === 'menuitem');
+        }
+        if (selector[0] === '[' && selector[selector.length - 1] === ']') {
+          const marker = selector.slice(1, -1);
+          return this.children.filter((c) => c.getAttribute(marker) !== null);
+        }
+        return [];
+      },
     };
-    nodes.push(node);
     return node;
   };
   const doc = { createElement: (tag) => makeNode(tag) };
@@ -1734,6 +1724,16 @@ test('复用弹层时拷贝行会改绑到当前照片，不会一直拷第一�
   const nativeRow = makeNode('div');
   nativeRow.setAttribute('role', 'menuitem');
   nativeRow.textContent = '下载';
+  const staleCopyRow = makeNode('div');
+  staleCopyRow.setAttribute('role', 'menuitem');
+  staleCopyRow.setAttribute('data-icloud-copy-photo', '');
+  staleCopyRow.textContent = '拷贝图像';
+  staleCopyRow.remove = function () {
+    const i = list.children.indexOf(this);
+    if (i >= 0) list.children.splice(i, 1);
+  };
+  list.appendChild(staleCopyRow);
+  list.appendChild(nativeRow);
   const content = makeNode('div');
   content.style.height = '247.905px';
   const popover = makeNode('ui-popover');
@@ -1742,24 +1742,24 @@ test('复用弹层时拷贝行会改绑到当前照片，不会一直拷第一�
   popover.querySelector = (selector) => {
     if (selector === 'ui-menu-scroll-container[role="menu"]') return list;
     if (selector === 'ui-popover-content') return content;
-    if (selector === '[data-icloud-copy-photo]' || selector === '[data-icloud-download-photo]') return list.querySelector(selector);
     return null;
   };
-  list.appendChild(nativeRow);
 
-  const firstImage = { name: 'first' };
-  api.addCopyPhotoMenuItem(doc, {}, popover, firstImage, Promise.resolve({ type: 'image/png', size: 1 }));
-  const copyRow = list.querySelector('[data-icloud-copy-photo]');
-  assert.equal(copyRow.__icloudImage, firstImage);
+  api.addGridDownloadMenuItem(doc, {}, popover);
+  api.addGridDownloadMenuItem(doc, {}, popover);
 
-  const secondImage = { name: 'second' };
-  api.addCopyPhotoMenuItem(doc, {}, popover, secondImage, Promise.resolve({ type: 'image/png', size: 2 }));
-  assert.equal(copyRow.__icloudImage, secondImage, '复用时必须改绑到当前照片');
   assert.equal(
-    list.children.filter((c) => c.getAttribute('data-icloud-copy-photo') !== null).length,
+    list.children.filter((c) => c.getAttribute('data-icloud-download-photo') !== null).length,
     1,
     '不能重复插入'
   );
+  assert.equal(
+    list.children.filter((c) => c.getAttribute('data-icloud-copy-photo') !== null).length,
+    0,
+    '旧版本残留的“拷贝图像”行应被移除'
+  );
+  assert.equal(popover.style.height, '277.905px', '重复调用不应继续加高');
 });
+
 
 
