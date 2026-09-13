@@ -1151,6 +1151,42 @@ test('图库右键目标只接受直接命中的照片', () => {
   assert.equal(api.findCopyablePhotoImage({ tagName: 'DIV', parentElement: null }), null);
 });
 
+test('网格照片的遮罩事件可从事件路径解析实际图片', () => {
+  const image = {
+    tagName: 'IMG',
+    currentSrc: 'https://photos.example/full.jpg',
+    src: 'https://photos.example/thumb.jpg',
+  };
+  const overlay = { tagName: 'DIV' };
+
+  assert.equal(
+    api.findCopyablePhotoImageFromEvent({
+      target: overlay,
+      composedPath: () => [overlay, image],
+    }),
+    image
+  );
+});
+
+test('自定义菜单容器可由下载项的类名定位', () => {
+  const menu = { id: 'menu' };
+  const download = {
+    textContent: '下载',
+    closest(selector) {
+      assert.match(selector, /class\*="menu"/i);
+      return menu;
+    },
+  };
+  const doc = {
+    querySelectorAll(selector) {
+      assert.match(selector, /class\*="menu"/i);
+      return [download];
+    },
+  };
+
+  assert.deepEqual(api.findPhotoContextMenus(doc), [menu]);
+});
+
 test('拷贝图片以当前渲染源读取二进制并写入系统剪贴板', async () => {
   let request = null;
   let clipboardItem = null;
