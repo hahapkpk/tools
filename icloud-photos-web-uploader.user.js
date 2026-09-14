@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.15.4
+// @version      1.16.0
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click & Ctrl+C photo copy, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -35,6 +35,7 @@
   const handledPasteEvents = new WeakSet();
   const gridCopyMenuStateByDocument = new WeakMap();
   const keyboardPhotoCopyStateByDocument = new WeakMap();
+  const oneUpCopyStateByDocument = new WeakMap();
 
   function getPanelText() {
     return {
@@ -2304,6 +2305,124 @@
     return null;
   }
 
+  // The enlarged (OneUp) view swaps progressively larger derivatives into the
+  // same <img>, so resolve the biggest one currently rendered for the centered
+  // photo. Outside OneUp this returns null — the grid must keep using its own
+  // pointer-based lookup.
+  function resolveOneUpImage(doc) {
+    if (!doc || typeof doc.querySelector !== 'function') return null;
+    const scope =
+      doc.querySelector('OneUpCarouselItem.is-center') ||
+      doc.querySelector('OneUpCarouselItem') ||
+      doc.querySelector('OneUp');
+    if (!scope || typeof scope.querySelectorAll !== 'function') return null;
+    const imgs = scope.querySelectorAll('img');
+    let best = null;
+    let bestEdge = 0;
+    for (let i = 0; i < imgs.length; i += 1) {
+      const img = imgs[i];
+      const edge = Math.max(img.naturalWidth || img.width || 0, img.naturalHeight || img.height || 0);
+      if (edge > bestEdge) {
+        best = img;
+        bestEdge = edge;
+      }
+    }
+    return bestEdge >= 300 ? best : null;
+  }
+
+  async function copyCurrentOneUpImage(doc, win) {
+    const image = resolveOneUpImage(doc);
+    if (!image) {
+      showCopyPhotoStatus(doc, '未找到大图，请等图片加载完成后再试', true);
+      return;
+    }
+    const width = image.naturalWidth || image.width || 0;
+    const height = image.naturalHeight || image.height || 0;
+    try {
+      const blob = await fetchCopyablePhotoImageBlob(image, win);
+      const copied = await copyPhotoImageToClipboard(image, win, blob);
+      showCopyPhotoStatus(
+        doc,
+        copied ? '已拷贝大图 ' + width + '×' + height : '浏览器不支持图像拷贝',
+        !copied
+      );
+    } catch (error) {
+      const detail = error && error.message ? error.message : '未知错误';
+      showCopyPhotoStatus(doc, '拷贝大图失败：' + detail, true);
+    }
+  }
+
+  function createOneUpCopyButton(doc, win) {
+    const button = doc.createElement('button');
+    button.type = 'button';
+    button.setAttribute('data-icloud-oneup-copy', '');
+    button.textContent = '拷贝大图';
+    button.title = '把当前大图复制到剪贴板（Ctrl+C 也可以）';
+    button.style.cssText = [
+      'position:fixed',
+      'left:16px',
+      'bottom:16px',
+      'z-index:2147483000',
+      'padding:8px 14px',
+      'border:0',
+      'border-radius:8px',
+      'background:rgba(28,28,30,.72)',
+      'color:#fff',
+      "font:13px/1.2 -apple-system,'Segoe UI','Microsoft YaHei',sans-serif",
+      'cursor:pointer',
+      'pointer-events:auto',
+    ].join(';');
+    button.addEventListener(
+      'click',
+      function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        void copyCurrentOneUpImage(doc, win);
+      },
+      true
+    );
+    return button;
+  }
+
+  // iCloud only opens the enlarged view from a trusted click, so the grid menu
+  // cannot jump into it programmatically. Instead, surface a copy button while
+  // OneUp is open — the user opens the photo (one click) and copies from there.
+  function installOneUpCopyButton(doc, win) {
+    if (!doc || oneUpCopyStateByDocument.has(doc)) return;
+    const state = { button: null, observer: null, scheduled: false };
+    oneUpCopyStateByDocument.set(doc, state);
+
+    function sync() {
+      state.scheduled = false;
+      if (typeof doc.querySelector !== 'function') return;
+      const inOneUp = Boolean(doc.querySelector('OneUpCarouselItem'));
+      if (inOneUp && !state.button && doc.body && typeof doc.body.appendChild === 'function') {
+        state.button = createOneUpCopyButton(doc, win);
+        doc.body.appendChild(state.button);
+      } else if (!inOneUp && state.button) {
+        if (typeof state.button.remove === 'function') state.button.remove();
+        else if (state.button.parentNode && typeof state.button.parentNode.removeChild === 'function') {
+          state.button.parentNode.removeChild(state.button);
+        }
+        state.button = null;
+      }
+    }
+
+    function schedule() {
+      if (state.scheduled) return;
+      state.scheduled = true;
+      if (win && typeof win.setTimeout === 'function') win.setTimeout(sync, 150);
+      else sync();
+    }
+
+    const MutationObserverCtor = (win && win.MutationObserver) || root.MutationObserver;
+    if (typeof MutationObserverCtor === 'function' && doc.documentElement) {
+      state.observer = new MutationObserverCtor(schedule);
+      state.observer.observe(doc.documentElement, { childList: true, subtree: true });
+    }
+    sync();
+  }
+
   function installGridPhotoKeyboardCopy(doc, win) {
     if (!doc || keyboardPhotoCopyStateByDocument.has(doc)) return;
     const state = { x: -1, y: -1, busy: false, hintShown: false };
@@ -2359,7 +2478,9 @@
       if (!isCopyShortcut(event)) return;
       if (isEditablePhotoCopyTarget(event.target)) return;
       if (hasTextSelection()) return;
-      const image = findPhotoUnderPointer();
+      // In the enlarged view the pointer often rests on toolbars instead of the
+      // photo, so fall back to the centered OneUp image there.
+      const image = findPhotoUnderPointer() || resolveOneUpImage(doc);
       if (!image) return;
       // The real keystroke carries the user activation that the clipboard
       // write below depends on, so claim the event before the page sees it.
@@ -2987,6 +3108,7 @@
     installPasteListener(doc, win);
     installGridPhotoCopyMenu(doc, win);
     installGridPhotoKeyboardCopy(doc, win);
+    installOneUpCopyButton(doc, win);
     installImageZoomPan(doc, win);
     observeAndRemount(doc, win);
     return true;
@@ -3081,6 +3203,7 @@
     installPasteListener,
     installGridPhotoCopyMenu,
     installGridPhotoKeyboardCopy,
+    installOneUpCopyButton,
     isEditablePhotoCopyTarget,
     isInICloudPhotosAppFrame,
     isJpegLikeFile,
@@ -3088,6 +3211,9 @@
     isUploadTrigger,
     looksLikePhotosAppDom,
     findGridPhotoImageAtPoint,
+    resolveOneUpImage,
+    copyCurrentOneUpImage,
+    createOneUpCopyButton,
     normalizeFilesForICloudWebUpload,
     resolveZoomMedia,
     restoreOwnedInlineStyle,
