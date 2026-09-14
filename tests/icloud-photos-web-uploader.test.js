@@ -1567,47 +1567,56 @@ test('面板拖拽会阻止 drop 冒泡，避免 iCloud 重复入队', () => {
   );
 });
 
-test('版本号已升级到 1.16.1', () => {
-  assert.match(source, /\/\/ @version\s+1\.16\.1/);
+test('版本号已升级到 1.16.2', () => {
+  assert.match(source, /\/\/ @version\s+1\.16\.2/);
 });
 
-test('resolveOneUpImage 取居中照片里最大的那张图，网格里返回 null', () => {
-  const img = (w, h) => ({ naturalWidth: w, naturalHeight: h });
-  const center = {
-    querySelectorAll: (sel) => (sel === 'img' ? [img(480, 360), img(2048, 1536)] : []),
-  };
-  const sideItem = { querySelectorAll: () => [img(1536, 2048)] };
-  const docWithOneUp = {
-    querySelector: (sel) => {
-      if (sel === 'OneUpCarouselItem.is-center') return center;
-      if (sel === 'OneUpCarouselItem') return sideItem;
-      return null;
-    },
-  };
-  const resolved = api.resolveOneUpImage(docWithOneUp);
-  assert.equal(resolved.naturalWidth, 2048, '应取居中项里最大的那张');
+test('resolveOneUpImage 靠尺寸识别大图，不吃网格缩略图，也不吃轮播里预加载的邻图', () => {
+  const viewer = (natW, natH, rect, inGrid) => ({
+    naturalWidth: natW,
+    naturalHeight: natH,
+    closest: (sel) => (inGrid && sel === '.grid-item' ? {} : null),
+    getBoundingClientRect: () => rect,
+  });
+  const viewport = { clientWidth: 1600, clientHeight: 900 };
+  const makeDoc = (imgs) => ({ documentElement: viewport, querySelectorAll: () => imgs });
 
-  const noCenter = {
-    querySelector: (sel) => (sel === 'OneUpCarouselItem' ? sideItem : null),
-  };
-  assert.equal(api.resolveOneUpImage(noCenter).naturalWidth, 1536, '无 is-center 时退回任意轮播项');
+  // centered viewer photo wins over a bigger-looking preloaded neighbour
+  const centered = viewer(2048, 1536, { left: 400, top: 100, width: 1200, height: 800 });
+  const neighbour = viewer(4032, 3024, { left: -4000, top: 0, width: 3000, height: 2000 });
+  assert.equal(
+    api.resolveOneUpImage(makeDoc([neighbour, centered])),
+    centered,
+    '应选靠近视口中心的那张'
+  );
 
-  const gridOnly = { querySelector: () => null };
-  assert.equal(api.resolveOneUpImage(gridOnly), null, '网格里没有 OneUp 应返回 null');
+  // grid thumbnails are small on screen and inside .grid-item
+  const gridThumb = viewer(480, 360, { left: 10, top: 10, width: 159, height: 159 }, true);
+  assert.equal(api.resolveOneUpImage(makeDoc([gridThumb])), null, '网格缩略图不算大图');
 
-  const tooSmall = {
-    querySelector: (sel) =>
-      sel === 'OneUpCarouselItem.is-center' ? { querySelectorAll: () => [img(120, 90)] } : null,
-  };
-  assert.equal(api.resolveOneUpImage(tooSmall), null, '尺寸不足不算大图');
+  // big natural size but rendered small (e.g. not yet laid out) does not count
+  const notRendered = viewer(4032, 3024, { left: 0, top: 0, width: 120, height: 90 });
+  assert.equal(api.resolveOneUpImage(makeDoc([notRendered])), null, '屏幕尺寸太小不算大图');
+
+  // header avatar: large on screen but not a photo original
+  const avatar = viewer(420, 420, { left: 20, top: 20, width: 44, height: 44 });
+  assert.equal(api.resolveOneUpImage(makeDoc([avatar])), null);
+
+  assert.equal(api.resolveOneUpImage(makeDoc([])), null);
   assert.equal(api.resolveOneUpImage(null), null);
 });
 
-test('OneUp 拷贝按钮随大图界面出现与移除', () => {
-  const img = { naturalWidth: 2048, naturalHeight: 1536 };
+test('大图按钮随大图出现与移除', () => {
   const created = [];
-  let oneUpPresent = true;
+  let viewerPresent = true;
+  const viewerImg = {
+    naturalWidth: 2048,
+    naturalHeight: 1536,
+    closest: () => null,
+    getBoundingClientRect: () => ({ left: 400, top: 100, width: 1200, height: 800 }),
+  };
   const doc = {
+    documentElement: { clientWidth: 1600, clientHeight: 900 },
     body: {
       appendChild(node) {
         created.push(node);
@@ -1635,40 +1644,31 @@ test('OneUp 拷贝按钮随大图界面出现与移除', () => {
         },
       };
     },
-    querySelector(selector) {
-      if (selector === 'OneUpCarouselItem' && oneUpPresent) {
-        return { querySelectorAll: () => [img] };
-      }
-      return null;
+    querySelectorAll(selector) {
+      if (selector !== 'img') return [];
+      return viewerPresent ? [viewerImg] : [];
     },
   };
+  const timers = [];
   const win = {
     setTimeout(fn) {
-      fn();
-      return 0;
-    },
-    MutationObserver: function FakeMutationObserver(callback) {
-      this.callback = callback;
-      observers.push(this);
-      this.observe = () => {};
-      this.disconnect = () => {};
+      timers.push(fn);
+      return timers.length;
     },
   };
-  doc.documentElement = {};
-  const observers = [];
 
   api.installOneUpCopyButton(doc, win);
-  assert.equal(created.length, 1, 'OneUp 打开时应注入按钮');
+  assert.equal(created.length, 1, '大图出现时应注入按钮');
   const btn = created[0];
   assert.equal(btn.textContent, '拷贝大图');
   assert.match(btn.style.cssText, /pointer-events:auto/);
   assert.equal(btn.getAttribute('data-icloud-oneup-copy'), '');
   assert.ok(btn.listeners.click, '点击监听应存在');
 
-  oneUpPresent = false;
-  observers[0].callback();
+  viewerPresent = false;
+  timers[timers.length - 1]();
   assert.equal(created.length, 1, '不能重复注入按钮');
-  assert.equal(btn.removed, true, 'OneUp 关闭后按钮应被移除');
+  assert.equal(btn.removed, true, '大图关闭后按钮应被移除');
 });
 
 test('Ctrl+C 在大图里不再依赖鼠标位置（回退到居中大图）', () => {

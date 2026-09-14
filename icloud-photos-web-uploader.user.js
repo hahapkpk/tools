@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.16.1
+// @version      1.16.2
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click & Ctrl+C photo copy, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -2305,29 +2305,46 @@
     return null;
   }
 
-  // The enlarged (OneUp) view swaps progressively larger derivatives into the
-  // same <img>, so resolve the biggest one currently rendered for the centered
-  // photo. Outside OneUp this returns null — the grid must keep using its own
-  // pointer-based lookup.
+  // The enlarged viewer keeps swapping larger derivatives into the same <img>.
+  // Its class names are build-specific (they are not stable strings in the app
+  // bundle), so identify the photo by what it is instead: an <img> that is large
+  // both in pixels and on screen, and that does not live in a grid tile. Grid
+  // thumbnails render ~160px with 480px derivatives, so they never qualify.
+  const VIEWER_MIN_NATURAL_PX = 800;
+  const VIEWER_MIN_RENDERED_PX = 500;
+
+  function isViewerPhotoImage(img) {
+    if (!img || !img.naturalWidth || !img.naturalHeight) return false;
+    if (typeof img.closest === 'function' && img.closest('.grid-item')) return false;
+    if (typeof img.getBoundingClientRect !== 'function') return false;
+    const rect = img.getBoundingClientRect();
+    const naturalMax = Math.max(img.naturalWidth, img.naturalHeight);
+    const renderedMax = Math.max(rect.width, rect.height);
+    return naturalMax >= VIEWER_MIN_NATURAL_PX && renderedMax >= VIEWER_MIN_RENDERED_PX;
+  }
+
+  // Pick the viewer-sized image closest to the viewport centre, so a preloaded
+  // carousel neighbour never wins over the photo actually on screen.
   function resolveOneUpImage(doc) {
-    if (!doc || typeof doc.querySelector !== 'function') return null;
-    const scope =
-      doc.querySelector('OneUpCarouselItem.is-center') ||
-      doc.querySelector('OneUpCarouselItem') ||
-      doc.querySelector('OneUp');
-    if (!scope || typeof scope.querySelectorAll !== 'function') return null;
-    const imgs = scope.querySelectorAll('img');
+    if (!doc || typeof doc.querySelectorAll !== 'function') return null;
+    const imgs = doc.querySelectorAll('img');
+    const root = doc.documentElement || doc.body;
+    const cx = root ? (root.clientWidth || 0) / 2 : 0;
+    const cy = root ? (root.clientHeight || 0) / 2 : 0;
     let best = null;
-    let bestEdge = 0;
+    let bestScore = Infinity;
     for (let i = 0; i < imgs.length; i += 1) {
       const img = imgs[i];
-      const edge = Math.max(img.naturalWidth || img.width || 0, img.naturalHeight || img.height || 0);
-      if (edge > bestEdge) {
+      if (!isViewerPhotoImage(img)) continue;
+      const rect = img.getBoundingClientRect();
+      const score =
+        Math.abs(rect.left + rect.width / 2 - cx) + Math.abs(rect.top + rect.height / 2 - cy);
+      if (score < bestScore) {
         best = img;
-        bestEdge = edge;
+        bestScore = score;
       }
     }
-    return bestEdge >= 300 ? best : null;
+    return best;
   }
 
   async function copyCurrentOneUpImage(doc, win) {
@@ -2392,21 +2409,23 @@
   // OneUp is open — the user opens the photo (one click) and copies from there.
   function installOneUpCopyButton(doc, win) {
     if (!doc || oneUpCopyStateByDocument.has(doc)) return;
-    const state = { button: null, observer: null, scheduled: false, hintShown: false };
+    const state = { button: null, timer: null, hintShown: false };
     oneUpCopyStateByDocument.set(doc, state);
 
     function sync() {
-      state.scheduled = false;
-      if (typeof doc.querySelector !== 'function') return;
-      const inOneUp = Boolean(doc.querySelector('OneUpCarouselItem'));
-      if (inOneUp && !state.button && doc.body && typeof doc.body.appendChild === 'function') {
+      if (typeof doc.querySelectorAll !== 'function') return;
+      // Presence is derived from a viewer-sized photo, not from a class name:
+      // the image only qualifies once its bitmap is decoded, so keep polling
+      // instead of trusting a single DOM mutation.
+      const hasViewerPhoto = Boolean(resolveOneUpImage(doc));
+      if (hasViewerPhoto && !state.button && doc.body && typeof doc.body.appendChild === 'function') {
         state.button = createOneUpCopyButton(doc, win);
         doc.body.appendChild(state.button);
         if (!state.hintShown) {
           state.hintShown = true;
           showCopyPhotoStatus(doc, '提示：点左下角「拷贝大图」可复制高清大图');
         }
-      } else if (!inOneUp && state.button) {
+      } else if (!hasViewerPhoto && state.button) {
         if (typeof state.button.remove === 'function') state.button.remove();
         else if (state.button.parentNode && typeof state.button.parentNode.removeChild === 'function') {
           state.button.parentNode.removeChild(state.button);
@@ -2415,19 +2434,15 @@
       }
     }
 
-    function schedule() {
-      if (state.scheduled) return;
-      state.scheduled = true;
-      if (win && typeof win.setTimeout === 'function') win.setTimeout(sync, 150);
-      else sync();
+    function tick() {
+      sync();
+      state.timer = win && typeof win.setTimeout === 'function' ? win.setTimeout(tick, 700) : null;
     }
 
-    const MutationObserverCtor = (win && win.MutationObserver) || root.MutationObserver;
-    if (typeof MutationObserverCtor === 'function' && doc.documentElement) {
-      state.observer = new MutationObserverCtor(schedule);
-      state.observer.observe(doc.documentElement, { childList: true, subtree: true });
-    }
     sync();
+    if (win && typeof win.setTimeout === 'function') {
+      state.timer = win.setTimeout(tick, 700);
+    }
   }
 
   function installGridPhotoKeyboardCopy(doc, win) {
