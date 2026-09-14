@@ -1567,8 +1567,8 @@ test('面板拖拽会阻止 drop 冒泡，避免 iCloud 重复入队', () => {
   );
 });
 
-test('版本号已升级到 1.16.2', () => {
-  assert.match(source, /\/\/ @version\s+1\.16\.2/);
+test('版本号已升级到 1.17.0', () => {
+  assert.match(source, /\/\/ @version\s+1\.17\.0/);
 });
 
 test('resolveOneUpImage 靠尺寸识别大图，不吃网格缩略图，也不吃轮播里预加载的邻图', () => {
@@ -1606,7 +1606,7 @@ test('resolveOneUpImage 靠尺寸识别大图，不吃网格缩略图，也不�
   assert.equal(api.resolveOneUpImage(null), null);
 });
 
-test('大图按钮随大图出现与移除', () => {
+test('大图按钮是图标按钮，随大图出现与移除', () => {
   const created = [];
   let viewerPresent = true;
   const viewerImg = {
@@ -1615,6 +1615,27 @@ test('大图按钮随大图出现与移除', () => {
     closest: () => null,
     getBoundingClientRect: () => ({ left: 400, top: 100, width: 1200, height: 800 }),
   };
+  const makeButton = () => ({
+    style: { cssText: '' },
+    attrs: {},
+    listeners: {},
+    innerHTML: '',
+    type: '',
+    title: '',
+    setAttribute(name, value) {
+      this.attrs[name] = value;
+    },
+    getAttribute(name) {
+      return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null;
+    },
+    addEventListener(type, fn) {
+      this.listeners[type] = fn;
+    },
+    remove() {
+      this.removed = true;
+    },
+    getBoundingClientRect: () => ({ left: 20, top: 700, width: 40, height: 40, right: 60, bottom: 740 }),
+  });
   const doc = {
     documentElement: { clientWidth: 1600, clientHeight: 900 },
     body: {
@@ -1622,35 +1643,22 @@ test('大图按钮随大图出现与移除', () => {
         created.push(node);
       },
     },
-    createElement() {
-      return {
-        style: { cssText: '' },
-        attrs: {},
-        listeners: {},
-        textContent: '',
-        type: '',
-        title: '',
-        setAttribute(name, value) {
-          this.attrs[name] = value;
-        },
-        getAttribute(name) {
-          return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null;
-        },
-        addEventListener(type, fn) {
-          this.listeners[type] = fn;
-        },
-        remove() {
-          this.removed = true;
-        },
-      };
-    },
+    createElement: () => makeButton(),
     querySelectorAll(selector) {
       if (selector !== 'img') return [];
       return viewerPresent ? [viewerImg] : [];
     },
   };
+  const listeners = {};
   const timers = [];
   const win = {
+    innerWidth: 1600,
+    innerHeight: 900,
+    localStorage: null,
+    addEventListener(type, fn) {
+      listeners[type] = fn;
+    },
+    removeEventListener() {},
     setTimeout(fn) {
       timers.push(fn);
       return timers.length;
@@ -1660,15 +1668,83 @@ test('大图按钮随大图出现与移除', () => {
   api.installOneUpCopyButton(doc, win);
   assert.equal(created.length, 1, '大图出现时应注入按钮');
   const btn = created[0];
-  assert.equal(btn.textContent, '拷贝大图');
+  assert.equal(btn.innerHTML.indexOf('<svg') !== -1, true, '按钮应使用图标而不是文字');
+  assert.equal(btn.getAttribute('aria-label'), '拷贝大图');
   assert.match(btn.style.cssText, /pointer-events:auto/);
+  assert.match(btn.style.cssText, /border-radius:50%/);
   assert.equal(btn.getAttribute('data-icloud-oneup-copy'), '');
   assert.ok(btn.listeners.click, '点击监听应存在');
+  assert.ok(btn.listeners.mousedown, '拖动监听应存在');
+  assert.equal(btn.style.left, '20px', '未保存过位置时应落在默认左下角');
+  assert.equal(btn.style.top, '840px');
 
   viewerPresent = false;
   timers[timers.length - 1]();
   assert.equal(created.length, 1, '不能重复注入按钮');
   assert.equal(btn.removed, true, '大图关闭后按钮应被移除');
+});
+
+test('拖动大图按钮会记住位置，并且拖动结束那一下不触发拷贝', () => {
+  const store = {};
+  const listeners = {};
+  const button = {
+    style: { cssText: '', left: '', top: '', right: '', bottom: '' },
+    attrs: {},
+    listeners: {},
+    setAttribute(name, value) {
+      this.attrs[name] = value;
+    },
+    getAttribute(name) {
+      return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null;
+    },
+    addEventListener(type, fn) {
+      this.listeners[type] = fn;
+    },
+    getBoundingClientRect: () => ({ left: 20, top: 840, width: 40, height: 40, right: 60, bottom: 880 }),
+  };
+  const win = {
+    innerWidth: 1600,
+    innerHeight: 900,
+    localStorage: {
+      getItem: (key) => (Object.prototype.hasOwnProperty.call(store, key) ? store[key] : null),
+      setItem: (key, value) => {
+        store[key] = value;
+      },
+    },
+    addEventListener(type, fn) {
+      listeners[type] = fn;
+    },
+    removeEventListener() {},
+  };
+
+  api.enableOneUpButtonDragging(button, win);
+  // default spot when nothing is stored
+  assert.equal(button.style.left, '20px');
+
+  button.listeners.mousedown({ button: 0, clientX: 30, clientY: 860 });
+  listeners.mousemove({ clientX: 400, clientY: 300 });
+  listeners.mouseup({});
+  assert.equal(button.style.left, '390px', '拖动后应跟随指针（含抓取偏移）');
+  assert.equal(button.style.top, '280px');
+
+  const saved = JSON.parse(store['icloud-web-uploader-oneup-copy-position']);
+  assert.deepEqual(saved, { left: 390, top: 280 }, '拖动结束应保存位置');
+  assert.equal(typeof button.__icloudDraggedAt, 'number', '拖动后应标记，避免把这次点击当成拷贝');
+
+  // a second instance (e.g. reopening the viewer) restores the saved spot
+  const reopened = {
+    style: { cssText: '', left: '', top: '', right: '', bottom: '' },
+    listeners: {},
+    setAttribute() {},
+    getAttribute: () => null,
+    addEventListener(type, fn) {
+      this.listeners[type] = fn;
+    },
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 40, height: 40, right: 40, bottom: 40 }),
+  };
+  api.enableOneUpButtonDragging(reopened, win);
+  assert.equal(reopened.style.left, '390px', '重开时应恢复保存的位置');
+  assert.equal(reopened.style.top, '280px');
 });
 
 test('Ctrl+C 在大图里不再依赖鼠标位置（回退到居中大图）', () => {

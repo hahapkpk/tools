@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.16.2
+// @version      1.17.0
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click & Ctrl+C photo copy, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -27,6 +27,8 @@
   const PANEL_ID = 'icloud-web-uploader-panel';
   const LOG_PREFIX = '[iCloud Photos Web Uploader]';
   const POSITION_KEY = 'icloud-web-uploader-position';
+  const ONEUP_COPY_POSITION_KEY = 'icloud-web-uploader-oneup-copy-position';
+  const ONEUP_BUTTON_SIZE = 40;
   const IMAGE_EXTENSIONS = /\.(apng|avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|tiff?|webp)$/i;
   const JPEG_EXTENSIONS = /\.jpe?g$/i;
   const JPEG_QUALITY = 0.92;
@@ -1258,9 +1260,10 @@
     };
   }
 
-  function loadSavedPosition(win) {
+  function loadSavedPosition(win, key) {
     try {
-      const raw = win.localStorage && win.localStorage.getItem(POSITION_KEY);
+      const storageKey = key || POSITION_KEY;
+      const raw = win.localStorage && win.localStorage.getItem(storageKey);
       if (!raw) return null;
       const parsed = JSON.parse(raw);
       if (typeof parsed.left !== 'number' || typeof parsed.top !== 'number') return null;
@@ -1270,9 +1273,10 @@
     }
   }
 
-  function savePosition(win, position) {
+  function savePosition(win, position, key) {
     try {
-      if (win.localStorage) win.localStorage.setItem(POSITION_KEY, JSON.stringify(position));
+      const storageKey = key || POSITION_KEY;
+      if (win.localStorage) win.localStorage.setItem(storageKey, JSON.stringify(position));
     } catch (error) {
       // Ignore storage failures; dragging still works for the current page.
     }
@@ -2329,14 +2333,19 @@
     if (!doc || typeof doc.querySelectorAll !== 'function') return null;
     const imgs = doc.querySelectorAll('img');
     const root = doc.documentElement || doc.body;
-    const cx = root ? (root.clientWidth || 0) / 2 : 0;
-    const cy = root ? (root.clientHeight || 0) / 2 : 0;
+    const vw = root ? root.clientWidth || 0 : 0;
+    const vh = root ? root.clientHeight || 0 : 0;
+    const cx = vw / 2;
+    const cy = vh / 2;
     let best = null;
     let bestScore = Infinity;
     for (let i = 0; i < imgs.length; i += 1) {
       const img = imgs[i];
       if (!isViewerPhotoImage(img)) continue;
       const rect = img.getBoundingClientRect();
+      // The carousel keeps neighbours mounted and a closed viewer can leave them
+      // laid out just outside the viewport, so off-screen candidates never count.
+      if (rect.right <= 0 || rect.bottom <= 0 || rect.left >= vw || rect.top >= vh) continue;
       const score =
         Math.abs(rect.left + rect.width / 2 - cx) + Math.abs(rect.top + rect.height / 2 - cy);
       if (score < bestScore) {
@@ -2369,27 +2378,153 @@
     }
   }
 
+  // Draggable like the upload FAB, with its own stored position: the button
+  // floats over the viewer, and what is a comfortable corner differs per user
+  // and per photo aspect.
+  function restoreOneUpButtonPosition(button, win) {
+    const rect =
+      typeof button.getBoundingClientRect === 'function'
+        ? button.getBoundingClientRect()
+        : { width: ONEUP_BUTTON_SIZE, height: ONEUP_BUTTON_SIZE };
+    const width = rect.width || ONEUP_BUTTON_SIZE;
+    const height = rect.height || ONEUP_BUTTON_SIZE;
+    const saved = loadSavedPosition(win, ONEUP_COPY_POSITION_KEY);
+    const fallbackLeft = 20;
+    const fallbackTop = Math.max(8, (win.innerHeight || 0) - height - 20);
+    const position = calculateDraggedPanelPosition({
+      pointerX: (saved ? saved.left : fallbackLeft) + width / 2,
+      pointerY: (saved ? saved.top : fallbackTop) + height / 2,
+      offsetX: width / 2,
+      offsetY: height / 2,
+      panelWidth: width,
+      panelHeight: height,
+      viewportWidth: win.innerWidth || 0,
+      viewportHeight: win.innerHeight || 0,
+      margin: 8,
+    });
+    applyPanelPosition(button, position);
+    return position;
+  }
+
+  function enableOneUpButtonDragging(button, win) {
+    restoreOneUpButtonPosition(button, win);
+    if (win && typeof win.addEventListener === 'function') {
+      win.addEventListener('resize', function () {
+        restoreOneUpButtonPosition(button, win);
+      });
+    }
+
+    let dragState = null;
+    let moved = false;
+
+    function cleanup() {
+      win.removeEventListener('mousemove', move, true);
+      win.removeEventListener('mouseup', stop, true);
+      win.removeEventListener('touchmove', move, true);
+      win.removeEventListener('touchend', stop, true);
+      win.removeEventListener('touchcancel', stop, true);
+    }
+
+    function move(event) {
+      if (!dragState) return;
+      const point = getPointerPoint(event);
+      const dx = point.x - dragState.startX;
+      const dy = point.y - dragState.startY;
+      if (!moved && dx * dx + dy * dy < 16) return;
+      moved = true;
+      if (typeof event.preventDefault === 'function') event.preventDefault();
+      const position = calculateDraggedPanelPosition({
+        pointerX: point.x,
+        pointerY: point.y,
+        offsetX: dragState.offsetX,
+        offsetY: dragState.offsetY,
+        panelWidth: dragState.panelWidth,
+        panelHeight: dragState.panelHeight,
+        viewportWidth: win.innerWidth || dragState.viewportWidth,
+        viewportHeight: win.innerHeight || dragState.viewportHeight,
+        margin: 8,
+      });
+      applyPanelPosition(button, position);
+      dragState.lastPosition = position;
+    }
+
+    function stop() {
+      if (!dragState) return;
+      const wasMoved = moved;
+      if (wasMoved && dragState.lastPosition) {
+        savePosition(win, dragState.lastPosition, ONEUP_COPY_POSITION_KEY);
+      }
+      dragState = null;
+      moved = false;
+      if (wasMoved) {
+        // The click that follows a drag must not double as "copy".
+        button.__icloudDraggedAt = Date.now();
+      }
+      cleanup();
+    }
+
+    function start(event) {
+      if (event.button !== undefined && event.button !== 0) return;
+      const point = getPointerPoint(event);
+      const rect = button.getBoundingClientRect();
+      dragState = {
+        startX: point.x,
+        startY: point.y,
+        offsetX: point.x - rect.left,
+        offsetY: point.y - rect.top,
+        panelWidth: rect.width,
+        panelHeight: rect.height,
+        viewportWidth: win.innerWidth || rect.right,
+        viewportHeight: win.innerHeight || rect.bottom,
+        lastPosition: { left: rect.left, top: rect.top },
+      };
+      moved = false;
+      win.addEventListener('mousemove', move, true);
+      win.addEventListener('mouseup', stop, true);
+      win.addEventListener('touchmove', move, true);
+      win.addEventListener('touchend', stop, true);
+      win.addEventListener('touchcancel', stop, true);
+    }
+
+    button.addEventListener('mousedown', start);
+    button.addEventListener('touchstart', start, { passive: false });
+  }
+
   function createOneUpCopyButton(doc, win) {
     const button = doc.createElement('button');
     button.type = 'button';
     button.setAttribute('data-icloud-oneup-copy', '');
-    button.textContent = '拷贝大图';
-    button.title = '把当前大图复制到剪贴板（Ctrl+C 也可以）';
+    button.setAttribute('aria-label', '拷贝大图');
+    button.title = '点击复制大图；按住可拖动，位置会记住（Ctrl+C 也可以）';
+    button.innerHTML = [
+      '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"',
+      ' stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">',
+      '<rect x="3" y="3" width="12.4" height="12.4" rx="2.2"></rect>',
+      '<path d="M9.6 20.4h9a2.4 2.4 0 0 0 2.4-2.4v-9"></path>',
+      '<circle cx="7.6" cy="7.6" r="1.3" fill="currentColor" stroke="none"></circle>',
+      '<path d="M3.5 12.9 6.9 9.7l3.2 3"></path>',
+      '</svg>',
+    ].join('');
     button.style.cssText = [
       'position:fixed',
-      'left:20px',
-      'bottom:20px',
+      // left/top are applied by restoreOneUpButtonPosition so the saved spot wins.
       'z-index:2147483000',
-      'padding:10px 18px',
+      'width:40px',
+      'height:40px',
+      'padding:0',
+      'display:flex',
+      'align-items:center',
+      'justify-content:center',
       'border:0',
-      'border-radius:999px',
-      // Light pill on purpose: OneUp is a dark full-screen surface, so a dark
-      // button there reads as disabled and gets missed.
+      'border-radius:50%',
+      // Light circle on purpose: the viewer is a dark full-screen surface, so a
+      // dark button there reads as disabled and gets missed.
       'background:rgba(255,255,255,.95)',
       'color:#1d1d1f',
-      "font:600 14px/1.2 -apple-system,'Segoe UI','Microsoft YaHei',sans-serif",
-      'cursor:pointer',
+      'cursor:grab',
       'pointer-events:auto',
+      'user-select:none',
+      'touch-action:none',
       'box-shadow:0 6px 20px rgba(0,0,0,.45)',
     ].join(';');
     button.addEventListener(
@@ -2397,6 +2532,7 @@
       function (event) {
         event.preventDefault();
         event.stopPropagation();
+        if (button.__icloudDraggedAt && Date.now() - button.__icloudDraggedAt < 400) return;
         void copyCurrentOneUpImage(doc, win);
       },
       true
@@ -2421,9 +2557,10 @@
       if (hasViewerPhoto && !state.button && doc.body && typeof doc.body.appendChild === 'function') {
         state.button = createOneUpCopyButton(doc, win);
         doc.body.appendChild(state.button);
+        enableOneUpButtonDragging(state.button, win);
         if (!state.hintShown) {
           state.hintShown = true;
-          showCopyPhotoStatus(doc, '提示：点左下角「拷贝大图」可复制高清大图');
+          showCopyPhotoStatus(doc, '提示：点左下角的拷贝图标可复制高清大图（可拖动，位置会记住）');
         }
       } else if (!hasViewerPhoto && state.button) {
         if (typeof state.button.remove === 'function') state.button.remove();
@@ -3226,6 +3363,7 @@
     installGridPhotoCopyMenu,
     installGridPhotoKeyboardCopy,
     installOneUpCopyButton,
+    enableOneUpButtonDragging,
     isEditablePhotoCopyTarget,
     isInICloudPhotosAppFrame,
     isJpegLikeFile,
