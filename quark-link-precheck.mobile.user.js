@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         夸克网盘链接预检（移动版）
 // @namespace    local.codex
-// @version      0.7.0
-// @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效；打开夸克分享页时自动读取真实分享名称并预填“保存后重命名”。适配 iPhone 手机浏览器（Teak 等）：底部抽屉面板、触控友好、GM API 缺失时自动降级。
+// @version      0.7.1
+// @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效；打开夸克分享页时自动以资源站影片标题预填“保存后重命名”。适配 iPhone 手机浏览器（Teak 等）：底部抽屉面板、触控友好、GM API 缺失时自动降级。
 // @match        *://xn--wcv59z.com/*
 // @match        *://*.xn--wcv59z.com/*
 // @match        *://wdku.net/*
@@ -644,7 +644,7 @@
   // --- 夸克分享页：自动预填保存后重命名 ---
 
   function getShareTitleHint() {
-    // 从资源站跳转时保留的仅是兜底名称；优先使用夸克详情接口返回的真实名称。
+    // 从资源站跳转时保留的是影片标题；它必须优先于夸克分享文件夹名称。
     const hash = String(location.hash || '');
     const queryIndex = hash.indexOf('?');
     if (queryIndex < 0) return '';
@@ -653,6 +653,18 @@
     } catch (_) {
       return '';
     }
+  }
+
+  function getMovieTitleFromPage() {
+    // 资源站详情页的主标题在 H1（例如“汪汪队立大功大电影3：勇闯恐龙岛 (2026)”）。
+    // 限定为一级标题，避免抓到下方网盘资源的发布标题或下载文件夹名。
+    const heading = document.querySelector('h1, [role="heading"][aria-level="1"]');
+    const title = normalizeRenameTitle(heading?.textContent || '');
+    if (title) return title;
+
+    // 详情页异常时才使用 Open Graph 标题；去掉常见站点后缀，避免写入“ - 教父”等站名。
+    const ogTitle = document.querySelector('meta[property="og:title"], meta[name="og:title"]')?.getAttribute('content') || '';
+    return normalizeRenameTitle(ogTitle).replace(/\s*[-_|｜]\s*[^-_|｜]+$/, '').trim();
   }
 
   function normalizeRenameTitle(title) {
@@ -711,7 +723,8 @@
     if (item) {
       try {
         const result = await checkOne(item, false);
-        title = normalizeRenameTitle(result?.title || item.title || title);
+        // 从上级影片页传来的标题优先；只有直接打开分享页、没有影片标题时才退回夸克文件夹名称。
+        title = normalizeRenameTitle(title || result?.title || item.title);
       } catch (err) {
         // 预检失败（如加密分享或网络限制）不影响用户手动填写；若有跳转时的名称仍可兜底。
         log('share title lookup failed', err);
@@ -1165,8 +1178,9 @@
       if (!a) return;
       try {
         const linkText = a.textContent.trim().replace(/\s+/g, ' ');
+        const movieTitle = getMovieTitleFromPage();
         const url = new URL(a.href);
-        url.hash = '/list/share?_title=' + encodeURIComponent(linkText);
+        url.hash = '/list/share?_title=' + encodeURIComponent(movieTitle || linkText);
         a.href = url.toString();
       } catch (_) {}
     }, true);
