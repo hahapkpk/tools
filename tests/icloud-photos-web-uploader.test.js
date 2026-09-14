@@ -1567,8 +1567,8 @@ test('面板拖拽会阻止 drop 冒泡，避免 iCloud 重复入队', () => {
   );
 });
 
-test('版本号已升级到 1.16.0', () => {
-  assert.match(source, /\/\/ @version\s+1\.16\.0/);
+test('版本号已升级到 1.16.1', () => {
+  assert.match(source, /\/\/ @version\s+1\.16\.1/);
 });
 
 test('resolveOneUpImage 取居中照片里最大的那张图，网格里返回 null', () => {

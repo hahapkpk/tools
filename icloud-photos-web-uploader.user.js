@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.16.0
+// @version      1.16.1
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click & Ctrl+C photo copy, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
@@ -2360,17 +2360,20 @@
     button.title = '把当前大图复制到剪贴板（Ctrl+C 也可以）';
     button.style.cssText = [
       'position:fixed',
-      'left:16px',
-      'bottom:16px',
+      'left:20px',
+      'bottom:20px',
       'z-index:2147483000',
-      'padding:8px 14px',
+      'padding:10px 18px',
       'border:0',
-      'border-radius:8px',
-      'background:rgba(28,28,30,.72)',
-      'color:#fff',
-      "font:13px/1.2 -apple-system,'Segoe UI','Microsoft YaHei',sans-serif",
+      'border-radius:999px',
+      // Light pill on purpose: OneUp is a dark full-screen surface, so a dark
+      // button there reads as disabled and gets missed.
+      'background:rgba(255,255,255,.95)',
+      'color:#1d1d1f',
+      "font:600 14px/1.2 -apple-system,'Segoe UI','Microsoft YaHei',sans-serif",
       'cursor:pointer',
       'pointer-events:auto',
+      'box-shadow:0 6px 20px rgba(0,0,0,.45)',
     ].join(';');
     button.addEventListener(
       'click',
@@ -2389,7 +2392,7 @@
   // OneUp is open — the user opens the photo (one click) and copies from there.
   function installOneUpCopyButton(doc, win) {
     if (!doc || oneUpCopyStateByDocument.has(doc)) return;
-    const state = { button: null, observer: null, scheduled: false };
+    const state = { button: null, observer: null, scheduled: false, hintShown: false };
     oneUpCopyStateByDocument.set(doc, state);
 
     function sync() {
@@ -2399,6 +2402,10 @@
       if (inOneUp && !state.button && doc.body && typeof doc.body.appendChild === 'function') {
         state.button = createOneUpCopyButton(doc, win);
         doc.body.appendChild(state.button);
+        if (!state.hintShown) {
+          state.hintShown = true;
+          showCopyPhotoStatus(doc, '提示：点左下角「拷贝大图」可复制高清大图');
+        }
       } else if (!inOneUp && state.button) {
         if (typeof state.button.remove === 'function') state.button.remove();
         else if (state.button.parentNode && typeof state.button.parentNode.removeChild === 'function') {
