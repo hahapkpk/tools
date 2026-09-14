@@ -1,14 +1,15 @@
 // ==UserScript==
 // @name         夸克网盘链接预检（移动版）
 // @namespace    local.codex
-// @version      0.6.6
-// @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。适配 iPhone 手机浏览器（Teak 等）：底部抽屉面板、触控友好、GM API 缺失时自动降级。
+// @version      0.7.0
+// @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效；打开夸克分享页时自动读取真实分享名称并预填“保存后重命名”。适配 iPhone 手机浏览器（Teak 等）：底部抽屉面板、触控友好、GM API 缺失时自动降级。
 // @match        *://xn--wcv59z.com/*
 // @match        *://*.xn--wcv59z.com/*
 // @match        *://wdku.net/*
 // @match        *://*.wdku.net/*
 // @match        *://qmp4.com/*
 // @match        *://*.qmp4.com/*
+// @match        https://pan.quark.cn/*
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.mobile.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.mobile.user.js
 // @connect      drive-h.quark.cn
@@ -72,6 +73,7 @@
   let checking = false;
   let activationObserver = null;
   let hasRunChecks = false;
+  let lastQuarkShareUrl = '';
 
   // --- 移动端兼容层：GM API 缺失时自动降级 ---
 
@@ -328,7 +330,16 @@
 
   // --- Activation logic ---
 
+  function isQuarkSharePage() {
+    return location.hostname === 'pan.quark.cn' &&
+      /\/s\/[A-Za-z0-9_-]{6,}/i.test(location.pathname);
+  }
+
   function shouldActivate() {
+    // 夸克分享页需要脚本直接运行，以便将真实分享名称预填到“保存后重命名”。
+    // 它不属于资源站白名单，必须在白名单判断之前单独放行。
+    if (isQuarkSharePage()) return true;
+
     // 白名单非空时：仅白名单内的 URL 激活
     if (AUTO_START_WHITELIST.length > 0) {
       return isInWhitelist();
@@ -400,6 +411,14 @@
 
   function collectLinks() {
     const byId = new Map(links.map((item) => [item.id, item]));
+
+    // 分享页本身没有把自己的 URL 作为普通锚点放在 DOM 中，显式把地址栏的分享链接加入检测队列。
+    if (isQuarkSharePage()) {
+      addDirectLink(byId, location.href, {
+        passcode: findPasscode(location.href),
+        message: '当前夸克分享页'
+      });
+    }
 
     for (const anchor of document.querySelectorAll('a[href], area[href]')) {
       const raw = `${anchor.href || ''} ${anchor.getAttribute('href') || ''} ${anchor.textContent || ''}`;
@@ -475,7 +494,7 @@
     renderTimer = setTimeout(() => {
       renderTimer = null;
       // 设置面板展开时跳过重建，避免正在输入的配置值被整块重渲染冲掉。
-      if (!settingsVisible) renderPanel();
+      if (!settingsVisible && !isQuarkSharePage()) renderPanel();
     }, 150);
   }
 
@@ -620,6 +639,86 @@
     await writeCache(item, detailResult);
     updateItem(item, detailResult.status, detailResult.message, detailResult);
     return detailResult;
+  }
+
+  // --- 夸克分享页：自动预填保存后重命名 ---
+
+  function getShareTitleHint() {
+    // 从资源站跳转时保留的仅是兜底名称；优先使用夸克详情接口返回的真实名称。
+    const hash = String(location.hash || '');
+    const queryIndex = hash.indexOf('?');
+    if (queryIndex < 0) return '';
+    try {
+      return new URLSearchParams(hash.slice(queryIndex + 1)).get('_title') || '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function normalizeRenameTitle(title) {
+    return String(title || '')
+      .replace(/[\u0000-\u001f\u007f]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function findRenameInput() {
+    return Array.from(document.querySelectorAll('input, textarea')).find((el) => {
+      if (!isVisible(el) || el.disabled || el.readOnly) return false;
+      const placeholder = String(el.getAttribute('placeholder') || '').replace(/\s+/g, '');
+      return /保存后重命名|重命名[（(]?可选/.test(placeholder);
+    }) || null;
+  }
+
+  function setNativeValue(input, value) {
+    const prototype = input instanceof HTMLTextAreaElement
+      ? window.HTMLTextAreaElement.prototype
+      : window.HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+    if (setter) setter.call(input, value);
+    else input.value = value;
+    // 夸克页面由前端框架接管输入状态，原生赋值后必须派发事件才能同步保存按钮状态。
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function fillRenameInput(title) {
+    const input = findRenameInput();
+    if (!input || String(input.value || '').trim()) return false;
+    setNativeValue(input, title);
+    input.setAttribute('data-' + SCRIPT_ID + '-rename-autofilled', '1');
+    log('autofilled save-as name', title);
+    return true;
+  }
+
+  function fillRenameInputWhenReady(title) {
+    if (!title || fillRenameInput(title)) return;
+    const observer = new MutationObserver(() => {
+      if (fillRenameInput(title)) observer.disconnect();
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    // 分享页是 SPA，输入框会晚于脚本加载；15 秒后停止观察，避免常驻开销。
+    setTimeout(() => observer.disconnect(), 15000);
+  }
+
+  async function autoFillQuarkShareRename() {
+    if (!isQuarkSharePage()) return;
+
+    collectLinks();
+    const item = links.find((candidate) => candidate.id === extractId(location.href));
+    let title = getShareTitleHint();
+
+    if (item) {
+      try {
+        const result = await checkOne(item, false);
+        title = normalizeRenameTitle(result?.title || item.title || title);
+      } catch (err) {
+        // 预检失败（如加密分享或网络限制）不影响用户手动填写；若有跳转时的名称仍可兜底。
+        log('share title lookup failed', err);
+      }
+    }
+
+    fillRenameInputWhenReady(normalizeRenameTitle(title));
   }
 
   async function runChecks(force = false) {
@@ -1025,15 +1124,20 @@
 
   function activate() {
     document.documentElement.setAttribute('data-' + SCRIPT_ID, '1');
+    const onQuarkSharePage = isQuarkSharePage();
 
-    if (!autoSelectQuarkTab()) {
+    if (!onQuarkSharePage && !autoSelectQuarkTab()) {
       const tabOb = new MutationObserver((_, ob) => { if (autoSelectQuarkTab()) ob.disconnect(); });
       tabOb.observe(document.body || document.documentElement, { childList: true, subtree: true });
       setTimeout(() => tabOb.disconnect(), 8000);
     }
 
     collectLinks();
-    renderPanel();
+    if (!onQuarkSharePage) renderPanel();
+    if (onQuarkSharePage) {
+      lastQuarkShareUrl = location.href;
+      autoFillQuarkShareRename();
+    }
     log('links', links);
 
     // 手机页面 DOM 变化频繁，防抖 300ms 再扫描，降低 CPU 占用。
@@ -1043,15 +1147,20 @@
       scanTimer = setTimeout(() => {
         scanTimer = null;
         if (checking) return;
+        if (isQuarkSharePage() && location.href !== lastQuarkShareUrl) {
+          lastQuarkShareUrl = location.href;
+          autoFillQuarkShareRename();
+        }
         const before = links.length;
-        autoSelectQuarkTab();
+        if (!isQuarkSharePage()) autoSelectQuarkTab();
         collectLinks();
-        if (links.length !== before) renderPanel();
+        if (!isQuarkSharePage() && links.length !== before) renderPanel();
       }, 300);
     });
     observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
 
     document.addEventListener('click', (e) => {
+      if (isQuarkSharePage()) return;
       const a = e.target.closest('a[href*="pan.quark.cn/s/"]');
       if (!a) return;
       try {
