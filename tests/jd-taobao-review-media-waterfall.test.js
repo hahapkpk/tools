@@ -78,6 +78,16 @@ test('媒体归一化去重时保留首次评价文字并升级到更高清图�
   assert.match(store.items()[0].src, /s1080x1080_jfs/);
 });
 
+test('淘宝评价卡片使用轻量缩略图且保留原图用于预览', () => {
+  const rendered = 'https://gw.alicdn.com/bao/uploaded/i4/O1CN01rate.jpg_960x960.jpg_.webp';
+  assert.equal(api.taobaoOriginalMediaUrl(rendered), 'https://gw.alicdn.com/bao/uploaded/i4/O1CN01rate.jpg');
+  assert.equal(
+    api.taobaoThumbnailUrl(rendered),
+    'https://gw.alicdn.com/bao/uploaded/i4/O1CN01rate.jpg_480x480q90.jpg_.webp'
+  );
+  assert.equal(api.taobaoThumbnailUrl('https://example.com/rate.jpg'), '');
+});
+
 test('淘宝 adapter 仅抽取评价相册媒体并附评价文字', () => {
   const comment = {
     innerText: '匿名买家 2026年5月15日 已购：粉蓝款 实物很漂亮',
@@ -97,7 +107,7 @@ test('淘宝 adapter 仅抽取评价相册媒体并附评价文字', () => {
   assert.deepEqual(api.adapters.taobao.collectMedia(root), [{
     type: 'image',
     src: 'https://gw.alicdn.com/rate-a.jpg',
-    poster: '',
+    poster: 'https://gw.alicdn.com/rate-a.jpg_480x480q90.jpg_.webp',
     text: '匿名买家 2026年5月15日 已购：粉蓝款 实物很漂亮',
     meta: ''
   }]);
@@ -133,7 +143,7 @@ test('淘宝 adapter 从已渲染卡片状态提取真实原图而非占位图',
   assert.deepEqual(api.adapters.taobao.collectMedia(root), [{
     type: 'image',
     src: 'https://img.alicdn.com/imgextra/real-rate.jpg',
-    poster: '',
+    poster: 'https://img.alicdn.com/imgextra/real-rate.jpg_480x480q90.jpg_.webp',
     text: '实物很漂亮',
     meta: '2026年5月15日 粉蓝款'
   }]);
@@ -168,7 +178,7 @@ test('淘宝图集模式从 React reviews 提取真实图片而非占位缩略�
   assert.deepEqual(api.adapters.taobao.collectMedia(root), [{
     type: 'image',
     src: 'https://img.alicdn.com/imgextra/gallery-real.jpg',
-    poster: '',
+    poster: 'https://img.alicdn.com/imgextra/gallery-real.jpg_480x480q90.jpg_.webp',
     text: '实物漂亮',
     meta: '2026年5月15日 粉蓝款'
   }]);
@@ -202,7 +212,7 @@ test('淘宝图集模式会跳过未挂载 reviews 的首个节点继续查找�
   assert.deepEqual(api.adapters.taobao.collectMedia(root), [{
     type: 'image',
     src: 'https://img.alicdn.com/imgextra/gallery-second-real.jpg',
-    poster: '',
+    poster: 'https://img.alicdn.com/imgextra/gallery-second-real.jpg_480x480q90.jpg_.webp',
     text: '后续节点有真实图集',
     meta: '2026年6月16日 黑色'
   }]);
@@ -241,7 +251,7 @@ test('淘宝视频跳过 null 地址并使用可播放的源视频地址', () =>
   assert.deepEqual(api.adapters.taobao.collectMedia(root), [{
     type: 'video',
     src: 'https://pingjia.alicdn.com/aus/wantu_pingjia/123/review-video.mp4',
-    poster: 'https://img.alicdn.com/imgextra/i1/video-cover.jpg',
+    poster: 'https://img.alicdn.com/imgextra/i1/video-cover.jpg_480x480q90.jpg_.webp',
     text: '视频能看清楚',
     meta: '2026年6月1日 透明款'
   }]);
@@ -854,7 +864,7 @@ test('预览图片区域支持滚轮切换上一张和下一张并防止连续�
 
 test('淘宝天猫评价内容使用同一套预览阅读排版', () => {
   assert.match(source, /function appendTaobaoReviewMedia/);
-  assert.match(source, /items\.push\(\{ type: 'image', src: absoluteMediaUrl\(src\), poster: '', text, meta, \.\.\.\(reviewKey \? \{ reviewKey \} : \{\}\) \}\)/);
+  assert.match(source, /items\.push\(\{ type: 'image', src: original, poster: taobaoThumbnailUrl\(original\), text, meta, \.\.\.\(reviewKey \? \{ reviewKey \} : \{\}\) \}\)/);
   assert.match(source, /function extractTaobaoVideo/);
   assert.match(source, /function appendTaobaoVideos/);
   assert.match(source, /context\.appendChild\(makeElement\(doc, 'p', 'rmw-context-text', item\.text \|\|/);
@@ -932,7 +942,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.23/);
+  assert.match(source, /@version\s+0\.5\.24/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
@@ -1229,6 +1239,13 @@ test('淘宝图片墙先使用页面已有评价媒体并在需要更多内容�
   assert.match(source, /initialPageItems = adapter\.collectMedia\(doc\)/);
   assert.match(source, /if \(!adapter\.deferNativeOpen \|\| !initialPageItems\.length\)/);
   assert.match(source, /if \(!nativeRoot\) \{\s*requestNativeReviews\(0\);\s*return;/);
+});
+
+test('入口挂载观察器按帧合并并在入口存在时跳过重复查询', () => {
+  assert.match(source, /function scheduleMountLauncher\(\)/);
+  assert.match(source, /if \(mountFrame\) return/);
+  assert.match(source, /existing\?\.isConnected && existing\.dataset\.rmwVersion === SCRIPT_VERSION/);
+  assert.match(source, /new root\.MutationObserver\(scheduleMountLauncher\)/);
 });
 
 test('淘宝原生抽屉连续 DOM 更新会合并为一次媒体同步', () => {

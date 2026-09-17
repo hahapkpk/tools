@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.23
+// @version      0.5.24
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -157,7 +157,7 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.23';
+  const SCRIPT_VERSION = '0.5.24';
   const WHEEL_SHIFT_COOLDOWN = 320;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;
@@ -425,6 +425,35 @@
     return url.startsWith('//') ? `https:${url}` : url;
   }
 
+  function taobaoOriginalMediaUrl(url) {
+    const value = absoluteMediaUrl(url);
+    if (!value) return '';
+    try {
+      const parsed = new URL(value, root.location?.href || 'https://item.taobao.com/');
+      if (!/(?:alicdn|taobao|tbcdn|tmall)\.com$/i.test(parsed.hostname)) return value;
+      parsed.hash = '';
+      parsed.search = '';
+      parsed.pathname = parsed.pathname.replace(/(\.(?:jpe?g|png|gif|webp))(?:_.+)$/i, '$1');
+      return parsed.toString();
+    } catch (error) {
+      return value;
+    }
+  }
+
+  function taobaoThumbnailUrl(url, size = 480) {
+    const original = taobaoOriginalMediaUrl(url);
+    if (!original) return '';
+    try {
+      const parsed = new URL(original, root.location?.href || 'https://item.taobao.com/');
+      if (!/(?:alicdn|taobao|tbcdn|tmall)\.com$/i.test(parsed.hostname)) return '';
+      const edge = Math.max(240, Math.min(960, Math.round(Number(size) || 480)));
+      parsed.pathname = `${parsed.pathname}_${edge}x${edge}q90.jpg_.webp`;
+      return parsed.toString();
+    } catch (error) {
+      return '';
+    }
+  }
+
   function getTaobaoCommentState(element) {
     const fiberKey = Object.keys(element).find((key) => key.startsWith('__reactFiber'));
     let fiber = fiberKey ? element[fiberKey] : null;
@@ -458,7 +487,8 @@
     const meta = getTaobaoMeta(review);
     const reviewKey = String(review.id || review.rateId || info.id || info.reviewId || '');
     (info.picList || []).forEach((src) => {
-      items.push({ type: 'image', src: absoluteMediaUrl(src), poster: '', text, meta, ...(reviewKey ? { reviewKey } : {}) });
+      const original = taobaoOriginalMediaUrl(src);
+      items.push({ type: 'image', src: original, poster: taobaoThumbnailUrl(original), text, meta, ...(reviewKey ? { reviewKey } : {}) });
     });
     appendTaobaoVideos(items, info.videoList || [], text, meta, reviewKey);
   }
@@ -481,7 +511,8 @@
       video.playUrl
     ];
     const src = candidates.map(usableVideoUrl).find(Boolean) || '';
-    const poster = absoluteMediaUrl(video.cover || video.coverUrl || video.picUrl || video.poster || '');
+    const cover = absoluteMediaUrl(video.cover || video.coverUrl || video.picUrl || video.poster || '');
+    const poster = taobaoThumbnailUrl(cover) || cover;
     return { src, poster };
   }
 
@@ -518,15 +549,17 @@
       const videos = state?.reviewInfo?.videoList || [];
       if (pictures.length || videos.length) {
         pictures.forEach((src) => {
-          items.push({ type: 'image', src: absoluteMediaUrl(src), poster: '', text, meta });
+          const original = taobaoOriginalMediaUrl(src);
+          items.push({ type: 'image', src: original, poster: taobaoThumbnailUrl(original), text, meta });
         });
         appendTaobaoVideos(items, videos, text, meta);
         return;
       }
       comment.querySelectorAll('[class*="album--"] img').forEach((img) => {
-        const src = absoluteMediaUrl(getMediaSource(img));
-        if (!src || !/rate|uploaded/i.test(src)) return;
-        items.push({ type: 'image', src, poster: '', text, meta });
+        const renderedSrc = absoluteMediaUrl(getMediaSource(img));
+        if (!renderedSrc || !/rate|uploaded/i.test(renderedSrc)) return;
+        const src = taobaoOriginalMediaUrl(renderedSrc);
+        items.push({ type: 'image', src, poster: taobaoThumbnailUrl(src) || renderedSrc, text, meta });
       });
     });
     return items;
@@ -2059,13 +2092,24 @@
     const wallController = createWallController(adapter);
     addStyles(doc);
 
+    let mountFrame = null;
     function mountLauncher() {
+      const existing = doc.getElementById(IDS.launcher);
+      if (existing?.isConnected && existing.dataset.rmwVersion === SCRIPT_VERSION) return existing;
       const mount = adapter.findMount(doc);
-      if (mount) ensureLauncher(mount, () => openWall(doc, adapter, wallSession, wallController));
+      return mount ? ensureLauncher(mount, () => openWall(doc, adapter, wallSession, wallController)) : null;
+    }
+    function scheduleMountLauncher() {
+      if (mountFrame) return;
+      const scheduleFrame = root.requestAnimationFrame || ((callback) => root.setTimeout(callback, 16));
+      mountFrame = scheduleFrame(() => {
+        mountFrame = null;
+        mountLauncher();
+      });
     }
     mountLauncher();
     if (root.MutationObserver) {
-      const observer = new root.MutationObserver(mountLauncher);
+      const observer = new root.MutationObserver(scheduleMountLauncher);
       observer.observe(doc.documentElement, { childList: true, subtree: true });
     }
   }
@@ -2092,6 +2136,8 @@
     shouldPreloadThumb,
     updateVideoThumbSource,
     createPreviewImageCache,
+    taobaoOriginalMediaUrl,
+    taobaoThumbnailUrl,
     isSignedJdRequest,
     ensureLauncher,
     init
