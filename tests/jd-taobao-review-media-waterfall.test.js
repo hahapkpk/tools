@@ -627,9 +627,9 @@ test('图片墙每次按网格列宽设置统一卡片高度避免京东行高�
   assert.doesNotMatch(source, /ResizeObserver[\s\S]{0,160}sizeGridCards/);
 });
 
-test('图片墙大量媒体采用前后三屏缓冲虚拟化渲染', () => {
+test('图片墙大量媒体采用前后两屏缓冲虚拟化渲染', () => {
   assert.match(source, /const VIRTUALIZE_THRESHOLD = 60/);
-  assert.match(source, /const VIRTUAL_BUFFER_SCREENS = 3/);
+  assert.match(source, /const VIRTUAL_BUFFER_SCREENS = 2/);
   assert.match(source, /function getVirtualWindow/);
   assert.match(source, /gridTemplateColumns/);
   assert.match(source, /function setVirtualWindowState/);
@@ -657,7 +657,8 @@ test('图片墙滚动在虚拟窗口未变化时不清空重建卡片以避免�
   assert.match(source, /grid\.dataset\.renderSignature === signature/);
   assert.match(source, /setVirtualWindowState\(grid, windowInfo\);[\s\S]*if \(grid\.dataset\.renderSignature === signature\) return;/);
   assert.match(source, /if \(grid\.dataset\.renderSignature === signature\) return;/);
-  assert.match(source, /grid\.dataset\.renderSignature = signature;[\s\S]*grid\.textContent = '';/);
+  assert.match(source, /const fragment = doc\.createDocumentFragment\(\)/);
+  assert.match(source, /grid\.replaceChildren\(fragment\)/);
   assert.match(source, /const previousScrollTop = grid\.scrollTop/);
   assert.match(source, /grid\.scrollTop = previousScrollTop/);
 });
@@ -854,11 +855,16 @@ test('预览图片与文字之间提供可拖动并可双击复位的分隔条',
   assert.match(source, /resizer\.addEventListener\('dblclick'/);
 });
 
-test('预览图片区域支持滚轮切换上一张和下一张并防止连续跳图', () => {
+test('预览图片区域使用滚轮围绕鼠标位置缩放且不再切换媒体', () => {
   assert.match(source, /mediaBox\.addEventListener\('wheel'/);
   assert.match(source, /\{ passive: false \}/);
-  assert.match(source, /event\.deltaY > 0 \? 1 : -1/);
-  assert.match(source, /WHEEL_SHIFT_COOLDOWN/);
+  assert.match(source, /const PREVIEW_ZOOM_MIN = 1/);
+  assert.match(source, /const PREVIEW_ZOOM_MAX = 5/);
+  assert.match(source, /const PREVIEW_ZOOM_STEP = 0\.2/);
+  assert.match(source, /event\.clientX - bounds\.left/);
+  assert.match(source, /event\.clientY - bounds\.top/);
+  assert.match(source, /media\.style\.transform = `scale\(\$\{scale\}\)`/);
+  assert.doesNotMatch(source, /lastPreviewWheelShift|WHEEL_SHIFT_COOLDOWN/);
   assert.match(source, /event\.preventDefault\(\)/);
 });
 
@@ -942,7 +948,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.24/);
+  assert.match(source, /@version\s+0\.5\.25/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
@@ -1176,7 +1182,7 @@ test('筛选同步和关闭会使迟到的定时加载任务失效', () => {
   assert.match(source, /if \(!isCurrentTask\(generation\)\) return/);
   assert.match(source, /currentProduct\.addEventListener\('click', \(\) => \{\s*const generation = nextTaskGeneration\(\)/);
   assert.match(source, /sync\.addEventListener\('click', \(\) => \{\s*const generation = nextTaskGeneration\(\)/);
-  assert.match(source, /dismissed = true;\s*nextTaskGeneration\(\)/);
+  assert.match(source, /dismissed = true;[\s\S]{0,260}taskGeneration \+= 1/);
 });
 
 test('网格尺寸变化和卡片大小切换会按当前图片锚点校准滚动位置', () => {
@@ -1239,6 +1245,20 @@ test('淘宝图片墙先使用页面已有评价媒体并在需要更多内容�
   assert.match(source, /initialPageItems = adapter\.collectMedia\(doc\)/);
   assert.match(source, /if \(!adapter\.deferNativeOpen \|\| !initialPageItems\.length\)/);
   assert.match(source, /if \(!nativeRoot\) \{\s*requestNativeReviews\(0\);\s*return;/);
+});
+
+test('弹窗先显示轻量外壳再延后扫描和渲染媒体', () => {
+  assert.match(source, /loaded\.textContent = '准备中\.\.\.'/);
+  assert.match(source, /grid\.appendChild\(makeElement\(doc, 'div', 'rmw-status', '正在读取评价图片\.\.\.'\)\)/);
+  assert.match(source, /function scheduleBootstrap\(\)/);
+  assert.match(source, /bootstrapTimer = root\.setTimeout\(bootstrapMedia, 0\)/);
+  assert.match(source, /scheduleBootstrap\(\);/);
+});
+
+test('关闭操作先移除弹窗再异步清理后台资源', () => {
+  assert.match(source, /state\.closeWall\(\);\s*backdrop\.remove\(\);\s*taskGeneration \+= 1;/);
+  assert.match(source, /root\.setTimeout\(\(\) => \{[\s\S]*adapter\.closeNativeReviews/);
+  assert.match(source, /close\.addEventListener\('pointerdown'/);
 });
 
 test('入口挂载观察器按帧合并并在入口存在时跳过重复查询', () => {

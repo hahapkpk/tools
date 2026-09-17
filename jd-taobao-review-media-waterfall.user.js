@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.24
+// @version      0.5.25
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -157,8 +157,10 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.24';
-  const WHEEL_SHIFT_COOLDOWN = 320;
+  const SCRIPT_VERSION = '0.5.25';
+  const PREVIEW_ZOOM_MIN = 1;
+  const PREVIEW_ZOOM_MAX = 5;
+  const PREVIEW_ZOOM_STEP = 0.2;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;
   const AUTO_LOAD_SCROLL_PULSES = 4;
@@ -166,13 +168,13 @@
   const AUTO_LOAD_MAX_ROUNDS = 240;
   const AUTO_LOAD_IDLE_LIMIT = 12;
   const VIRTUALIZE_THRESHOLD = 60;
-  const VIRTUAL_BUFFER_SCREENS = 3;
+  const VIRTUAL_BUFFER_SCREENS = 2;
   const THUMB_PREFETCH_SCREENS = 2;
   const FAST_SCROLL_THRESHOLD = 1800;
   const THUMB_RETRY_LIMIT = 2;
   const THUMB_RETRY_DELAY = 450;
   const PREVIEW_CACHE_LIMIT = 12;
-  let lastPreviewWheelShift = 0;
+  let previewZoomState = { src: '', scale: PREVIEW_ZOOM_MIN, originX: 50, originY: 50 };
   let slideshowTimer = null;
   let slideshowActive = false;
 
@@ -1104,9 +1106,10 @@
 #${IDS.preview} { position:absolute; inset:0; z-index:2; display:flex; align-items:center; justify-content:center; padding:34px; background:rgba(0,0,0,.82); }
 .rmw-preview-content { display:flex; max-width:min(1280px,90vw); max-height:86vh; border-radius:12px; overflow:hidden; background:#111; }
 .rmw-preview-content.is-collapsed .rmw-context { display:none; }
-.rmw-preview-media { position:relative; display:flex; flex:1 1 0; align-items:center; justify-content:center; width:min(900px,68vw); min-width:300px; height:84vh; background:#000; overflow:hidden; }
+.rmw-preview-media { position:relative; display:flex; flex:1 1 0; align-items:center; justify-content:center; width:min(900px,68vw); min-width:300px; height:84vh; background:#000; overflow:hidden; cursor:zoom-in; }
 .rmw-preview-content.is-collapsed .rmw-preview-media { width:min(1240px,86vw); }
-.rmw-preview-media img, .rmw-preview-media video { display:block; width:100%; height:100%; object-fit:contain; }
+.rmw-preview-media.is-zoomed { cursor:zoom-out; }
+.rmw-preview-media img, .rmw-preview-media video { display:block; width:100%; height:100%; object-fit:contain; transition:transform .12s ease-out; will-change:transform; }
 .rmw-counter { position:absolute; top:14px; left:50%; transform:translateX(-50%); padding:6px 14px; border-radius:18px; background:rgba(0,0,0,.58); color:#fff; font-size:14px; }
 .rmw-preview-tools { position:absolute; top:12px; right:12px; z-index:2; display:flex; gap:8px; }
 .rmw-preview-nav { position:absolute; top:50%; z-index:1; transform:translateY(-50%); width:52px; height:72px; border:0; border-radius:28px; background:rgba(0,0,0,.5); color:#fff; font-size:36px; line-height:1; cursor:pointer; }
@@ -1148,6 +1151,9 @@
     const mediaBox = makeElement(doc, 'div', 'rmw-preview-media', '');
     mediaBox.appendChild(makeElement(doc, 'span', 'rmw-counter', `${snapshot.previewPosition} / ${snapshot.previewTotal}`));
     const media = doc.createElement(item.type === 'video' ? 'video' : 'img');
+    if (previewZoomState.src !== item.src) {
+      previewZoomState = { src: item.src, scale: PREVIEW_ZOOM_MIN, originX: 50, originY: 50 };
+    }
     if (media.tagName === 'IMG') {
       const previewSrc = item.poster || item.src;
       media.decoding = 'async';
@@ -1173,6 +1179,13 @@
       if (item.poster) media.poster = item.poster;
     }
     mediaBox.appendChild(media);
+    function applyPreviewZoom() {
+      const { scale, originX, originY } = previewZoomState;
+      media.style.transformOrigin = `${originX}% ${originY}%`;
+      media.style.transform = `scale(${scale})`;
+      mediaBox.classList.toggle('is-zoomed', scale > PREVIEW_ZOOM_MIN);
+    }
+    applyPreviewZoom();
     const resizer = makeElement(doc, 'div', 'rmw-context-resizer', '');
     resizer.title = '拖动调整评价区域宽度，双击恢复默认宽度';
     const context = makeElement(doc, 'aside', 'rmw-context', '');
@@ -1249,6 +1262,7 @@
     overlay.appendChild(content);
     function shift(delta) {
       if (slideshowTimer) { clearTimeout(slideshowTimer); slideshowTimer = null; }
+      previewZoomState = { src: '', scale: PREVIEW_ZOOM_MIN, originX: 50, originY: 50 };
       state.shiftPreview(delta);
       session.rememberView({ previewKey: state.snapshot().preview?.src || '' });
       const nextSnapshot = state.snapshot();
@@ -1260,15 +1274,23 @@
       renderPreview(doc, modal, state, session, onReturn);
     }
     mediaBox.addEventListener('wheel', (event) => {
-      if (Math.abs(event.deltaY) < 8) return;
+      if (Math.abs(event.deltaY) < 1) return;
       event.preventDefault();
-      const now = Date.now();
-      if (now - lastPreviewWheelShift < WHEEL_SHIFT_COOLDOWN) return;
-      const delta = event.deltaY > 0 ? 1 : -1;
-      const current = state.snapshot();
-      if ((delta < 0 && !current.canPrevious) || (delta > 0 && !current.canNext)) return;
-      lastPreviewWheelShift = now;
-      shift(delta);
+      const bounds = mediaBox.getBoundingClientRect();
+      const originX = bounds.width ? Math.max(0, Math.min(100, ((event.clientX - bounds.left) / bounds.width) * 100)) : 50;
+      const originY = bounds.height ? Math.max(0, Math.min(100, ((event.clientY - bounds.top) / bounds.height) * 100)) : 50;
+      const direction = event.deltaY < 0 ? 1 : -1;
+      const nextScale = Math.max(
+        PREVIEW_ZOOM_MIN,
+        Math.min(PREVIEW_ZOOM_MAX, previewZoomState.scale + direction * PREVIEW_ZOOM_STEP)
+      );
+      previewZoomState = {
+        src: item.src,
+        scale: Math.round(nextScale * 10) / 10,
+        originX,
+        originY
+      };
+      applyPreviewZoom();
     }, { passive: false });
     if (snapshot.canPrevious) {
       const previousButton = makeElement(doc, 'button', 'rmw-preview-nav rmw-preview-prev', '‹');
@@ -1289,6 +1311,7 @@
       event.preventDefault();
       if (slideshowTimer) { clearTimeout(slideshowTimer); slideshowTimer = null; }
       slideshowActive = false;
+      previewZoomState = { src: '', scale: PREVIEW_ZOOM_MIN, originX: 50, originY: 50 };
       state.onBackdrop();
       renderPreview(doc, modal, state, session, onReturn);
       onReturn();
@@ -1299,6 +1322,7 @@
       if (event.key === 'Escape') {
         if (slideshowTimer) { clearTimeout(slideshowTimer); slideshowTimer = null; }
         slideshowActive = false;
+        previewZoomState = { src: '', scale: PREVIEW_ZOOM_MIN, originX: 50, originY: 50 };
         state.onBackdrop();
         renderPreview(doc, modal, state, session, onReturn);
         onReturn();
@@ -1449,11 +1473,11 @@
     if (grid.dataset.renderSignature === signature) return;
     const previousScrollTop = grid.scrollTop;
     grid.dataset.renderSignature = signature;
-    grid.textContent = '';
+    const fragment = doc.createDocumentFragment();
     if (!items.length) {
-      grid.appendChild(makeElement(doc, 'div', 'rmw-status', emptyMessage));
+      fragment.appendChild(makeElement(doc, 'div', 'rmw-status', emptyMessage));
     } else {
-      appendVirtualSpacer(doc, grid, Number(grid.dataset.virtualTop) || 0, 'top');
+      appendVirtualSpacer(doc, fragment, Number(grid.dataset.virtualTop) || 0, 'top');
       items.slice(windowInfo.start, windowInfo.end).forEach((item, offset) => {
       const index = windowInfo.start + offset;
       const card = makeElement(doc, 'div', 'rmw-card', '');
@@ -1499,9 +1523,9 @@
           openPreview();
         }
       });
-      grid.appendChild(card);
+      fragment.appendChild(card);
     });
-      appendVirtualSpacer(doc, grid, Number(grid.dataset.virtualBottom) || 0, 'bottom');
+      appendVirtualSpacer(doc, fragment, Number(grid.dataset.virtualBottom) || 0, 'bottom');
     }
     const shouldShowStatus = !windowInfo.virtualized || windowInfo.end >= items.length || loadingState === 'error';
     if (shouldShowStatus) {
@@ -1512,8 +1536,9 @@
         retry.addEventListener('click', onRetry);
         status.appendChild(retry);
       }
-      grid.appendChild(status);
+      fragment.appendChild(status);
     }
+    grid.replaceChildren(fragment);
     if (windowInfo.virtualized && Math.abs(grid.scrollTop - previousScrollTop) > 1) {
       grid.scrollTop = previousScrollTop;
     }
@@ -1607,10 +1632,15 @@
     modal.appendChild(grid);
     backdrop.appendChild(modal);
     doc.body.appendChild(backdrop);
+    loaded.textContent = '准备中...';
+    grid.appendChild(makeElement(doc, 'div', 'rmw-status', '正在读取评价图片...'));
+    modal.focus();
 
     let nativeRoot = null;
     let nativeOpenRequested = false;
     let nativeOpenTimer = null;
+    let bootstrapFrame = null;
+    let bootstrapTimer = null;
     let mediaSyncTimer = null;
     let disconnect = null;
     let attempts = 0;
@@ -1778,14 +1808,6 @@
       });
     }
     let initialPageItems = [];
-    if (adapter.allowPageFallback) {
-      initialPageItems = adapter.collectMedia(doc);
-      if (initialPageItems.length) {
-        controller.append(initialPageItems);
-        mediaStats.lastAdded = initialPageItems.length;
-        renderWall('正在准备更多评价图片...');
-      }
-    }
     function syncMedia(reset, generation = taskGeneration) {
       if (!isCurrentTask(generation)) return false;
       nativeRoot = adapter.findNativeRoot(doc);
@@ -1937,18 +1959,40 @@
         nativeOpenRequested = false;
       }
     }
-    lastGridWidth = grid.clientWidth;
-    lastGridHeight = grid.clientHeight;
-    if (root.ResizeObserver) {
-      layoutResizeObserver = new root.ResizeObserver(() => scheduleLayoutCalibration(layoutAnchor));
-      layoutResizeObserver.observe(grid);
+    function bootstrapMedia() {
+      bootstrapTimer = null;
+      if (dismissed) return;
+      if (adapter.allowPageFallback) {
+        initialPageItems = adapter.collectMedia(doc);
+        if (initialPageItems.length) {
+          controller.append(initialPageItems);
+          mediaStats.lastAdded = initialPageItems.length;
+          renderWall('正在准备更多评价图片...');
+        }
+      }
+      if (!initialPageItems.length) renderWall('正在等待原生评价窗口加载...');
+      lastGridWidth = grid.clientWidth;
+      lastGridHeight = grid.clientHeight;
+      if (root.ResizeObserver) {
+        layoutResizeObserver = new root.ResizeObserver(() => scheduleLayoutCalibration(layoutAnchor));
+        layoutResizeObserver.observe(grid);
+      }
+      if (!adapter.deferNativeOpen || !initialPageItems.length) {
+        requestNativeReviews(80);
+      } else {
+        root.setTimeout(() => {
+          if (!dismissed && grid.scrollHeight <= grid.clientHeight + AUTO_LOAD_NEAR_BOTTOM) requestNativeReviews(0);
+        }, 300);
+      }
     }
-    if (!adapter.deferNativeOpen || !initialPageItems.length) {
-      requestNativeReviews(80);
-    } else {
-      root.setTimeout(() => {
-        if (!dismissed && grid.scrollHeight <= grid.clientHeight + AUTO_LOAD_NEAR_BOTTOM) requestNativeReviews(0);
-      }, 300);
+
+    function scheduleBootstrap() {
+      const scheduleFrame = root.requestAnimationFrame || ((callback) => root.setTimeout(callback, 16));
+      bootstrapFrame = scheduleFrame(() => {
+        bootstrapFrame = null;
+        if (dismissed) return;
+        bootstrapTimer = root.setTimeout(bootstrapMedia, 0);
+      });
     }
 
     function waitForCurrentProductFilter(generation) {
@@ -2047,23 +2091,34 @@
       if (!syncMedia(true, generation)) requestNativeReviews(0);
     });
     function dismissWall() {
+      if (dismissed) return;
       dismissed = true;
-      nextTaskGeneration();
-      stopAutoLoad();
-      if (nativeOpenTimer) root.clearTimeout(nativeOpenTimer);
-      if (mediaSyncTimer) root.clearTimeout(mediaSyncTimer);
-      if (virtualRenderFrame) (root.cancelAnimationFrame?.(virtualRenderFrame) || root.clearTimeout(virtualRenderFrame));
-      if (layoutRenderFrame) (root.cancelAnimationFrame?.(layoutRenderFrame) || root.clearTimeout(layoutRenderFrame));
-      if (slideshowTimer) { clearTimeout(slideshowTimer); slideshowTimer = null; }
-      slideshowActive = false;
-      disconnect?.();
-      layoutResizeObserver?.disconnect();
-      stopCapture?.();
       wallSession.rememberView({ scrollTop: grid.scrollTop, previewKey: wallSession.snapshot().previewKey });
+      previewZoomState = { src: '', scale: PREVIEW_ZOOM_MIN, originX: 50, originY: 50 };
       state.closeWall();
       backdrop.remove();
-      adapter.closeNativeReviews?.(nativeRoot || adapter.findNativeRoot(doc));
+      taskGeneration += 1;
+      root.setTimeout(() => {
+        stopAutoLoad();
+        if (bootstrapFrame) (root.cancelAnimationFrame?.(bootstrapFrame) || root.clearTimeout(bootstrapFrame));
+        if (bootstrapTimer) root.clearTimeout(bootstrapTimer);
+        if (nativeOpenTimer) root.clearTimeout(nativeOpenTimer);
+        if (mediaSyncTimer) root.clearTimeout(mediaSyncTimer);
+        if (virtualRenderFrame) (root.cancelAnimationFrame?.(virtualRenderFrame) || root.clearTimeout(virtualRenderFrame));
+        if (layoutRenderFrame) (root.cancelAnimationFrame?.(layoutRenderFrame) || root.clearTimeout(layoutRenderFrame));
+        if (slideshowTimer) { clearTimeout(slideshowTimer); slideshowTimer = null; }
+        slideshowActive = false;
+        disconnect?.();
+        layoutResizeObserver?.disconnect();
+        stopCapture?.();
+        adapter.closeNativeReviews?.(nativeRoot || adapter.findNativeRoot(doc));
+      }, 0);
     }
+    close.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      dismissWall();
+    });
     close.addEventListener('click', dismissWall);
     backdrop.addEventListener('click', (event) => {
       if (event.target !== backdrop) return;
@@ -2080,6 +2135,7 @@
       if (event.key !== 'Escape' || state.snapshot().preview) return;
       dismissWall();
     });
+    scheduleBootstrap();
   }
 
   function init() {
