@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.25
+// @version      0.5.26
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -157,7 +157,7 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.25';
+  const SCRIPT_VERSION = '0.5.26';
   const PREVIEW_ZOOM_MIN = 1;
   const PREVIEW_ZOOM_MAX = 5;
   const PREVIEW_ZOOM_STEP = 0.2;
@@ -177,6 +177,11 @@
   let previewZoomState = { src: '', scale: PREVIEW_ZOOM_MIN, originX: 50, originY: 50 };
   let slideshowTimer = null;
   let slideshowActive = false;
+
+  function scheduleAnimationFrame(callback) {
+    if (typeof root.requestAnimationFrame === 'function') return root.requestAnimationFrame(callback);
+    return root.setTimeout(callback, 16);
+  }
 
   function clampContextWidth(value) {
     return Math.max(MIN_CONTEXT_WIDTH, Math.min(MAX_CONTEXT_WIDTH, Math.round(Number(value) || DEFAULT_CONTEXT_WIDTH)));
@@ -1764,16 +1769,14 @@
     }
     function scheduleVirtualRender() {
       if (controller.items().length <= VIRTUALIZE_THRESHOLD || virtualRenderFrame) return;
-      const scheduleFrame = root.requestAnimationFrame || ((callback) => root.setTimeout(callback, 16));
-      virtualRenderFrame = scheduleFrame(() => {
+      virtualRenderFrame = scheduleAnimationFrame(() => {
         virtualRenderFrame = null;
         renderWall('当前筛选尚未加载出图片/视频，请在原评价窗口切换筛选或滚动后重试。');
       });
     }
     function scheduleLayoutCalibration(anchor = layoutAnchor) {
       if (layoutRenderFrame) return;
-      const scheduleFrame = root.requestAnimationFrame || ((callback) => root.setTimeout(callback, 16));
-      layoutRenderFrame = scheduleFrame(() => {
+      layoutRenderFrame = scheduleAnimationFrame(() => {
         layoutRenderFrame = null;
         if (dismissed) return;
         const width = grid.clientWidth;
@@ -1987,8 +1990,7 @@
     }
 
     function scheduleBootstrap() {
-      const scheduleFrame = root.requestAnimationFrame || ((callback) => root.setTimeout(callback, 16));
-      bootstrapFrame = scheduleFrame(() => {
+      bootstrapFrame = scheduleAnimationFrame(() => {
         bootstrapFrame = null;
         if (dismissed) return;
         bootstrapTimer = root.setTimeout(bootstrapMedia, 0);
@@ -2157,8 +2159,7 @@
     }
     function scheduleMountLauncher() {
       if (mountFrame) return;
-      const scheduleFrame = root.requestAnimationFrame || ((callback) => root.setTimeout(callback, 16));
-      mountFrame = scheduleFrame(() => {
+      mountFrame = scheduleAnimationFrame(() => {
         mountFrame = null;
         mountLauncher();
       });

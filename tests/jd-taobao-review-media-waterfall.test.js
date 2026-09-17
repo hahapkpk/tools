@@ -948,7 +948,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.25/);
+  assert.match(source, /@version\s+0\.5\.26/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
@@ -1251,6 +1251,7 @@ test('弹窗先显示轻量外壳再延后扫描和渲染媒体', () => {
   assert.match(source, /loaded\.textContent = '准备中\.\.\.'/);
   assert.match(source, /grid\.appendChild\(makeElement\(doc, 'div', 'rmw-status', '正在读取评价图片\.\.\.'\)\)/);
   assert.match(source, /function scheduleBootstrap\(\)/);
+  assert.match(source, /bootstrapFrame = scheduleAnimationFrame\(\(\) => \{/);
   assert.match(source, /bootstrapTimer = root\.setTimeout\(bootstrapMedia, 0\)/);
   assert.match(source, /scheduleBootstrap\(\);/);
 });
@@ -1262,6 +1263,9 @@ test('关闭操作先移除弹窗再异步清理后台资源', () => {
 });
 
 test('入口挂载观察器按帧合并并在入口存在时跳过重复查询', () => {
+  assert.match(source, /function scheduleAnimationFrame\(callback\)/);
+  assert.match(source, /root\.requestAnimationFrame\(callback\)/);
+  assert.doesNotMatch(source, /const scheduleFrame = root\.requestAnimationFrame/);
   assert.match(source, /function scheduleMountLauncher\(\)/);
   assert.match(source, /if \(mountFrame\) return/);
   assert.match(source, /existing\?\.isConnected && existing\.dataset\.rmwVersion === SCRIPT_VERSION/);
