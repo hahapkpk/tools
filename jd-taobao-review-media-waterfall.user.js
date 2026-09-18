@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.28
+// @version      0.5.29
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -157,7 +157,7 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.28';
+  const SCRIPT_VERSION = '0.5.29';
   const PREVIEW_ZOOM_MIN = 1;
   const PREVIEW_ZOOM_MAX = 5;
   const PREVIEW_ZOOM_STEP = 0.2;
@@ -188,6 +188,15 @@
       return root.requestAnimationFrame(callback);
     }
     return root.setTimeout(callback, 0);
+  }
+
+  function cancelScheduledAnimationFrame(handle) {
+    if (handle == null) return;
+    if (typeof root.cancelAnimationFrame === 'function' && root.document?.visibilityState !== 'hidden') {
+      root.cancelAnimationFrame(handle);
+      return;
+    }
+    root.clearTimeout(handle);
   }
 
   function clampContextWidth(value) {
@@ -1203,10 +1212,15 @@
       previewZoomState = createPreviewZoomState(item.src);
       applyPreviewZoom();
     }
-    function clampPreviewOffset(offsetX, offsetY, scale = previewZoomState.scale) {
+    function getPreviewOffsetBounds(scale = previewZoomState.scale) {
       const bounds = mediaBox.getBoundingClientRect();
-      const maxOffsetX = Math.max(0, (bounds.width * (scale - 1)) / 2);
-      const maxOffsetY = Math.max(0, (bounds.height * (scale - 1)) / 2);
+      return {
+        maxOffsetX: Math.max(0, (bounds.width * (scale - 1)) / 2),
+        maxOffsetY: Math.max(0, (bounds.height * (scale - 1)) / 2)
+      };
+    }
+    function clampPreviewOffset(offsetX, offsetY, scale = previewZoomState.scale, offsetBounds = getPreviewOffsetBounds(scale)) {
+      const { maxOffsetX, maxOffsetY } = offsetBounds;
       return {
         offsetX: Math.max(-maxOffsetX, Math.min(maxOffsetX, offsetX)),
         offsetY: Math.max(-maxOffsetY, Math.min(maxOffsetY, offsetY))
@@ -1300,20 +1314,23 @@
       }
       renderPreview(doc, modal, state, session, onReturn);
     }
-    mediaBox.addEventListener('wheel', (event) => {
-      if (Math.abs(event.deltaY) < 1) return;
-      event.preventDefault();
+    let previewWheelFrame = null;
+    let pendingPreviewWheel = null;
+    function flushPreviewWheel() {
+      previewWheelFrame = null;
+      const wheel = pendingPreviewWheel;
+      pendingPreviewWheel = null;
+      if (!wheel) return;
       const bounds = mediaBox.getBoundingClientRect();
-      const originX = bounds.width ? Math.max(0, Math.min(100, ((event.clientX - bounds.left) / bounds.width) * 100)) : 50;
-      const originY = bounds.height ? Math.max(0, Math.min(100, ((event.clientY - bounds.top) / bounds.height) * 100)) : 50;
-      const direction = event.deltaY < 0 ? 1 : -1;
+      const originX = bounds.width ? Math.max(0, Math.min(100, ((wheel.clientX - bounds.left) / bounds.width) * 100)) : 50;
+      const originY = bounds.height ? Math.max(0, Math.min(100, ((wheel.clientY - bounds.top) / bounds.height) * 100)) : 50;
       const nextScale = Math.max(
         PREVIEW_ZOOM_MIN,
-        Math.min(PREVIEW_ZOOM_MAX, previewZoomState.scale + direction * PREVIEW_ZOOM_STEP)
+        Math.min(PREVIEW_ZOOM_MAX, previewZoomState.scale + wheel.steps * PREVIEW_ZOOM_STEP)
       );
       const nextOffsets = nextScale <= PREVIEW_ZOOM_MIN
         ? { offsetX: 0, offsetY: 0 }
-        : clampPreviewOffset(previewZoomState.offsetX, previewZoomState.offsetY, nextScale);
+        : clampPreviewOffset(previewZoomState.offsetX, previewZoomState.offsetY, nextScale, getPreviewOffsetBounds(nextScale));
       previewZoomState = {
         src: item.src,
         scale: Math.round(nextScale * 10) / 10,
@@ -1322,9 +1339,32 @@
         ...nextOffsets
       };
       applyPreviewZoom();
+    }
+    mediaBox.addEventListener('wheel', (event) => {
+      if (Math.abs(event.deltaY) < 1) return;
+      event.preventDefault();
+      const direction = event.deltaY < 0 ? 1 : -1;
+      pendingPreviewWheel = pendingPreviewWheel
+        ? { ...pendingPreviewWheel, clientX: event.clientX, clientY: event.clientY, steps: pendingPreviewWheel.steps + direction }
+        : { clientX: event.clientX, clientY: event.clientY, steps: direction };
+      if (!previewWheelFrame) previewWheelFrame = scheduleAnimationFrame(flushPreviewWheel);
     }, { passive: false });
     let previewDrag = null;
     let suppressPreviewClick = false;
+    function flushPreviewDrag(drag = previewDrag) {
+      if (!drag || !drag.pending) return;
+      const { deltaX, deltaY } = drag.pending;
+      drag.pending = null;
+      drag.frame = null;
+      const offsets = clampPreviewOffset(
+        drag.offsetX + deltaX,
+        drag.offsetY + deltaY,
+        previewZoomState.scale,
+        drag.offsetBounds
+      );
+      previewZoomState = { ...previewZoomState, ...offsets };
+      applyPreviewZoom();
+    }
     media.addEventListener('pointerdown', (event) => {
       if (media.tagName !== 'IMG' || event.button !== 0 || previewZoomState.scale <= PREVIEW_ZOOM_MIN) return;
       event.preventDefault();
@@ -1334,6 +1374,9 @@
         startY: event.clientY,
         offsetX: previewZoomState.offsetX,
         offsetY: previewZoomState.offsetY,
+        offsetBounds: getPreviewOffsetBounds(previewZoomState.scale),
+        frame: null,
+        pending: null,
         moved: false
       };
       mediaBox.classList.add('is-dragging');
@@ -1348,12 +1391,13 @@
       const deltaX = event.clientX - previewDrag.startX;
       const deltaY = event.clientY - previewDrag.startY;
       if (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3) previewDrag.moved = true;
-      const offsets = clampPreviewOffset(previewDrag.offsetX + deltaX, previewDrag.offsetY + deltaY);
-      previewZoomState = { ...previewZoomState, ...offsets };
-      applyPreviewZoom();
+      previewDrag.pending = { deltaX, deltaY };
+      if (!previewDrag.frame) previewDrag.frame = scheduleAnimationFrame(() => flushPreviewDrag());
     });
     function finishPreviewDrag(event) {
       if (!previewDrag || event.pointerId !== previewDrag.pointerId) return;
+      if (previewDrag.frame) cancelScheduledAnimationFrame(previewDrag.frame);
+      flushPreviewDrag();
       suppressPreviewClick = previewDrag.moved;
       previewDrag = null;
       mediaBox.classList.remove('is-dragging');

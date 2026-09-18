@@ -862,10 +862,15 @@ test('预览图片区域支持单击默认放大、再次单击恢复、滚轮�
   assert.match(source, /const PREVIEW_ZOOM_MAX = 5/);
   assert.match(source, /const PREVIEW_ZOOM_STEP = 0\.2/);
   assert.match(source, /const PREVIEW_CLICK_ZOOM = 2/);
-  assert.match(source, /event\.clientX - bounds\.left/);
-  assert.match(source, /event\.clientY - bounds\.top/);
+  assert.match(source, /wheel\.clientX - bounds\.left/);
+  assert.match(source, /wheel\.clientY - bounds\.top/);
   assert.match(source, /media\.style\.transform = `translate\(\$\{offsetX\}px, \$\{offsetY\}px\) scale\(\$\{scale\}\)`/);
-  assert.match(source, /function clampPreviewOffset\(offsetX, offsetY, scale = previewZoomState\.scale\)/);
+  assert.match(source, /function getPreviewOffsetBounds\(scale = previewZoomState\.scale\)/);
+  assert.match(source, /function clampPreviewOffset\(offsetX, offsetY, scale = previewZoomState\.scale, offsetBounds = getPreviewOffsetBounds\(scale\)\)/);
+  assert.match(source, /let previewWheelFrame = null/);
+  assert.match(source, /function flushPreviewWheel\(\)/);
+  assert.match(source, /function flushPreviewDrag\(drag = previewDrag\)/);
+  assert.match(source, /offsetBounds: getPreviewOffsetBounds\(previewZoomState\.scale\)/);
   assert.match(source, /media\.addEventListener\('pointerdown'/);
   assert.match(source, /media\.addEventListener\('pointermove'/);
   assert.match(source, /media\.addEventListener\('click'/);
@@ -956,7 +961,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.28/);
+  assert.match(source, /@version\s+0\.5\.29/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
