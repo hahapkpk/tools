@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.27
+// @version      0.5.28
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -157,10 +157,11 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.27';
+  const SCRIPT_VERSION = '0.5.28';
   const PREVIEW_ZOOM_MIN = 1;
   const PREVIEW_ZOOM_MAX = 5;
   const PREVIEW_ZOOM_STEP = 0.2;
+  const PREVIEW_CLICK_ZOOM = 2;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;
   const AUTO_LOAD_SCROLL_PULSES = 4;
@@ -174,7 +175,11 @@
   const THUMB_RETRY_LIMIT = 2;
   const THUMB_RETRY_DELAY = 450;
   const PREVIEW_CACHE_LIMIT = 12;
-  let previewZoomState = { src: '', scale: PREVIEW_ZOOM_MIN, originX: 50, originY: 50 };
+  function createPreviewZoomState(src = '') {
+    return { src, scale: PREVIEW_ZOOM_MIN, originX: 50, originY: 50, offsetX: 0, offsetY: 0 };
+  }
+
+  let previewZoomState = createPreviewZoomState();
   let slideshowTimer = null;
   let slideshowActive = false;
 
@@ -1115,8 +1120,11 @@
 .rmw-preview-content.is-collapsed .rmw-context { display:none; }
 .rmw-preview-media { position:relative; display:flex; flex:1 1 0; align-items:center; justify-content:center; width:min(900px,68vw); min-width:300px; height:84vh; background:#000; overflow:hidden; cursor:zoom-in; }
 .rmw-preview-content.is-collapsed .rmw-preview-media { width:min(1240px,86vw); }
-.rmw-preview-media.is-zoomed { cursor:zoom-out; }
+.rmw-preview-media.is-zoomed { cursor:grab; }
+.rmw-preview-media.is-dragging { cursor:grabbing; }
 .rmw-preview-media img, .rmw-preview-media video { display:block; width:100%; height:100%; object-fit:contain; transition:transform .12s ease-out; will-change:transform; }
+.rmw-preview-media.is-dragging img { transition:none; }
+.rmw-preview-media img { touch-action:none; user-select:none; }
 .rmw-counter { position:absolute; top:14px; left:50%; transform:translateX(-50%); padding:6px 14px; border-radius:18px; background:rgba(0,0,0,.58); color:#fff; font-size:14px; }
 .rmw-preview-tools { position:absolute; top:12px; right:12px; z-index:2; display:flex; gap:8px; }
 .rmw-preview-nav { position:absolute; top:50%; z-index:1; transform:translateY(-50%); width:52px; height:72px; border:0; border-radius:28px; background:rgba(0,0,0,.5); color:#fff; font-size:36px; line-height:1; cursor:pointer; }
@@ -1158,10 +1166,9 @@
     const mediaBox = makeElement(doc, 'div', 'rmw-preview-media', '');
     mediaBox.appendChild(makeElement(doc, 'span', 'rmw-counter', `${snapshot.previewPosition} / ${snapshot.previewTotal}`));
     const media = doc.createElement(item.type === 'video' ? 'video' : 'img');
-    if (previewZoomState.src !== item.src) {
-      previewZoomState = { src: item.src, scale: PREVIEW_ZOOM_MIN, originX: 50, originY: 50 };
-    }
+    if (previewZoomState.src !== item.src) previewZoomState = createPreviewZoomState(item.src);
     if (media.tagName === 'IMG') {
+      media.draggable = false;
       const previewSrc = item.poster || item.src;
       media.decoding = 'async';
       media.src = previewSrc;
@@ -1187,10 +1194,23 @@
     }
     mediaBox.appendChild(media);
     function applyPreviewZoom() {
-      const { scale, originX, originY } = previewZoomState;
+      const { scale, originX, originY, offsetX, offsetY } = previewZoomState;
       media.style.transformOrigin = `${originX}% ${originY}%`;
-      media.style.transform = `scale(${scale})`;
+      media.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
       mediaBox.classList.toggle('is-zoomed', scale > PREVIEW_ZOOM_MIN);
+    }
+    function resetPreviewZoom() {
+      previewZoomState = createPreviewZoomState(item.src);
+      applyPreviewZoom();
+    }
+    function clampPreviewOffset(offsetX, offsetY, scale = previewZoomState.scale) {
+      const bounds = mediaBox.getBoundingClientRect();
+      const maxOffsetX = Math.max(0, (bounds.width * (scale - 1)) / 2);
+      const maxOffsetY = Math.max(0, (bounds.height * (scale - 1)) / 2);
+      return {
+        offsetX: Math.max(-maxOffsetX, Math.min(maxOffsetX, offsetX)),
+        offsetY: Math.max(-maxOffsetY, Math.min(maxOffsetY, offsetY))
+      };
     }
     applyPreviewZoom();
     const resizer = makeElement(doc, 'div', 'rmw-context-resizer', '');
@@ -1269,7 +1289,7 @@
     overlay.appendChild(content);
     function shift(delta) {
       if (slideshowTimer) { clearTimeout(slideshowTimer); slideshowTimer = null; }
-      previewZoomState = { src: '', scale: PREVIEW_ZOOM_MIN, originX: 50, originY: 50 };
+      previewZoomState = createPreviewZoomState();
       state.shiftPreview(delta);
       session.rememberView({ previewKey: state.snapshot().preview?.src || '' });
       const nextSnapshot = state.snapshot();
@@ -1291,14 +1311,70 @@
         PREVIEW_ZOOM_MIN,
         Math.min(PREVIEW_ZOOM_MAX, previewZoomState.scale + direction * PREVIEW_ZOOM_STEP)
       );
+      const nextOffsets = nextScale <= PREVIEW_ZOOM_MIN
+        ? { offsetX: 0, offsetY: 0 }
+        : clampPreviewOffset(previewZoomState.offsetX, previewZoomState.offsetY, nextScale);
       previewZoomState = {
         src: item.src,
         scale: Math.round(nextScale * 10) / 10,
         originX,
-        originY
+        originY,
+        ...nextOffsets
       };
       applyPreviewZoom();
     }, { passive: false });
+    let previewDrag = null;
+    let suppressPreviewClick = false;
+    media.addEventListener('pointerdown', (event) => {
+      if (media.tagName !== 'IMG' || event.button !== 0 || previewZoomState.scale <= PREVIEW_ZOOM_MIN) return;
+      event.preventDefault();
+      previewDrag = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        offsetX: previewZoomState.offsetX,
+        offsetY: previewZoomState.offsetY,
+        moved: false
+      };
+      mediaBox.classList.add('is-dragging');
+      try {
+        media.setPointerCapture(event.pointerId);
+      } catch (error) {
+        // Pointer capture is optional; the image still receives ordinary mouse dragging.
+      }
+    });
+    media.addEventListener('pointermove', (event) => {
+      if (!previewDrag || event.pointerId !== previewDrag.pointerId) return;
+      const deltaX = event.clientX - previewDrag.startX;
+      const deltaY = event.clientY - previewDrag.startY;
+      if (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3) previewDrag.moved = true;
+      const offsets = clampPreviewOffset(previewDrag.offsetX + deltaX, previewDrag.offsetY + deltaY);
+      previewZoomState = { ...previewZoomState, ...offsets };
+      applyPreviewZoom();
+    });
+    function finishPreviewDrag(event) {
+      if (!previewDrag || event.pointerId !== previewDrag.pointerId) return;
+      suppressPreviewClick = previewDrag.moved;
+      previewDrag = null;
+      mediaBox.classList.remove('is-dragging');
+    }
+    media.addEventListener('pointerup', finishPreviewDrag);
+    media.addEventListener('pointercancel', finishPreviewDrag);
+    media.addEventListener('click', () => {
+      if (suppressPreviewClick) {
+        suppressPreviewClick = false;
+        return;
+      }
+      if (previewZoomState.scale > PREVIEW_ZOOM_MIN) {
+        resetPreviewZoom();
+        return;
+      }
+      previewZoomState = {
+        ...createPreviewZoomState(item.src),
+        scale: PREVIEW_CLICK_ZOOM
+      };
+      applyPreviewZoom();
+    });
     if (snapshot.canPrevious) {
       const previousButton = makeElement(doc, 'button', 'rmw-preview-nav rmw-preview-prev', '‹');
       previousButton.type = 'button';
@@ -1318,7 +1394,7 @@
       event.preventDefault();
       if (slideshowTimer) { clearTimeout(slideshowTimer); slideshowTimer = null; }
       slideshowActive = false;
-      previewZoomState = { src: '', scale: PREVIEW_ZOOM_MIN, originX: 50, originY: 50 };
+      previewZoomState = createPreviewZoomState();
       state.onBackdrop();
       renderPreview(doc, modal, state, session, onReturn);
       onReturn();
@@ -1329,7 +1405,7 @@
       if (event.key === 'Escape') {
         if (slideshowTimer) { clearTimeout(slideshowTimer); slideshowTimer = null; }
         slideshowActive = false;
-        previewZoomState = { src: '', scale: PREVIEW_ZOOM_MIN, originX: 50, originY: 50 };
+        previewZoomState = createPreviewZoomState();
         state.onBackdrop();
         renderPreview(doc, modal, state, session, onReturn);
         onReturn();
@@ -2098,7 +2174,7 @@
       if (dismissed) return;
       dismissed = true;
       wallSession.rememberView({ scrollTop: grid.scrollTop, previewKey: wallSession.snapshot().previewKey });
-      previewZoomState = { src: '', scale: PREVIEW_ZOOM_MIN, originX: 50, originY: 50 };
+      previewZoomState = createPreviewZoomState();
       state.closeWall();
       backdrop.remove();
       taskGeneration += 1;

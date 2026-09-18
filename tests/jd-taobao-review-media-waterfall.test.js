@@ -855,15 +855,23 @@ test('预览图片与文字之间提供可拖动并可双击复位的分隔条',
   assert.match(source, /resizer\.addEventListener\('dblclick'/);
 });
 
-test('预览图片区域使用滚轮围绕鼠标位置缩放且不再切换媒体', () => {
+test('预览图片区域支持单击默认放大、再次单击恢复、滚轮缩放与拖动查看', () => {
   assert.match(source, /mediaBox\.addEventListener\('wheel'/);
   assert.match(source, /\{ passive: false \}/);
   assert.match(source, /const PREVIEW_ZOOM_MIN = 1/);
   assert.match(source, /const PREVIEW_ZOOM_MAX = 5/);
   assert.match(source, /const PREVIEW_ZOOM_STEP = 0\.2/);
+  assert.match(source, /const PREVIEW_CLICK_ZOOM = 2/);
   assert.match(source, /event\.clientX - bounds\.left/);
   assert.match(source, /event\.clientY - bounds\.top/);
-  assert.match(source, /media\.style\.transform = `scale\(\$\{scale\}\)`/);
+  assert.match(source, /media\.style\.transform = `translate\(\$\{offsetX\}px, \$\{offsetY\}px\) scale\(\$\{scale\}\)`/);
+  assert.match(source, /function clampPreviewOffset\(offsetX, offsetY, scale = previewZoomState\.scale\)/);
+  assert.match(source, /media\.addEventListener\('pointerdown'/);
+  assert.match(source, /media\.addEventListener\('pointermove'/);
+  assert.match(source, /media\.addEventListener\('click'/);
+  assert.match(source, /function resetPreviewZoom\(\)/);
+  assert.match(source, /suppressPreviewClick = previewDrag\.moved/);
+  assert.match(source, /scale: PREVIEW_CLICK_ZOOM/);
   assert.doesNotMatch(source, /lastPreviewWheelShift|WHEEL_SHIFT_COOLDOWN/);
   assert.match(source, /event\.preventDefault\(\)/);
 });
@@ -948,7 +956,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.27/);
+  assert.match(source, /@version\s+0\.5\.28/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
