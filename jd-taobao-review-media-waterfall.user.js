@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.26
+// @version      0.5.27
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -157,7 +157,7 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.26';
+  const SCRIPT_VERSION = '0.5.27';
   const PREVIEW_ZOOM_MIN = 1;
   const PREVIEW_ZOOM_MAX = 5;
   const PREVIEW_ZOOM_STEP = 0.2;
@@ -179,8 +179,10 @@
   let slideshowActive = false;
 
   function scheduleAnimationFrame(callback) {
-    if (typeof root.requestAnimationFrame === 'function') return root.requestAnimationFrame(callback);
-    return root.setTimeout(callback, 16);
+    if (typeof root.requestAnimationFrame === 'function' && root.document?.visibilityState !== 'hidden') {
+      return root.requestAnimationFrame(callback);
+    }
+    return root.setTimeout(callback, 0);
   }
 
   function clampContextWidth(value) {
