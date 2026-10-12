@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.18.1
+// @version      1.18.2
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader.user.js
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader.user.js
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click native download, Ctrl+C / OneUp PNG image copy, and mouse-wheel zoom / drag-pan in the image preview.
@@ -1244,9 +1244,9 @@
       '#' + PANEL_ID + ' .iu-ring{position:absolute;inset:-3px;border-radius:50%;',
       'border:2px solid transparent;border-top-color:#fff;opacity:0;pointer-events:none}',
       '@keyframes iu-spin{to{transform:rotate(360deg)}}',
-      '#' + PANEL_ID + '-toast{position:fixed;left:50%;bottom:max(80px,env(safe-area-inset-bottom));',
-      'z-index:2147483647;width:min(420px,calc(100vw - 32px));box-sizing:border-box;',
-      'transform:translate(-50%,10px);white-space:normal;word-break:normal;overflow-wrap:anywhere;',
+      '#' + PANEL_ID + '-toast{position:fixed;right:max(16px,env(safe-area-inset-right));bottom:max(80px,env(safe-area-inset-bottom));',
+      'z-index:2147483647;width:min(320px,calc(100vw - 32px));box-sizing:border-box;',
+      'transform:translateY(10px);white-space:normal;word-break:normal;overflow-wrap:anywhere;',
       'background:rgba(30,30,34,.94);color:#f5f5f7;',
       'font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;',
       'padding:12px 16px;border:1px solid rgba(255,255,255,.12);border-left:3px solid #0a84ff;',
@@ -1255,7 +1255,7 @@
       'transition:opacity .2s ease,transform .2s ease,visibility .2s;',
       'max-height:30vh;overflow:auto;overscroll-behavior:contain;cursor:default;text-align:left;',
       '-webkit-user-select:text;user-select:text;touch-action:auto}',
-      '#' + PANEL_ID + '-toast.is-visible{opacity:1;visibility:visible;transform:translate(-50%,0);pointer-events:auto}',
+      '#' + PANEL_ID + '-toast.is-visible{opacity:1;visibility:visible;transform:translateY(0);pointer-events:auto}',
       '#' + PANEL_ID + '-toast.is-error{border-left-color:#ff453a;background:rgba(74,25,30,.96)}',
       '#' + PANEL_ID + ' input[type="file"]{display:none}',
     ].join('');
