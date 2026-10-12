@@ -1,8 +1,10 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.17.0
-// @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click & Ctrl+C photo copy, and mouse-wheel zoom / drag-pan in the image preview.
+// @version      1.18.1
+// @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader.user.js
+// @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader.user.js
+// @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click native download, Ctrl+C / OneUp PNG image copy, and mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
 // @match        https://www.icloud.com.cn/photos*
@@ -312,13 +314,19 @@
         reject(new Error('Encoding timed out.'));
       }, ENCODE_TIMEOUT_MS);
 
-      canvas.toBlob(function (blob) {
-        if (settled) return;
+      try {
+        canvas.toBlob(function (blob) {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (!blob) reject(new Error('Could not convert image to ' + type + '.'));
+          else resolve(blob);
+        }, type, quality);
+      } catch (error) {
         settled = true;
         clearTimeout(timer);
-        if (!blob) reject(new Error('Could not convert image to JPEG.'));
-        else resolve(blob);
-      }, type, quality);
+        reject(error);
+      }
     });
   }
 
@@ -1236,15 +1244,19 @@
       '#' + PANEL_ID + ' .iu-ring{position:absolute;inset:-3px;border-radius:50%;',
       'border:2px solid transparent;border-top-color:#fff;opacity:0;pointer-events:none}',
       '@keyframes iu-spin{to{transform:rotate(360deg)}}',
-      '#' + PANEL_ID + ' .iu-toast{position:absolute;right:calc(100% + 8px);bottom:50%;',
-      'transform:translate(6px,50%);white-space:normal;word-break:break-word;',
-      'background:rgba(0,0,0,.82);color:#fff;',
-      'font:12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;',
-      'padding:6px 10px;border-radius:8px;pointer-events:none;opacity:0;',
-      'transition:opacity .2s ease,transform .2s ease;max-width:320px;',
-      'max-height:40vh;overflow:auto;overscroll-behavior:contain;cursor:default;text-align:left}',
-      '#' + PANEL_ID + ' .iu-toast.is-visible{opacity:1;transform:translate(0,50%);pointer-events:auto}',
-      '#' + PANEL_ID + ' .iu-toast.is-error{background:rgba(176,0,32,.92)}',
+      '#' + PANEL_ID + '-toast{position:fixed;left:50%;bottom:max(80px,env(safe-area-inset-bottom));',
+      'z-index:2147483647;width:min(420px,calc(100vw - 32px));box-sizing:border-box;',
+      'transform:translate(-50%,10px);white-space:normal;word-break:normal;overflow-wrap:anywhere;',
+      'background:rgba(30,30,34,.94);color:#f5f5f7;',
+      'font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;',
+      'padding:12px 16px;border:1px solid rgba(255,255,255,.12);border-left:3px solid #0a84ff;',
+      'border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.28);backdrop-filter:blur(16px);',
+      '-webkit-backdrop-filter:blur(16px);pointer-events:none;opacity:0;visibility:hidden;',
+      'transition:opacity .2s ease,transform .2s ease,visibility .2s;',
+      'max-height:30vh;overflow:auto;overscroll-behavior:contain;cursor:default;text-align:left;',
+      '-webkit-user-select:text;user-select:text;touch-action:auto}',
+      '#' + PANEL_ID + '-toast.is-visible{opacity:1;visibility:visible;transform:translate(-50%,0);pointer-events:auto}',
+      '#' + PANEL_ID + '-toast.is-error{border-left-color:#ff453a;background:rgba(74,25,30,.96)}',
       '#' + PANEL_ID + ' input[type="file"]{display:none}',
     ].join('');
     doc.head.appendChild(style);
@@ -1417,12 +1429,17 @@
       '<path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0 0 12 4a8 8 0 1 0 7.74 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>',
       '</svg>',
       '<span class="iu-ring"></span>',
-      '<span class="iu-toast"></span>',
       '<input type="file" accept="image/*,.heic,.heif,.ico,.svg,.avif" multiple>',
     ].join('');
 
     const picker = panel.querySelector('input[type="file"]');
-    const toast = panel.querySelector('.iu-toast');
+    // Keep notifications outside the 44px draggable/transformed button.
+    // A fixed card must use the viewport, not the button's containing block.
+    const toastId = PANEL_ID + '-toast';
+    const toast = doc.getElementById(toastId) || doc.createElement('div');
+    toast.id = toastId;
+    toast.className = 'iu-toast';
+    if (toast.parentNode !== doc.body) doc.body.appendChild(toast);
     toast.setAttribute('role', 'status');
     toast.setAttribute('aria-live', 'polite');
     let toastTimer = null;
@@ -1872,62 +1889,61 @@
     return null;
   }
 
-  function renderPhotoImageToBlob(image, win) {
-    // iCloud revokes the object URL once a thumbnail has rendered: the <img>
-    // keeps painting but fetch() rejects with "Failed to fetch". Redraw the
-    // already-decoded image into a canvas to recover the same pixels.
-    return new Promise(function (resolve, reject) {
-      const doc = (image && image.ownerDocument) || (win && win.document);
-      const width = Number(image && image.naturalWidth) || 0;
-      const height = Number(image && image.naturalHeight) || 0;
-      let canvas = null;
-      let context = null;
-      try {
-        canvas = doc && typeof doc.createElement === 'function' ? doc.createElement('canvas') : null;
-        if (canvas) {
-          canvas.width = width;
-          canvas.height = height;
-          context = typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null;
-        }
-      } catch (error) {
-        canvas = null;
-        context = null;
+  async function renderPhotoImageToBlob(image, win) {
+    // A revoked object URL still leaves decoded pixels in the <img>.
+    const doc = (image && image.ownerDocument) || (win && win.document);
+    const width = Number(image && image.naturalWidth) || 0;
+    const height = Number(image && image.naturalHeight) || 0;
+    let canvas = null;
+    try {
+      canvas = doc && typeof doc.createElement === 'function' ? doc.createElement('canvas') : null;
+      if (!canvas) throw new Error('无法读取图片数据。');
+      canvas.width = width;
+      canvas.height = height;
+      const context = typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null;
+      if (!context || !width || !height) throw new Error('无法读取图片数据。');
+      context.drawImage(image, 0, 0, width, height);
+      const blob = await canvasToBlob(canvas, 'image/png');
+      if (String(blob && blob.type || '').toLowerCase() !== 'image/png') {
+        throw new Error('无法读取 PNG 图片数据。');
       }
-      if (!canvas || !context || !width || !height || typeof canvas.toBlob !== 'function') {
-        reject(new Error('无法读取图片数据。'));
-        return;
+      return blob;
+    } finally {
+      // Release the backing store on success, taint errors, or stalled encoding.
+      if (canvas) {
+        canvas.width = 1;
+        canvas.height = 1;
       }
-      try {
-        context.drawImage(image, 0, 0, width, height);
-      } catch (error) {
-        reject(new Error('无法读取图片数据。'));
-        return;
-      }
-      canvas.toBlob(function (blob) {
-        if (blob && /^image\//i.test(String(blob.type || ''))) {
-          resolve(blob);
-        } else {
-          reject(new Error('无法读取图片数据。'));
-        }
-      }, 'image/png');
-    });
+    }
   }
+
+  const COPY_FETCH_TIMEOUT_MS = 10000;
 
   async function fetchCopyablePhotoImageBlob(image, win) {
     const source = getCopyablePhotoImageSource(image);
     const fetchFn = win && win.fetch;
     if (source && typeof fetchFn === 'function') {
       try {
-        const response = await fetchFn(source, {
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (response && response.ok && typeof response.blob === 'function') {
-          const blob = await response.blob();
-          if (/^image\//i.test(String(blob && blob.type || ''))) return blob;
-        }
+        // One deadline covers BOTH response headers and consuming the body.
+        const task = startAbortableTask(async function (signal) {
+          const response = await fetchFn.call(win, source, {
+            credentials: 'include',
+            cache: 'no-store',
+            signal,
+          });
+          if (signal && signal.aborted) return null;
+          if (response && response.ok && typeof response.blob === 'function') {
+            const blob = await response.blob();
+            if (String(blob && blob.type || '').toLowerCase() === 'image/png') return blob;
+          }
+          return null;
+        }, COPY_FETCH_TIMEOUT_MS, (win && win.AbortController) || root.AbortController,
+        '读取图片超时。');
+        const blob = await task.promise;
+        if (blob) return blob;
+        // PNG is mandatory; rasterize JPEG/WebP and other derivatives below.
       } catch (error) {
-        // Revoked blob object URLs land here; fall through to the canvas path.
+        // Revoked object URLs or a stalled fetch fall back to decoded pixels.
       }
     }
     return renderPhotoImageToBlob(image, win);
@@ -1939,10 +1955,20 @@
     if (!clipboard || typeof clipboard.write !== 'function' || typeof ClipboardItemCtor !== 'function') {
       return false;
     }
-    const blob = preparedBlob || await fetchCopyablePhotoImageBlob(image, win);
-    const type = String(blob && blob.type || '');
-    if (!/^image\//i.test(type)) throw new Error('图片数据格式无效。');
-    await clipboard.write([new ClipboardItemCtor({ [type]: blob })]);
+    const blobPromise = preparedBlob
+      ? Promise.resolve(preparedBlob)
+      : fetchCopyablePhotoImageBlob(image, win);
+    // No await before write: Safari requires the original click/keydown activation.
+    const pngPromise = blobPromise.then(function (blob) {
+      const type = String(blob && blob.type || '').toLowerCase();
+      if (type === 'image/png') return blob;
+      if (!/^image\//.test(type)) throw new Error('图片数据格式无效。');
+      return renderPhotoImageToBlob(image, win);
+    });
+    // A constructor/write failure can occur before the browser consumes the data.
+    // Observe its rejection too, so a later fetch failure cannot go unhandled.
+    pngPromise.catch(function () {});
+    await clipboard.write([new ClipboardItemCtor({ 'image/png': pngPromise })]);
     return true;
   }
 
@@ -2365,8 +2391,7 @@
     const width = image.naturalWidth || image.width || 0;
     const height = image.naturalHeight || image.height || 0;
     try {
-      const blob = await fetchCopyablePhotoImageBlob(image, win);
-      const copied = await copyPhotoImageToClipboard(image, win, blob);
+      const copied = await copyPhotoImageToClipboard(image, win);
       showCopyPhotoStatus(
         doc,
         copied ? '已拷贝大图 ' + width + '×' + height : '浏览器不支持图像拷贝',
@@ -2408,10 +2433,11 @@
 
   function enableOneUpButtonDragging(button, win) {
     restoreOneUpButtonPosition(button, win);
+    function resize() {
+      restoreOneUpButtonPosition(button, win);
+    }
     if (win && typeof win.addEventListener === 'function') {
-      win.addEventListener('resize', function () {
-        restoreOneUpButtonPosition(button, win);
-      });
+      win.addEventListener('resize', resize);
     }
 
     let dragState = null;
@@ -2488,6 +2514,14 @@
 
     button.addEventListener('mousedown', start);
     button.addEventListener('touchstart', start, { passive: false });
+    return function disposeDragging() {
+      dragState = null;
+      moved = false;
+      cleanup();
+      win.removeEventListener('resize', resize);
+      button.removeEventListener('mousedown', start);
+      button.removeEventListener('touchstart', start);
+    };
   }
 
   function createOneUpCopyButton(doc, win) {
@@ -2545,11 +2579,26 @@
   // OneUp is open — the user opens the photo (one click) and copies from there.
   function installOneUpCopyButton(doc, win) {
     if (!doc || oneUpCopyStateByDocument.has(doc)) return;
-    const state = { button: null, timer: null, hintShown: false };
+    const state = { button: null, disposeDragging: null, timer: null, hintShown: false };
     oneUpCopyStateByDocument.set(doc, state);
+
+    function removeButton() {
+      if (state.disposeDragging) state.disposeDragging();
+      state.disposeDragging = null;
+      if (state.button) {
+        if (typeof state.button.remove === 'function') state.button.remove();
+        else if (state.button.parentNode && typeof state.button.parentNode.removeChild === 'function') {
+          state.button.parentNode.removeChild(state.button);
+        }
+      }
+      state.button = null;
+    }
 
     function sync() {
       if (typeof doc.querySelectorAll !== 'function') return;
+      if (state.button && (state.button.isConnected === false || state.button.parentNode !== doc.body)) {
+        removeButton();
+      }
       // Presence is derived from a viewer-sized photo, not from a class name:
       // the image only qualifies once its bitmap is decoded, so keep polling
       // instead of trusting a single DOM mutation.
@@ -2557,29 +2606,34 @@
       if (hasViewerPhoto && !state.button && doc.body && typeof doc.body.appendChild === 'function') {
         state.button = createOneUpCopyButton(doc, win);
         doc.body.appendChild(state.button);
-        enableOneUpButtonDragging(state.button, win);
+        state.disposeDragging = enableOneUpButtonDragging(state.button, win);
         if (!state.hintShown) {
           state.hintShown = true;
           showCopyPhotoStatus(doc, '提示：点左下角的拷贝图标可复制高清大图（可拖动，位置会记住）');
         }
       } else if (!hasViewerPhoto && state.button) {
-        if (typeof state.button.remove === 'function') state.button.remove();
-        else if (state.button.parentNode && typeof state.button.parentNode.removeChild === 'function') {
-          state.button.parentNode.removeChild(state.button);
-        }
-        state.button = null;
+        removeButton();
       }
     }
 
     function tick() {
+      state.timer = null;
+      if (doc.hidden) return;
       sync();
       state.timer = win && typeof win.setTimeout === 'function' ? win.setTimeout(tick, 700) : null;
     }
 
-    sync();
-    if (win && typeof win.setTimeout === 'function') {
-      state.timer = win.setTimeout(tick, 700);
+    function visibilityChanged() {
+      if (state.timer !== null) {
+        const cancel = (win && win.clearTimeout) || root.clearTimeout;
+        cancel.call(win, state.timer);
+        state.timer = null;
+      }
+      if (!doc.hidden) tick();
     }
+
+    doc.addEventListener('visibilitychange', visibilityChanged);
+    visibilityChanged();
   }
 
   function installGridPhotoKeyboardCopy(doc, win) {
@@ -2607,9 +2661,7 @@
     function copyPhotoUnderPointer(image) {
       state.busy = true;
       showCopyPhotoStatus(doc, '正在拷贝图像…');
-      fetchCopyablePhotoImageBlob(image, win).then(function (blob) {
-        return copyPhotoImageToClipboard(image, win, blob);
-      }).then(function (copied) {
+      copyPhotoImageToClipboard(image, win).then(function (copied) {
         showCopyPhotoStatus(doc, copied ? '图像已拷贝到剪贴板' : '浏览器不支持图像拷贝', !copied);
       }).catch(function (error) {
         const detail = error && error.message ? error.message : '未知错误';
