@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.18.3
+// @version      1.19.0
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader.user.js
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader.user.js
-// @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click native download, Ctrl+C / OneUp PNG image copy, and mouse-wheel zoom / drag-pan in the image preview.
+// @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click native download, Ctrl+C / OneUp PNG image copy, and double-click zoom / smooth mouse-wheel zoom / drag-pan in the image preview.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
 // @match        https://www.icloud.com.cn/photos*
@@ -2786,6 +2786,11 @@
       mediaSource: '',
       mediaObserver: null,
       mediaLoadHandler: null,
+      renderedScale: 1,
+      renderedTx: 0,
+      renderedTy: 0,
+      animationFrame: null,
+      animationTime: null,
     };
 
     let zoomHintShown = false;
@@ -2795,17 +2800,19 @@
       zoomHintShown = true;
       const panel = doc.getElementById ? doc.getElementById(PANEL_ID) : null;
       if (panel && typeof panel._showUploaderStatus === 'function') {
-        panel._showUploaderStatus('滚轮缩放 · 拖动平移 · 双击或 Esc 复位');
+        panel._showUploaderStatus('双击放大／还原 · 滚轮平滑缩放 · 拖动平移 · Esc 复位');
       }
     }
 
     function getLargeMediaRect(el) {
       if (!el || !el.tagName) return null;
+      if (typeof el.closest === 'function' && el.closest('.grid-item, [role="grid"]')) return null;
       const tag = el.tagName;
       if (tag !== 'IMG' && tag !== 'CANVAS' && tag !== 'VIDEO') return null;
       if (typeof el.getBoundingClientRect !== 'function') return null;
       const rect = el.getBoundingClientRect();
-      return rect.width >= MIN_PREVIEW_PX && rect.height >= MIN_PREVIEW_PX ? rect : null;
+      return Math.max(rect.width, rect.height) >= MIN_PREVIEW_PX &&
+        Math.min(rect.width, rect.height) >= 64 ? rect : null;
     }
 
     function isLargeMedia(el) {
@@ -2818,7 +2825,7 @@
       let best = null;
       let bestArea = 0;
       for (let i = 0; i < stack.length; i += 1) {
-        const el = stack[i];
+        const el = isLargeMedia(stack[i]) ? stack[i] : findPhotoImageInNode(stack[i], x, y);
         const rect = getLargeMediaRect(el);
         if (!rect) continue;
         const area = rect.width * rect.height;
@@ -2913,6 +2920,9 @@
       state.tx = 0;
       state.ty = 0;
       state.dragging = false;
+      state.renderedScale = 1;
+      state.renderedTx = 0;
+      state.renderedTy = 0;
     }
 
     function setOwnedInlineStyle(property, value, appliedField) {
@@ -2944,6 +2954,7 @@
     }
 
     function detach() {
+      cancelZoomAnimation();
       stopWatchdog();
       if (state.zoomTarget) {
         // Restore only values the script still owns. React may reuse this wrapper
@@ -2975,7 +2986,7 @@
 
     function expectedTransform() {
       const relative =
-        'translate(' + state.tx + 'px, ' + state.ty + 'px) scale(' + state.scale + ')';
+        'translate(' + state.renderedTx + 'px, ' + state.renderedTy + 'px) scale(' + state.renderedScale + ')';
       return state.baseTransform ? relative + ' ' + state.baseTransform : relative;
     }
 
@@ -2985,14 +2996,61 @@
       state.ty = Math.max(-limit.y, Math.min(limit.y, state.ty));
     }
 
+    function cancelZoomAnimation() {
+      if (state.animationFrame !== null && win && typeof win.cancelAnimationFrame === 'function') {
+        win.cancelAnimationFrame(state.animationFrame);
+      }
+      state.animationFrame = null;
+      state.animationTime = null;
+    }
+
+    function paintZoom() {
+      setOwnedInlineStyle('transform', expectedTransform(), 'appliedInlineTransform');
+      setOwnedInlineStyle('cursor', state.scale > 1
+        ? (state.dragging ? 'grabbing' : 'grab') : state.savedCursor, 'appliedCursor');
+    }
+
+    function animateZoom(time) {
+      state.animationFrame = null;
+      if (!state.element || !state.zoomTarget) return;
+      if (!state.element.isConnected || !state.zoomTarget.isConnected) {
+        checkZoomMount();
+        return;
+      }
+      if (hasMediaSourceChanged(state.element, state.mediaSource)) { detach(); return; }
+      const dt = state.animationTime === null ? 16 : Math.max(1, Math.min(64, time - state.animationTime));
+      state.animationTime = time;
+      const alpha = 1 - Math.exp(-dt / 55);
+      state.renderedScale += (state.scale - state.renderedScale) * alpha;
+      state.renderedTx += (state.tx - state.renderedTx) * alpha;
+      state.renderedTy += (state.ty - state.renderedTy) * alpha;
+      const settled = Math.abs(state.scale - state.renderedScale) < 0.001 &&
+        Math.abs(state.tx - state.renderedTx) < 0.1 && Math.abs(state.ty - state.renderedTy) < 0.1;
+      if (settled) {
+        state.renderedScale = state.scale;
+        state.renderedTx = state.tx;
+        state.renderedTy = state.ty;
+        state.animationTime = null;
+        if (state.scale <= MIN_SCALE + 0.001) { detach(); return; }
+      }
+      paintZoom();
+      if (!settled) state.animationFrame = win.requestAnimationFrame(animateZoom);
+    }
+
     function applyTransform() {
       if (!state.zoomTarget) return;
-      setOwnedInlineStyle('transform', expectedTransform(), 'appliedInlineTransform');
-      setOwnedInlineStyle(
-        'cursor',
-        state.scale > 1 ? (state.dragging ? 'grabbing' : 'grab') : state.savedCursor,
-        'appliedCursor'
-      );
+      const reduced = win && typeof win.matchMedia === 'function' &&
+        win.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (state.dragging || reduced || !win || typeof win.requestAnimationFrame !== 'function') {
+        cancelZoomAnimation();
+        state.renderedScale = state.scale;
+        state.renderedTx = state.tx;
+        state.renderedTy = state.ty;
+        if (state.scale <= MIN_SCALE + 0.001) { detach(); return; }
+        paintZoom();
+      } else if (state.animationFrame === null) {
+        state.animationFrame = win.requestAnimationFrame(animateZoom);
+      }
     }
 
     function checkZoomMount() {
@@ -3093,6 +3151,9 @@
     }
 
     function onWheel(event) {
+      if (event.ctrlKey || event.metaKey || event.altKey || isEditablePhotoCopyTarget(event.target)) return;
+      if (event.target && typeof event.target.closest === 'function' &&
+          event.target.closest('button, [role="button"], #' + PANEL_ID + '-toast')) return;
       if (
         event.target &&
         typeof event.target.closest === 'function' &&
@@ -3117,9 +3178,16 @@
       }
 
       const rect = img.getBoundingClientRect();
-      const px = event.clientX - rect.left - rect.width / 2;
-      const py = event.clientY - rect.top - rect.height / 2;
-      const delta = -event.deltaY;
+      const attachedHere = state.element === img;
+      // Derive the logical destination centre from the currently painted frame.
+      // Otherwise bursts of wheel events drift their anchor during easing.
+      const px = event.clientX - rect.left - rect.width / 2 +
+        (attachedHere ? state.renderedTx - state.tx : 0);
+      const py = event.clientY - rect.top - rect.height / 2 +
+        (attachedHere ? state.renderedTy - state.ty : 0);
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? (win.innerHeight || 800) : 1;
+      const delta = -clamp(Number(event.deltaY) * unit, -1000, 1000);
+      if (!Number.isFinite(delta) || delta === 0) return;
       const factor = Math.exp(delta * 0.0015);
       const currentScale = state.element === img ? state.scale : MIN_SCALE;
       const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, currentScale * factor));
@@ -3145,9 +3213,9 @@
       state.ty = translation.ty;
       state.scale = newScale;
       if (state.scale <= MIN_SCALE + 0.001) {
-        debugLog('detach (back to 1x)');
-        detach();
-        return;
+        state.scale = MIN_SCALE;
+        state.tx = 0;
+        state.ty = 0;
       }
       clampTranslation();
       showZoomHint();
@@ -3157,12 +3225,18 @@
 
     function onMouseDown(event) {
       if (event.button !== 0) return;
+      if (event.target && typeof event.target.closest === 'function' &&
+          event.target.closest('button, input, textarea, select, [role="button"], #' + PANEL_ID + '-toast')) return;
       if (!state.zoomTarget || state.scale <= MIN_SCALE) return;
       const rect = state.zoomTarget.getBoundingClientRect();
       if (event.clientX < rect.left || event.clientX > rect.right ||
           event.clientY < rect.top || event.clientY > rect.bottom) {
         return;
       }
+      cancelZoomAnimation();
+      state.scale = state.renderedScale;
+      state.tx = state.renderedTx;
+      state.ty = state.renderedTy;
       state.dragging = true;
       state.startX = event.clientX;
       state.startY = event.clientY;
@@ -3192,13 +3266,27 @@
     }
 
     function onDoubleClick(event) {
-      if (!state.element) return;
-      if (event.target && state.zoomTarget && typeof state.zoomTarget.contains === 'function' &&
-          !state.zoomTarget.contains(event.target)) {
-        return;
-      }
+      if (event.button !== undefined && event.button !== 0) return;
+      const target = event.target;
+      if (target && typeof target.closest === 'function' &&
+          target.closest('button, input, textarea, select, [role="button"], #' + PANEL_ID + '-toast')) return;
+      const img = findPreviewImage(target, event.clientX, event.clientY);
+      if (!img || (typeof img.closest === 'function' && img.closest('.grid-item, [role="grid"]'))) return;
       event.preventDefault();
-      detach();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+      if (state.element === img && state.scale > MIN_SCALE + 0.001) {
+        state.scale = 1; state.tx = 0; state.ty = 0;
+      } else {
+        attach(img);
+        const rect = state.zoomTarget.getBoundingClientRect();
+        state.scale = 2;
+        state.tx = -(event.clientX - rect.left - rect.width / 2);
+        state.ty = -(event.clientY - rect.top - rect.height / 2);
+        clampTranslation();
+      }
+      showZoomHint();
+      applyTransform();
     }
 
     function onKeyDown(event) {
@@ -3216,6 +3304,8 @@
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       if (event.key === 'Escape' || event.key === '0') {
         event.preventDefault();
+        event.stopPropagation();
+        if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
         detach();
       }
     }
@@ -3236,6 +3326,10 @@
       target.addEventListener('dblclick', onDoubleClick, true);
       target.addEventListener('keydown', onKeyDown, true);
     });
+    if (win && typeof win.addEventListener === 'function') {
+      win.addEventListener('resize', detach);
+      win.addEventListener('blur', endDrag);
+    }
   }
 
   // DOM markers unique to the Photos app chrome. Used as a fallback so a renamed
