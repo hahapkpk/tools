@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.18.2
+// @version      1.18.3
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader.user.js
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader.user.js
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click native download, Ctrl+C / OneUp PNG image copy, and mouse-wheel zoom / drag-pan in the image preview.
@@ -2218,43 +2218,44 @@
     };
   }
 
-  // The grid only ever renders a small derivative, and neither the DOM nor the
-  // React tree exposes which asset a tile belongs to, so the clipboard cannot
-  // receive the original. Hand the job to iCloud's own 下载 command instead:
-  // it resolves the asset itself and yields the true original (a zip when
-  // several photos are selected).
+  // Keep the native menu's item order, DOM identity and event bindings intact.
+  // The old 下载原片 row was only an alias for native 下载; inserting a clone
+  // shifts DOM positions relative to the app's own registered menu items.
+  // Retain this entrypoint for compatibility, but only clean up legacy rows.
   function addGridDownloadMenuItem(doc, win, menu) {
-    if (!menu || !doc || typeof doc.createElement !== 'function') return false;
+    if (!menu || !doc) return false;
     const list = findCopyMenuItemList(menu);
-    if (!list || typeof list.querySelector !== 'function') return false;
-    const nativeDownload = findNativeDownloadItem(list);
-    if (!nativeDownload) return false;
-    // Older builds injected a 拷贝图像 row that only copied the small on-screen
-    // derivative; drop it so an update without a page reload still matches.
+    if (!list || !findNativeDownloadItem(list)) return false;
     if (typeof list.querySelectorAll === 'function') {
-      const stale = list.querySelectorAll('[' + GRID_COPY_MENU_ATTR + ']');
+      const stale = list.querySelectorAll(
+        '[' + GRID_COPY_MENU_ATTR + '], [' + GRID_DOWNLOAD_MENU_ATTR + ']'
+      );
       for (let i = 0; i < stale.length; i += 1) {
         if (stale[i] && typeof stale[i].remove === 'function') stale[i].remove();
       }
     }
-    let row = list.querySelector('[' + GRID_DOWNLOAD_MENU_ATTR + ']');
-    // A row injected by an older build has no working click binding; rebuild it.
-    if (row && !row.__icloudDownloadBound && typeof row.remove === 'function') {
-      row.remove();
-      row = null;
-    }
-    if (!row) {
-      row = createMenuRow(doc, list, DOWNLOAD_MENU_LABEL, GRID_DOWNLOAD_MENU_ATTR, nativeDownload);
-      row.addEventListener('click', makeDownloadRowHandler(doc, win, row), true);
-      row.__icloudDownloadBound = true;
-      // Insert as a sibling row before iCloud's own 下载: appending to the
-      // popover wrapper would land outside the hit-testable content.
-      if (nativeDownload.parentNode) nativeDownload.parentNode.insertBefore(row, nativeDownload);
-      else if (typeof list.insertBefore === 'function') list.insertBefore(row, list.firstChild);
-    }
-    if (row && typeof row.getBoundingClientRect === 'function') {
-      growCopyMenuHeight(menu, row.getBoundingClientRect().height || 0);
-    }
+    const popover = typeof menu.closest === 'function'
+      ? menu.closest('ui-popover') || menu
+      : menu;
+    const content = typeof popover.querySelector === 'function'
+      ? popover.querySelector('ui-popover-content')
+      : null;
+    [popover, content].forEach(function (element) {
+      if (!element || !element.style) return;
+      const current = parseFloat(element.style.height);
+      const base = parseFloat(readCopyMenuAttr(element, COPY_MENU_BASE_HEIGHT_ATTR));
+      const extra = parseFloat(readCopyMenuAttr(element, COPY_MENU_APPLIED_HEIGHT_ATTR));
+      // Restore only a height still carrying our exact old offset. Never undo
+      // a new size written by iCloud when it reuses the popover for another menu.
+      if (Number.isFinite(base) && Number.isFinite(extra) &&
+          Number.isFinite(current) && Math.abs(current - (base + extra)) < 0.5) {
+        element.style.height = base + 'px';
+      }
+      if (typeof element.removeAttribute === 'function') {
+        element.removeAttribute(COPY_MENU_BASE_HEIGHT_ATTR);
+        element.removeAttribute(COPY_MENU_APPLIED_HEIGHT_ATTR);
+      }
+    });
     return true;
   }
 
