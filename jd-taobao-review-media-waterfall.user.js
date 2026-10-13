@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京东/淘宝评价图片墙
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.5.29
+// @version      0.5.30
 // @description  将京东和淘宝/天猫评价图视频以纵向滚动图片墙展示。支持当前商品筛选、预览幻灯片自动播放。
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/*
@@ -157,10 +157,10 @@
   const DEFAULT_CONTEXT_WIDTH = 420;
   const MIN_CONTEXT_WIDTH = 320;
   const MAX_CONTEXT_WIDTH = 700;
-  const SCRIPT_VERSION = '0.5.29';
+  const SCRIPT_VERSION = '0.5.30';
   const PREVIEW_ZOOM_MIN = 1;
   const PREVIEW_ZOOM_MAX = 5;
-  const PREVIEW_ZOOM_STEP = 0.2;
+
   const PREVIEW_CLICK_ZOOM = 2;
   const AUTO_LOAD_DELAY = 650;
   const AUTO_LOAD_SETTLE_DELAY = 950;
@@ -177,6 +177,158 @@
   const PREVIEW_CACHE_LIMIT = 12;
   function createPreviewZoomState(src = '') {
     return { src, scale: PREVIEW_ZOOM_MIN, originX: 50, originY: 50, offsetX: 0, offsetY: 0 };
+  }
+
+  // A single RAF loop owns the painted camera; wheel input only changes its target.
+  function createSmoothPreviewZoom(mediaBox, media, { initial = createPreviewZoomState(), onChange = () => {}, host = root } = {}) {
+    let current = { ...initial, originX: 50, originY: 50 };
+    let target = { ...current };
+    let frame = null;
+    let lastTime = 0;
+    const now = () => host.performance?.now?.() ?? Date.now();
+    const requestFrame = typeof host.requestAnimationFrame === 'function'
+      ? (fn) => host.requestAnimationFrame(fn)
+      : (fn) => host.setTimeout(() => fn(now()), 16);
+    const cancelFrame = typeof host.requestAnimationFrame === 'function'
+      ? (id) => host.cancelAnimationFrame(id)
+      : (id) => host.clearTimeout(id);
+    function clamp(camera) {
+      const width = mediaBox.clientWidth;
+      const height = mediaBox.clientHeight;
+      const maxX = Math.max(0, width * (camera.scale - 1) / 2);
+      const maxY = Math.max(0, height * (camera.scale - 1) / 2);
+      return { ...camera, offsetX: maxX ? Math.max(-maxX, Math.min(maxX, camera.offsetX)) : 0, offsetY: maxY ? Math.max(-maxY, Math.min(maxY, camera.offsetY)) : 0 };
+    }
+    function paint() {
+      media.style.transformOrigin = '50% 50%';
+      media.style.transform = `translate3d(${current.offsetX}px, ${current.offsetY}px, 0) scale(${current.scale})`;
+      mediaBox.classList.toggle('is-zoomed', current.scale > PREVIEW_ZOOM_MIN + 0.001);
+      onChange({ ...current });
+    }
+    function tick(time) {
+      frame = null;
+      if (!mediaBox.isConnected) return;
+      const elapsed = Math.max(0, time - lastTime);
+      lastTime = time;
+      const alpha = 1 - Math.exp(-elapsed / 55);
+      ['scale', 'offsetX', 'offsetY'].forEach((key) => { current[key] += (target[key] - current[key]) * alpha; });
+      const settled = Math.abs(current.scale - target.scale) < 0.0001 && Math.abs(current.offsetX - target.offsetX) < 0.02 && Math.abs(current.offsetY - target.offsetY) < 0.02;
+      if (settled) current = { ...target };
+      paint();
+      if (!settled) frame = requestFrame(tick);
+    }
+    function animate() {
+      if (host.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+        if (frame !== null) cancelFrame(frame);
+        frame = null;
+        current = { ...target };
+        paint();
+      } else if (frame === null) {
+        lastTime = now();
+        frame = requestFrame(tick);
+      }
+    }
+    function zoomAt(scale, clientX, clientY) {
+      const bounds = mediaBox.getBoundingClientRect();
+      const x = clientX - bounds.left - bounds.width / 2;
+      const y = clientY - bounds.top - bounds.height / 2;
+      const nextScale = Math.max(PREVIEW_ZOOM_MIN, Math.min(PREVIEW_ZOOM_MAX, scale));
+      const ratio = nextScale / target.scale;
+      target = clamp({ ...target, scale: nextScale, offsetX: x - (x - target.offsetX) * ratio, offsetY: y - (y - target.offsetY) * ratio });
+      animate();
+    }
+    function wheel(event) {
+      if (media.tagName !== 'IMG' || !Number.isFinite(event.deltaY) || event.deltaY === 0 || event.target?.closest?.('.rmw-preview-tools')) return;
+      event.preventDefault();
+      if (drag) return;
+      const multiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? mediaBox.clientHeight : 1;
+      const delta = Math.max(-240, Math.min(240, event.deltaY * multiplier));
+      zoomAt(target.scale * Math.exp(-delta * 0.0018), event.clientX, event.clientY);
+    }
+    let drag = null;
+    let suppressClick = false;
+    function stopAnimation() {
+      if (frame !== null) cancelFrame(frame);
+      frame = null;
+      target = { ...current };
+    }
+    function down(event) {
+      if (media.tagName !== 'IMG' || event.button !== 0 || current.scale <= PREVIEW_ZOOM_MIN) return;
+      event.preventDefault();
+      stopAnimation();
+      suppressClick = false;
+      drag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, camera: { ...current }, pending: null, moved: false };
+      mediaBox.classList.add('is-dragging');
+      try { media.setPointerCapture(event.pointerId); } catch (_) { /* Capture is optional. */ }
+    }
+    function flushDrag() {
+      frame = null;
+      if (!drag?.pending) return;
+      current = clamp({ ...drag.camera, offsetX: drag.camera.offsetX + drag.pending.x, offsetY: drag.camera.offsetY + drag.pending.y });
+      target = { ...current };
+      drag.pending = null;
+      paint();
+    }
+    function move(event) {
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      const x = event.clientX - drag.x;
+      const y = event.clientY - drag.y;
+      drag.moved ||= Math.abs(x) > 3 || Math.abs(y) > 3;
+      drag.pending = { x, y };
+      if (frame === null) frame = requestFrame(flushDrag);
+    }
+    function up(event) {
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      if (frame !== null) cancelFrame(frame);
+      flushDrag();
+      suppressClick = drag.moved;
+      drag = null;
+      mediaBox.classList.remove('is-dragging');
+      try { media.releasePointerCapture(event.pointerId); } catch (_) { /* Already released. */ }
+    }
+    function click(event) {
+      if (media.tagName !== 'IMG') return;
+      if (suppressClick) { suppressClick = false; return; }
+      if (target.scale > PREVIEW_ZOOM_MIN) {
+        target = createPreviewZoomState(current.src);
+        animate();
+      } else {
+        zoomAt(PREVIEW_CLICK_ZOOM, event.clientX, event.clientY);
+      }
+    }
+    mediaBox.addEventListener('wheel', wheel, { passive: false });
+    media.addEventListener('pointerdown', down);
+    media.addEventListener('pointermove', move);
+    media.addEventListener('pointerup', up);
+    media.addEventListener('pointercancel', up);
+    media.addEventListener('lostpointercapture', up);
+    media.addEventListener('click', click);
+    function reconcile() {
+      stopAnimation();
+      current = clamp(current);
+      target = { ...current };
+      paint();
+    }
+    const resizeObserver = host.ResizeObserver ? new host.ResizeObserver(reconcile) : null;
+    resizeObserver?.observe(mediaBox);
+    host.addEventListener?.('resize', reconcile);
+    paint();
+    return {
+      reconcile,
+      dispose() {
+        stopAnimation();
+        resizeObserver?.disconnect();
+        host.removeEventListener?.('resize', reconcile);
+        mediaBox.removeEventListener('wheel', wheel);
+        [['pointerdown', down], ['pointermove', move], ['pointerup', up], ['pointercancel', up], ['lostpointercapture', up], ['click', click]].forEach(([type, handler]) => media.removeEventListener(type, handler));
+        if (drag) {
+          const pointerId = drag.pointerId;
+          drag = null;
+          try { media.releasePointerCapture(pointerId); } catch (_) { /* Already released. */ }
+        }
+        mediaBox.classList.remove('is-dragging');
+      }
+    };
   }
 
   let previewZoomState = createPreviewZoomState();
@@ -1131,7 +1283,7 @@
 .rmw-preview-content.is-collapsed .rmw-preview-media { width:min(1240px,86vw); }
 .rmw-preview-media.is-zoomed { cursor:grab; }
 .rmw-preview-media.is-dragging { cursor:grabbing; }
-.rmw-preview-media img, .rmw-preview-media video { display:block; width:100%; height:100%; object-fit:contain; transition:transform .12s ease-out; will-change:transform; }
+.rmw-preview-media img, .rmw-preview-media video { display:block; width:100%; height:100%; object-fit:contain; will-change:transform; }
 .rmw-preview-media.is-dragging img { transition:none; }
 .rmw-preview-media img { touch-action:none; user-select:none; }
 .rmw-counter { position:absolute; top:14px; left:50%; transform:translateX(-50%); padding:6px 14px; border-radius:18px; background:rgba(0,0,0,.58); color:#fff; font-size:14px; }
@@ -1162,6 +1314,7 @@
 
   function renderPreview(doc, modal, state, session, onReturn) {
     const previous = doc.getElementById(IDS.preview);
+    previous?.rmwDisposePreview?.();
     if (previous) previous.remove();
     const snapshot = state.snapshot();
     const item = snapshot.preview;
@@ -1202,31 +1355,11 @@
       if (item.poster) media.poster = item.poster;
     }
     mediaBox.appendChild(media);
-    function applyPreviewZoom() {
-      const { scale, originX, originY, offsetX, offsetY } = previewZoomState;
-      media.style.transformOrigin = `${originX}% ${originY}%`;
-      media.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
-      mediaBox.classList.toggle('is-zoomed', scale > PREVIEW_ZOOM_MIN);
-    }
-    function resetPreviewZoom() {
-      previewZoomState = createPreviewZoomState(item.src);
-      applyPreviewZoom();
-    }
-    function getPreviewOffsetBounds(scale = previewZoomState.scale) {
-      const bounds = mediaBox.getBoundingClientRect();
-      return {
-        maxOffsetX: Math.max(0, (bounds.width * (scale - 1)) / 2),
-        maxOffsetY: Math.max(0, (bounds.height * (scale - 1)) / 2)
-      };
-    }
-    function clampPreviewOffset(offsetX, offsetY, scale = previewZoomState.scale, offsetBounds = getPreviewOffsetBounds(scale)) {
-      const { maxOffsetX, maxOffsetY } = offsetBounds;
-      return {
-        offsetX: Math.max(-maxOffsetX, Math.min(maxOffsetX, offsetX)),
-        offsetY: Math.max(-maxOffsetY, Math.min(maxOffsetY, offsetY))
-      };
-    }
-    applyPreviewZoom();
+    const zoom = createSmoothPreviewZoom(mediaBox, media, {
+      initial: previewZoomState,
+      onChange: (camera) => { previewZoomState = camera; }
+    });
+    overlay.rmwDisposePreview = () => { zoom.dispose(); finishResize(); };
     const resizer = makeElement(doc, 'div', 'rmw-context-resizer', '');
     resizer.title = '拖动调整评价区域宽度，双击恢复默认宽度';
     const context = makeElement(doc, 'aside', 'rmw-context', '');
@@ -1314,111 +1447,7 @@
       }
       renderPreview(doc, modal, state, session, onReturn);
     }
-    let previewWheelFrame = null;
-    let pendingPreviewWheel = null;
-    function flushPreviewWheel() {
-      previewWheelFrame = null;
-      const wheel = pendingPreviewWheel;
-      pendingPreviewWheel = null;
-      if (!wheel) return;
-      const bounds = mediaBox.getBoundingClientRect();
-      const originX = bounds.width ? Math.max(0, Math.min(100, ((wheel.clientX - bounds.left) / bounds.width) * 100)) : 50;
-      const originY = bounds.height ? Math.max(0, Math.min(100, ((wheel.clientY - bounds.top) / bounds.height) * 100)) : 50;
-      const nextScale = Math.max(
-        PREVIEW_ZOOM_MIN,
-        Math.min(PREVIEW_ZOOM_MAX, previewZoomState.scale + wheel.steps * PREVIEW_ZOOM_STEP)
-      );
-      const nextOffsets = nextScale <= PREVIEW_ZOOM_MIN
-        ? { offsetX: 0, offsetY: 0 }
-        : clampPreviewOffset(previewZoomState.offsetX, previewZoomState.offsetY, nextScale, getPreviewOffsetBounds(nextScale));
-      previewZoomState = {
-        src: item.src,
-        scale: Math.round(nextScale * 10) / 10,
-        originX,
-        originY,
-        ...nextOffsets
-      };
-      applyPreviewZoom();
-    }
-    mediaBox.addEventListener('wheel', (event) => {
-      if (Math.abs(event.deltaY) < 1) return;
-      event.preventDefault();
-      const direction = event.deltaY < 0 ? 1 : -1;
-      pendingPreviewWheel = pendingPreviewWheel
-        ? { ...pendingPreviewWheel, clientX: event.clientX, clientY: event.clientY, steps: pendingPreviewWheel.steps + direction }
-        : { clientX: event.clientX, clientY: event.clientY, steps: direction };
-      if (!previewWheelFrame) previewWheelFrame = scheduleAnimationFrame(flushPreviewWheel);
-    }, { passive: false });
-    let previewDrag = null;
-    let suppressPreviewClick = false;
-    function flushPreviewDrag(drag = previewDrag) {
-      if (!drag || !drag.pending) return;
-      const { deltaX, deltaY } = drag.pending;
-      drag.pending = null;
-      drag.frame = null;
-      const offsets = clampPreviewOffset(
-        drag.offsetX + deltaX,
-        drag.offsetY + deltaY,
-        previewZoomState.scale,
-        drag.offsetBounds
-      );
-      previewZoomState = { ...previewZoomState, ...offsets };
-      applyPreviewZoom();
-    }
-    media.addEventListener('pointerdown', (event) => {
-      if (media.tagName !== 'IMG' || event.button !== 0 || previewZoomState.scale <= PREVIEW_ZOOM_MIN) return;
-      event.preventDefault();
-      previewDrag = {
-        pointerId: event.pointerId,
-        startX: event.clientX,
-        startY: event.clientY,
-        offsetX: previewZoomState.offsetX,
-        offsetY: previewZoomState.offsetY,
-        offsetBounds: getPreviewOffsetBounds(previewZoomState.scale),
-        frame: null,
-        pending: null,
-        moved: false
-      };
-      mediaBox.classList.add('is-dragging');
-      try {
-        media.setPointerCapture(event.pointerId);
-      } catch (error) {
-        // Pointer capture is optional; the image still receives ordinary mouse dragging.
-      }
-    });
-    media.addEventListener('pointermove', (event) => {
-      if (!previewDrag || event.pointerId !== previewDrag.pointerId) return;
-      const deltaX = event.clientX - previewDrag.startX;
-      const deltaY = event.clientY - previewDrag.startY;
-      if (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3) previewDrag.moved = true;
-      previewDrag.pending = { deltaX, deltaY };
-      if (!previewDrag.frame) previewDrag.frame = scheduleAnimationFrame(() => flushPreviewDrag());
-    });
-    function finishPreviewDrag(event) {
-      if (!previewDrag || event.pointerId !== previewDrag.pointerId) return;
-      if (previewDrag.frame) cancelScheduledAnimationFrame(previewDrag.frame);
-      flushPreviewDrag();
-      suppressPreviewClick = previewDrag.moved;
-      previewDrag = null;
-      mediaBox.classList.remove('is-dragging');
-    }
-    media.addEventListener('pointerup', finishPreviewDrag);
-    media.addEventListener('pointercancel', finishPreviewDrag);
-    media.addEventListener('click', () => {
-      if (suppressPreviewClick) {
-        suppressPreviewClick = false;
-        return;
-      }
-      if (previewZoomState.scale > PREVIEW_ZOOM_MIN) {
-        resetPreviewZoom();
-        return;
-      }
-      previewZoomState = {
-        ...createPreviewZoomState(item.src),
-        scale: PREVIEW_CLICK_ZOOM
-      };
-      applyPreviewZoom();
-    });
+
     if (snapshot.canPrevious) {
       const previousButton = makeElement(doc, 'button', 'rmw-preview-nav rmw-preview-prev', '‹');
       previousButton.type = 'button';
@@ -2220,6 +2249,7 @@
       wallSession.rememberView({ scrollTop: grid.scrollTop, previewKey: wallSession.snapshot().previewKey });
       previewZoomState = createPreviewZoomState();
       state.closeWall();
+      doc.getElementById(IDS.preview)?.rmwDisposePreview?.();
       backdrop.remove();
       taskGeneration += 1;
       root.setTimeout(() => {
@@ -2294,6 +2324,7 @@
   }
 
   return {
+    createSmoothPreviewZoom,
     detectSite,
     createMediaStore,
     filterMedia,

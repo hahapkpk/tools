@@ -855,30 +855,15 @@ test('预览图片与文字之间提供可拖动并可双击复位的分隔条',
   assert.match(source, /resizer\.addEventListener\('dblclick'/);
 });
 
-test('预览图片区域支持单击默认放大、再次单击恢复、滚轮缩放与拖动查看', () => {
-  assert.match(source, /mediaBox\.addEventListener\('wheel'/);
-  assert.match(source, /\{ passive: false \}/);
+test('预览图片区域使用连续缩放控制器并清理旧预览', () => {
+  assert.equal(typeof api.createSmoothPreviewZoom, 'function');
+  assert.match(source, /const zoom = createSmoothPreviewZoom\(mediaBox, media/);
+  assert.match(source, /previous\?\.rmwDisposePreview\?\.\(\)/);
+  assert.match(source, /overlay\.rmwDisposePreview = \(\) => \{ zoom\.dispose\(\)/);
   assert.match(source, /const PREVIEW_ZOOM_MIN = 1/);
   assert.match(source, /const PREVIEW_ZOOM_MAX = 5/);
-  assert.match(source, /const PREVIEW_ZOOM_STEP = 0\.2/);
   assert.match(source, /const PREVIEW_CLICK_ZOOM = 2/);
-  assert.match(source, /wheel\.clientX - bounds\.left/);
-  assert.match(source, /wheel\.clientY - bounds\.top/);
-  assert.match(source, /media\.style\.transform = `translate\(\$\{offsetX\}px, \$\{offsetY\}px\) scale\(\$\{scale\}\)`/);
-  assert.match(source, /function getPreviewOffsetBounds\(scale = previewZoomState\.scale\)/);
-  assert.match(source, /function clampPreviewOffset\(offsetX, offsetY, scale = previewZoomState\.scale, offsetBounds = getPreviewOffsetBounds\(scale\)\)/);
-  assert.match(source, /let previewWheelFrame = null/);
-  assert.match(source, /function flushPreviewWheel\(\)/);
-  assert.match(source, /function flushPreviewDrag\(drag = previewDrag\)/);
-  assert.match(source, /offsetBounds: getPreviewOffsetBounds\(previewZoomState\.scale\)/);
-  assert.match(source, /media\.addEventListener\('pointerdown'/);
-  assert.match(source, /media\.addEventListener\('pointermove'/);
-  assert.match(source, /media\.addEventListener\('click'/);
-  assert.match(source, /function resetPreviewZoom\(\)/);
-  assert.match(source, /suppressPreviewClick = previewDrag\.moved/);
-  assert.match(source, /scale: PREVIEW_CLICK_ZOOM/);
-  assert.doesNotMatch(source, /lastPreviewWheelShift|WHEEL_SHIFT_COOLDOWN/);
-  assert.match(source, /event\.preventDefault\(\)/);
+  assert.doesNotMatch(source, /PREVIEW_ZOOM_STEP|pendingPreviewWheel|transition:transform \.12s/);
 });
 
 test('淘宝天猫评价内容使用同一套预览阅读排版', () => {
@@ -961,7 +946,7 @@ test('返回卡片高亮在媒体同步重新渲染后仍可保留至超时', ()
 });
 
 test('发布脚本提供油猴更新地址并提升增强版版本号', () => {
-  assert.match(source, /@version\s+0\.5\.29/);
+  assert.match(source, /@version\s+0\.5\.30/);
   assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
   assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/jd-taobao-review-media-waterfall\.user\.js/);
 });
@@ -1195,7 +1180,7 @@ test('筛选同步和关闭会使迟到的定时加载任务失效', () => {
   assert.match(source, /if \(!isCurrentTask\(generation\)\) return/);
   assert.match(source, /currentProduct\.addEventListener\('click', \(\) => \{\s*const generation = nextTaskGeneration\(\)/);
   assert.match(source, /sync\.addEventListener\('click', \(\) => \{\s*const generation = nextTaskGeneration\(\)/);
-  assert.match(source, /dismissed = true;[\s\S]{0,260}taskGeneration \+= 1/);
+  assert.match(source, /dismissed = true;[\s\S]*?taskGeneration \+= 1/);
 });
 
 test('网格尺寸变化和卡片大小切换会按当前图片锚点校准滚动位置', () => {
@@ -1270,7 +1255,7 @@ test('弹窗先显示轻量外壳再延后扫描和渲染媒体', () => {
 });
 
 test('关闭操作先移除弹窗再异步清理后台资源', () => {
-  assert.match(source, /state\.closeWall\(\);\s*backdrop\.remove\(\);\s*taskGeneration \+= 1;/);
+  assert.match(source, /state\.closeWall\(\);\s*doc\.getElementById\(IDS\.preview\)\?\.rmwDisposePreview\?\.\(\);\s*backdrop\.remove\(\);\s*taskGeneration \+= 1;/);
   assert.match(source, /root\.setTimeout\(\(\) => \{[\s\S]*adapter\.closeNativeReviews/);
   assert.match(source, /close\.addEventListener\('pointerdown'/);
 });
