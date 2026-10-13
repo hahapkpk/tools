@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.19.0
+// @version      1.20.0
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader.user.js
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader.user.js
-// @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click native download, Ctrl+C / OneUp PNG image copy, and double-click zoom / smooth mouse-wheel zoom / drag-pan in the image preview.
+// @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click native download, Ctrl+C / OneUp PNG image copy, and native high-resolution OneUp zoom with double-click / smooth mouse-wheel zoom / drag-pan.
 // @author       FlyWind
 // @match        https://www.icloud.com/photos*
 // @match        https://www.icloud.com.cn/photos*
@@ -2749,6 +2749,63 @@
     return true;
   }
 
+  function findNativeOneUpZoomController(doc) {
+    if (!doc || typeof doc.querySelector !== 'function') return null;
+    try {
+      const element = doc.querySelector('.ToolbarOneUpZoomSlider');
+      if (!element || element.isConnected === false) return null;
+      const rect = element.getBoundingClientRect();
+      if (!rect.width || !rect.height) return null;
+      const key = Object.getOwnPropertyNames(element).find(function (name) {
+        return /^__reactFiber\$|^__reactInternalInstance\$/.test(name);
+      });
+      let fiber = key && element[key];
+      if (!fiber) return null;
+      let tree = fiber;
+      for (let i = 0; tree.return && i < 100; i += 1) tree = tree.return;
+      // React keeps the DOM expando on one of its two fiber trees. Always read
+      // the committed tree, not stale callbacks belonging to the previous photo.
+      if (tree.stateNode && tree.stateNode.current && tree.stateNode.current !== tree) {
+        fiber = fiber.alternate;
+      }
+      let slider = null;
+      let photoIndex = null;
+      let transformationScale = null;
+      for (let i = 0; fiber && i < 100; i += 1, fiber = fiber.return) {
+        const props = fiber.memoizedProps || {};
+        if (!slider && String(props.className || '').indexOf('ToolbarOneUpZoomSlider') !== -1 &&
+            typeof props.onChange === 'function' && Number.isFinite(props.value) &&
+            Number.isFinite(props.min) && Number.isFinite(props.max) && props.min >= 1 &&
+            props.max > props.min && !props.disabled) {
+          slider = props;
+        }
+        const context = props.value;
+        if (context && typeof context === 'object' &&
+            typeof context.setTransformationState === 'function' &&
+            Number.isInteger(context.currentIndex)) {
+          photoIndex = context.currentIndex;
+          const matrix = context.transformationState && context.transformationState.matrix;
+          if (matrix && Number.isFinite(matrix.a) && Number.isFinite(matrix.b)) {
+            transformationScale = Math.hypot(matrix.a, matrix.b);
+          }
+        }
+      }
+      if (!slider || photoIndex === null) return null;
+      return {
+        element,
+        photoIndex,
+        min: slider.min,
+        max: slider.max,
+        value: slider.value,
+        renderedValue: transformationScale,
+        apply: slider.onChange,
+      };
+    } catch (error) {
+      // An Apple UI change must not break upload/copy or guess a private API.
+      return null;
+    }
+  }
+
   let zoomPanInstalled = false;
 
   function installImageZoomPan(doc, win) {
@@ -2794,6 +2851,86 @@
     };
 
     let zoomHintShown = false;
+
+    // The native slider updates OneUp's transformationState, which is also the
+    // progressive image loader's resolution input. CSS-only zoom bypasses it.
+    let nativeZoom = null;
+
+    function cancelNativeZoom() {
+      if (nativeZoom && nativeZoom.frame !== null && win && typeof win.cancelAnimationFrame === 'function') {
+        win.cancelAnimationFrame(nativeZoom.frame);
+      }
+      nativeZoom = null;
+    }
+
+    function matchesNativeZoom(controller) {
+      return Boolean(nativeZoom && controller && nativeZoom.element === controller.element &&
+        nativeZoom.photoIndex === controller.photoIndex &&
+        Math.abs((nativeZoom.hasPainted && Number.isFinite(controller.renderedValue)
+          ? controller.renderedValue : controller.value) - nativeZoom.painted) < 0.01);
+    }
+
+    function getNativeZoomScale(controller) {
+      return matchesNativeZoom(controller) ? nativeZoom.target : controller.value;
+    }
+
+    function applyNativeZoom(controller, value) {
+      try {
+        controller.apply(value);
+        return true;
+      } catch (error) {
+        cancelNativeZoom();
+        showCopyPhotoStatus(doc, '原生缩放暂时不可用，请使用左上角调整大小控件。', true);
+        console.warn(LOG_PREFIX, 'Native OneUp zoom failed:', error);
+        return false;
+      }
+    }
+
+    function animateNativeZoom(time) {
+      const camera = nativeZoom;
+      if (!camera) return;
+      camera.frame = null;
+      const controller = findNativeOneUpZoomController(doc);
+      if (!matchesNativeZoom(controller)) { cancelNativeZoom(); return; }
+      // Use elapsed time: background tabs can deliver RAF only once per second.
+      const dt = camera.time === null ? 16 : Math.max(1, time - camera.time);
+      camera.time = time;
+      const target = clamp(camera.target, controller.min, controller.max);
+      const next = camera.painted + (target - camera.painted) * (1 - Math.exp(-dt / 55));
+      const settled = Math.abs(target - next) < 0.001;
+      const value = settled ? target : next;
+      if (!applyNativeZoom(controller, value)) return;
+      camera.painted = value;
+      camera.hasPainted = true;
+      if (!settled) camera.frame = win.requestAnimationFrame(animateNativeZoom);
+      else camera.time = null;
+    }
+
+    function requestNativeZoom(controller, scale, immediate) {
+      if (state.element) detach();
+      if (!matchesNativeZoom(controller)) {
+        cancelNativeZoom();
+        nativeZoom = { element: controller.element, photoIndex: controller.photoIndex,
+          target: controller.value, painted: controller.value, frame: null, time: null, hasPainted: false };
+      }
+      nativeZoom.target = clamp(scale, controller.min, controller.max);
+      const reduced = win && typeof win.matchMedia === 'function' &&
+        win.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (immediate || reduced || !win || typeof win.requestAnimationFrame !== 'function') {
+        const value = nativeZoom.target;
+        cancelNativeZoom();
+        applyNativeZoom(controller, value);
+      } else if (nativeZoom.frame === null) {
+        nativeZoom.frame = win.requestAnimationFrame(animateNativeZoom);
+      }
+    }
+
+    function resetZoomOnResize() {
+      cancelNativeZoom();
+      detach();
+    }
+
+
 
     function showZoomHint() {
       if (zoomHintShown) return;
@@ -3177,6 +3314,21 @@
         return;
       }
 
+      const native = findNativeOneUpZoomController(doc);
+      if (native) {
+        const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? (win.innerHeight || 800) : 1;
+        const delta = -clamp(Number(event.deltaY) * unit, -1000, 1000);
+        if (!Number.isFinite(delta) || delta === 0) return;
+        const scale = getNativeZoomScale(native);
+        const next = clamp(scale * Math.exp(delta * 0.0015), native.min, native.max);
+        if (next === scale) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+        requestNativeZoom(native, next);
+        showZoomHint();
+        return;
+      }
       const rect = img.getBoundingClientRect();
       const attachedHere = state.element === img;
       // Derive the logical destination centre from the currently painted frame.
@@ -3227,6 +3379,10 @@
       if (event.button !== 0) return;
       if (event.target && typeof event.target.closest === 'function' &&
           event.target.closest('button, input, textarea, select, [role="button"], #' + PANEL_ID + '-toast')) return;
+      if (findNativeOneUpZoomController(doc)) {
+        cancelNativeZoom();
+        return; // iCloud's own pan recognizer must handle native zoomed images.
+      }
       if (!state.zoomTarget || state.scale <= MIN_SCALE) return;
       const rect = state.zoomTarget.getBoundingClientRect();
       if (event.clientX < rect.left || event.clientX > rect.right ||
@@ -3275,6 +3431,13 @@
       event.preventDefault();
       event.stopPropagation();
       if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+      const native = findNativeOneUpZoomController(doc);
+      if (native) {
+        const next = getNativeZoomScale(native) > native.min + 0.001 ? native.min : Math.min(2, native.max);
+        requestNativeZoom(native, next);
+        showZoomHint();
+        return;
+      }
       if (state.element === img && state.scale > MIN_SCALE + 0.001) {
         state.scale = 1; state.tx = 0; state.ty = 0;
       } else {
@@ -3290,6 +3453,16 @@
     }
 
     function onKeyDown(event) {
+      const native = findNativeOneUpZoomController(doc);
+      if (native && (event.key === 'Escape' || event.key === '0') &&
+          !event.ctrlKey && !event.metaKey && !event.altKey && !isEditablePhotoCopyTarget(event.target) &&
+          Math.max(native.value, getNativeZoomScale(native)) > native.min + 0.001) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+        requestNativeZoom(native, native.min, true);
+        return;
+      }
       if (!state.element) return;
       // Only claim the reset keys when the user is not typing or invoking a
       // browser/OS shortcut.
@@ -3327,7 +3500,7 @@
       target.addEventListener('keydown', onKeyDown, true);
     });
     if (win && typeof win.addEventListener === 'function') {
-      win.addEventListener('resize', detach);
+      win.addEventListener('resize', resetZoomOnResize);
       win.addEventListener('blur', endDrag);
     }
   }
