@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.20.0
+// @version      1.21.0
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader.user.js
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader.user.js
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click native download, Ctrl+C / OneUp PNG image copy, and native high-resolution OneUp zoom with double-click / smooth mouse-wheel zoom / drag-pan.
@@ -2763,20 +2763,41 @@
       if (!fiber) return null;
       let tree = fiber;
       for (let i = 0; tree.return && i < 100; i += 1) tree = tree.return;
-      // React keeps the DOM expando on one of its two fiber trees. Always read
-      // the committed tree, not stale callbacks belonging to the previous photo.
-      if (tree.stateNode && tree.stateNode.current && tree.stateNode.current !== tree) {
-        fiber = fiber.alternate;
+      // Bailouts can share host fibers whose return pointers still reference an
+      // old parent branch. Follow the committed root's child/sibling links rather
+      // than choosing an alternate from those stale return pointers.
+      let lineage = null;
+      const committed = tree.stateNode && tree.stateNode.current;
+      if (committed && committed.child) {
+        const stack = [[committed, []]];
+        const seen = new Set();
+        for (let visited = 0; stack.length && visited < 10000; visited += 1) {
+          const entry = stack.pop(), node = entry[0], parents = entry[1];
+          if (!node || seen.has(node)) continue;
+          seen.add(node);
+          if (node.stateNode === element) { lineage = parents.concat(node).reverse(); break; }
+          const dom = node.stateNode;
+          if (dom && dom.nodeType === 1 && typeof dom.contains === 'function' && !dom.contains(element)) continue;
+          for (let child = node.child; child; child = child.sibling) {
+            stack.push([child, parents.concat(node)]);
+          }
+        }
+        if (!lineage) return null;
+      } else {
+        if (committed && committed !== tree) fiber = fiber.alternate;
+        lineage = [];
+        for (let i = 0; fiber && i < 100; i += 1, fiber = fiber.return) lineage.push(fiber);
       }
       let slider = null;
       let photoIndex = null;
       let transformationScale = null;
-      for (let i = 0; fiber && i < 100; i += 1, fiber = fiber.return) {
-        const props = fiber.memoizedProps || {};
+      let nativeContext = null;
+      for (let i = 0; i < lineage.length; i += 1) {
+        const props = lineage[i].memoizedProps || {};
         if (!slider && String(props.className || '').indexOf('ToolbarOneUpZoomSlider') !== -1 &&
             typeof props.onChange === 'function' && Number.isFinite(props.value) &&
             Number.isFinite(props.min) && Number.isFinite(props.max) && props.min >= 1 &&
-            props.max > props.min && !props.disabled) {
+            props.max > props.min && props.value >= props.min && props.value <= props.max && !props.disabled) {
           slider = props;
         }
         const context = props.value;
@@ -2784,6 +2805,7 @@
             typeof context.setTransformationState === 'function' &&
             Number.isInteger(context.currentIndex)) {
           photoIndex = context.currentIndex;
+          nativeContext = context;
           const matrix = context.transformationState && context.transformationState.matrix;
           if (matrix && Number.isFinite(matrix.a) && Number.isFinite(matrix.b)) {
             transformationScale = Math.hypot(matrix.a, matrix.b);
@@ -2791,8 +2813,12 @@
         }
       }
       if (!slider || photoIndex === null) return null;
+      const target = doc.querySelector('.OneUpCarouselItem.is-center .OneUpCarouselItem-itemWrapper');
+      if (!target || !target.style || target.isConnected === false) return null;
       return {
         element,
+        target,
+        context: nativeContext,
         photoIndex,
         min: slider.min,
         max: slider.max,
@@ -2806,11 +2832,20 @@
     }
   }
 
-  let zoomPanInstalled = false;
+  const zoomPanInstallations = new WeakMap();
 
   function installImageZoomPan(doc, win) {
-    if (zoomPanInstalled) return;
-    zoomPanInstalled = true;
+    if (zoomPanInstallations.has(doc)) return zoomPanInstallations.get(doc);
+    let disposed = false;
+    let sessionActive = false;
+    let nativeObserver = null;
+    let nativeStyleRelease = null;
+    let fallbackStyleRelease = null;
+    let nativeDrag = null;
+    let capturedPointer = null;
+    let discoveryObserver = null;
+    let sessionController = null;
+    const eventRoot = win || doc;
 
     const MIN_PREVIEW_PX = 300;
     const MIN_SCALE = 1;
@@ -2856,27 +2891,174 @@
     // progressive image loader's resolution input. CSS-only zoom bypasses it.
     let nativeZoom = null;
 
+    // Own only the transform transition. The final explicit transform entry
+    // overrides native `all`/transform easing; opacity (including child fades)
+    // keeps its original timing. The rule survives native inline resets.
+    function ownTransformTransition(target) {
+      if (!target || !target.style) return function () {};
+      const style = target.style;
+      const saved = style.transition || '';
+      const priority = style.getPropertyPriority ? style.getPropertyPriority('transition') : '';
+      let computed = saved;
+      try { computed = win.getComputedStyle(target).transition || saved; } catch (error) { /* inline fallback */ }
+      const value = (computed && computed !== 'none' ? computed + ', ' : '') + 'transform 0s linear';
+      const attr = 'data-iu-camera', variable = '--iu-camera-transition';
+      const marked = typeof target.setAttribute === 'function' && typeof style.setProperty === 'function';
+      const savedAttr = marked ? target.getAttribute(attr) : null;
+      const savedVariable = marked ? style.getPropertyValue(variable) : '';
+      const variablePriority = marked ? style.getPropertyPriority(variable) : '';
+      let rule = null;
+      if (marked && typeof doc.createElement === 'function' && (doc.head || doc.body)) {
+        rule = doc.createElement('style');
+        rule.textContent = '[data-iu-camera="active"]{transition:var(--iu-camera-transition)!important}';
+        (doc.head || doc.body).appendChild(rule);
+        target.setAttribute(attr, 'active');
+        style.setProperty(variable, value);
+      }
+      if (style.setProperty) style.setProperty('transition', value, 'important');
+      else style.transition = value;
+      const appliedTransition = style.transition;
+      return function () {
+        if (style.transition === appliedTransition && (!style.getPropertyPriority || style.getPropertyPriority('transition') === 'important')) {
+          if (style.setProperty) style.setProperty('transition', saved, priority);
+          else style.transition = saved;
+        }
+        if (rule) {
+          if (target.getAttribute(attr) === 'active') {
+            if (savedAttr === null) target.removeAttribute(attr); else target.setAttribute(attr, savedAttr);
+          }
+          if (style.getPropertyValue(variable) === value && style.getPropertyPriority(variable) === '') {
+            if (savedVariable) style.setProperty(variable, savedVariable, variablePriority);
+            else style.removeProperty(variable);
+          }
+          if (rule.parentNode) rule.parentNode.removeChild(rule);
+        }
+      };
+    }
+
+    function startSession() {
+      if (sessionActive || disposed) return;
+      sessionActive = true;
+      if (discoveryObserver) discoveryObserver.disconnect();
+      sessionController = findNativeOneUpZoomController(doc);
+      if (sessionController) observeNativeSession();
+      eventRoot.addEventListener('pointerdown', onMouseDown, true);
+      eventRoot.addEventListener('keydown', onKeyDown, true);
+      eventRoot.addEventListener('resize', resetZoomOnResize);
+      eventRoot.addEventListener('blur', resetZoomOnResize);
+      eventRoot.addEventListener('pointercancel', resetZoomOnResize, true);
+      eventRoot.addEventListener('pagehide', resetZoomOnResize);
+    }
+
+    function stopSession() {
+      if (!sessionActive) return;
+      endDrag();
+      sessionActive = false;
+      eventRoot.removeEventListener('pointerdown', onMouseDown, true);
+      eventRoot.removeEventListener('keydown', onKeyDown, true);
+      eventRoot.removeEventListener('resize', resetZoomOnResize);
+      eventRoot.removeEventListener('blur', resetZoomOnResize);
+      eventRoot.removeEventListener('pointercancel', resetZoomOnResize, true);
+      eventRoot.removeEventListener('pagehide', resetZoomOnResize);
+      sessionController = null;
+      if (!disposed && discoveryObserver) discoveryObserver.observe(doc.documentElement || doc.body, {
+        childList: true, subtree: true, attributes: true, attributeFilter: ['class'],
+      });
+    }
+
+    function observeNativeSession() {
+      if (nativeObserver) return;
+      const Observer = win.MutationObserver || root.MutationObserver;
+      if (typeof Observer !== 'function' || !(doc.body || doc.documentElement)) return;
+      nativeObserver = new Observer(function () {
+        const controller = findNativeOneUpZoomController(doc);
+        if (nativeZoom ? !matchesNativeZoom(controller) : !controller ||
+            !sessionController || controller.element !== sessionController.element ||
+            controller.target !== sessionController.target || controller.photoIndex !== sessionController.photoIndex) {
+          cancelNativeZoom();
+        }
+      });
+      nativeObserver.observe(doc.documentElement || doc.body, {
+        childList: true, subtree: true, attributes: true, attributeFilter: ['class'],
+      });
+    }
+
     function cancelNativeZoom() {
       if (nativeZoom && nativeZoom.frame !== null && win && typeof win.cancelAnimationFrame === 'function') {
         win.cancelAnimationFrame(nativeZoom.frame);
       }
+      if (nativeObserver) nativeObserver.disconnect();
+      nativeObserver = null;
+      if (nativeStyleRelease) nativeStyleRelease();
+      nativeStyleRelease = null;
       nativeZoom = null;
+      if (!state.element) stopSession();
     }
 
     function matchesNativeZoom(controller) {
       return Boolean(nativeZoom && controller && nativeZoom.element === controller.element &&
+        nativeZoom.targetElement === controller.target &&
         nativeZoom.photoIndex === controller.photoIndex &&
-        Math.abs((nativeZoom.hasPainted && Number.isFinite(controller.renderedValue)
-          ? controller.renderedValue : controller.value) - nativeZoom.painted) < 0.01);
+        Math.abs(readNativeScale(controller) - nativeZoom.painted) < 0.01);
+    }
+
+    function readNativeMatrix(controller) {
+      if (!controller.target || controller.target.isConnected === false || typeof win.DOMMatrix !== 'function') return null;
+      try {
+        const matrix = new win.DOMMatrix(controller.target.style.transform || readCurrentTransform(controller.target));
+        return [matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f].every(Number.isFinite) ? matrix : null;
+      } catch (error) { return null; }
+    }
+
+    function readNativeScale(controller) {
+      const matrix = readNativeMatrix(controller);
+      return matrix ? Math.hypot(matrix.a, matrix.b) :
+        Number.isFinite(controller.renderedValue) ? controller.renderedValue : controller.value;
+    }
+
+    function writeNativeMatrix(controller, matrix) {
+      controller.target.style.transform = matrix.toString();
+      controller.context.setTransformationState(function (old) {
+        return old ? Object.assign({}, old, { matrix: {
+          a: matrix.a, b: matrix.b, c: matrix.c, d: matrix.d, tx: matrix.e, ty: matrix.f,
+        } }) : old;
+      });
+    }
+
+    function getNativeCameraImage(controller, camera) {
+      const images = controller.target && controller.target.querySelectorAll
+        ? Array.from(controller.target.querySelectorAll('img')) : [];
+      let best = null;
+      images.forEach(function (image) {
+        const computed = win.getComputedStyle ? win.getComputedStyle(image) : image.style;
+        if (image.isConnected === false || (computed && (computed.display === 'none' || computed.visibility === 'hidden')) ||
+            (image.style && image.style.display === 'none')) return;
+        const rect = image.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0 && (!best || image.naturalWidth > best.naturalWidth)) best = image;
+      });
+      return best || (camera.image && camera.image.isConnected !== false ? camera.image : null);
     }
 
     function getNativeZoomScale(controller) {
-      return matchesNativeZoom(controller) ? nativeZoom.target : controller.value;
+      return matchesNativeZoom(controller) ? nativeZoom.target : readNativeScale(controller);
     }
 
     function applyNativeZoom(controller, value) {
       try {
         controller.apply(value);
+        const camera = nativeZoom;
+        const matrix = readNativeMatrix(controller);
+        if (matrix && value === controller.min) {
+          matrix.e = 0; matrix.f = 0;
+          writeNativeMatrix(controller, matrix);
+        } else if (camera && matrix && camera.anchor && camera.image) {
+          const image = getNativeCameraImage(controller, camera);
+          if (!image) { cancelNativeZoom(); return false; }
+          const rect = image.getBoundingClientRect();
+          matrix.e += camera.anchor.x - rect.left - camera.anchor.u * rect.width;
+          matrix.f += camera.anchor.y - rect.top - camera.anchor.v * rect.height;
+          writeNativeMatrix(controller, matrix);
+        }
         return true;
       } catch (error) {
         cancelNativeZoom();
@@ -2903,24 +3085,47 @@
       camera.painted = value;
       camera.hasPainted = true;
       if (!settled) camera.frame = win.requestAnimationFrame(animateNativeZoom);
-      else camera.time = null;
+      else {
+        camera.time = null;
+        if (!capturedPointer) eventRoot.removeEventListener('pointermove', onMouseMove, true);
+        if (value === controller.min) cancelNativeZoom();
+      }
     }
 
-    function requestNativeZoom(controller, scale, immediate) {
+    function prepareNativeCamera(controller) {
       if (state.element) detach();
       if (!matchesNativeZoom(controller)) {
         cancelNativeZoom();
         nativeZoom = { element: controller.element, photoIndex: controller.photoIndex,
-          target: controller.value, painted: controller.value, frame: null, time: null, hasPainted: false };
+          targetElement: controller.target, target: readNativeScale(controller), painted: readNativeScale(controller),
+          frame: null, time: null, hasPainted: false, image: null, anchor: null };
+        nativeStyleRelease = ownTransformTransition(controller.target);
       }
+      startSession();
+      observeNativeSession();
+    }
+
+    function requestNativeZoom(controller, scale, immediate, image, event) {
+      prepareNativeCamera(controller);
       nativeZoom.target = clamp(scale, controller.min, controller.max);
+      if (image && event) {
+        const rect = image.getBoundingClientRect();
+        nativeZoom.image = image;
+        nativeZoom.anchor = { x: event.clientX, y: event.clientY,
+          u: (event.clientX - rect.left) / rect.width, v: (event.clientY - rect.top) / rect.height };
+      }
       const reduced = win && typeof win.matchMedia === 'function' &&
         win.matchMedia('(prefers-reduced-motion: reduce)').matches;
       if (immediate || reduced || !win || typeof win.requestAnimationFrame !== 'function') {
         const value = nativeZoom.target;
-        cancelNativeZoom();
+        if (nativeZoom.frame !== null && win.cancelAnimationFrame) win.cancelAnimationFrame(nativeZoom.frame);
+        nativeZoom.frame = null; nativeZoom.time = null;
         applyNativeZoom(controller, value);
+        if (nativeZoom) nativeZoom.painted = value;
+        if (value === controller.min) cancelNativeZoom();
       } else if (nativeZoom.frame === null) {
+        if (nativeZoom.time === null && win.performance && typeof win.performance.now === 'function') nativeZoom.time = win.performance.now();
+        eventRoot.addEventListener('pointermove', onMouseMove, true);
         nativeZoom.frame = win.requestAnimationFrame(animateNativeZoom);
       }
     }
@@ -3076,6 +3281,7 @@
       resetView();
 
       state.zoomTarget = findZoomTarget(el);
+      startSession();
       const rect = state.zoomTarget.getBoundingClientRect();
       state.baseWidth = rect.width;
       state.baseHeight = rect.height;
@@ -3085,7 +3291,7 @@
       state.savedCursor = state.zoomTarget.style.cursor || '';
       state.savedWillChange = state.zoomTarget.style.willChange || '';
 
-      setOwnedInlineStyle('transition', 'none', 'appliedTransition');
+      fallbackStyleRelease = ownTransformTransition(state.zoomTarget);
       setOwnedInlineStyle('willChange', 'transform', 'appliedWillChange');
       startWatchdog();
     }
@@ -3093,6 +3299,8 @@
     function detach() {
       cancelZoomAnimation();
       stopWatchdog();
+      if (fallbackStyleRelease) fallbackStyleRelease();
+      fallbackStyleRelease = null;
       if (state.zoomTarget) {
         // Restore only values the script still owns. React may reuse this wrapper
         // for the next photo and write its own inline state before observers run.
@@ -3119,6 +3327,7 @@
       state.appliedCursor = null;
       state.appliedWillChange = null;
       resetView();
+      if (!nativeZoom) stopSession();
     }
 
     function expectedTransform() {
@@ -3139,6 +3348,7 @@
       }
       state.animationFrame = null;
       state.animationTime = null;
+      if (!capturedPointer) eventRoot.removeEventListener('pointermove', onMouseMove, true);
     }
 
     function paintZoom() {
@@ -3155,7 +3365,7 @@
         return;
       }
       if (hasMediaSourceChanged(state.element, state.mediaSource)) { detach(); return; }
-      const dt = state.animationTime === null ? 16 : Math.max(1, Math.min(64, time - state.animationTime));
+      const dt = state.animationTime === null ? 16 : Math.max(1, time - state.animationTime);
       state.animationTime = time;
       const alpha = 1 - Math.exp(-dt / 55);
       state.renderedScale += (state.scale - state.renderedScale) * alpha;
@@ -3172,6 +3382,7 @@
       }
       paintZoom();
       if (!settled) state.animationFrame = win.requestAnimationFrame(animateZoom);
+      else if (!capturedPointer) eventRoot.removeEventListener('pointermove', onMouseMove, true);
     }
 
     function applyTransform() {
@@ -3186,6 +3397,8 @@
         if (state.scale <= MIN_SCALE + 0.001) { detach(); return; }
         paintZoom();
       } else if (state.animationFrame === null) {
+        if (win.performance && typeof win.performance.now === 'function') state.animationTime = win.performance.now();
+        eventRoot.addEventListener('pointermove', onMouseMove, true);
         state.animationFrame = win.requestAnimationFrame(animateZoom);
       }
     }
@@ -3241,7 +3454,7 @@
         });
       }
 
-      const observeTarget = doc.body || doc.documentElement;
+      const observeTarget = doc.documentElement || doc.body;
       if (typeof MutationObserverCtor !== 'function' || !observeTarget) return;
       state.watchdogObserver = new MutationObserverCtor(function () {
         if (state.watchdogFrame !== null) return;
@@ -3314,6 +3527,12 @@
         return;
       }
 
+      if (state.dragging || nativeDrag) {
+        event.preventDefault(); event.stopPropagation();
+        if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+        return;
+      }
+
       const native = findNativeOneUpZoomController(doc);
       if (native) {
         const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? (win.innerHeight || 800) : 1;
@@ -3325,18 +3544,17 @@
         event.preventDefault();
         event.stopPropagation();
         if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
-        requestNativeZoom(native, next);
+        requestNativeZoom(native, next, false, img, event);
         showZoomHint();
         return;
       }
+      if (hasPendingNativeViewer()) return;
       const rect = img.getBoundingClientRect();
-      const attachedHere = state.element === img;
-      // Derive the logical destination centre from the currently painted frame.
-      // Otherwise bursts of wheel events drift their anchor during easing.
-      const px = event.clientX - rect.left - rect.width / 2 +
-        (attachedHere ? state.renderedTx - state.tx : 0);
-      const py = event.clientY - rect.top - rect.height / 2 +
-        (attachedHere ? state.renderedTy - state.ty : 0);
+
+      // Accumulate scale at the destination, but measure a changed cursor's
+      // image point at the painted camera, not the unseen pending destination.
+      const px = event.clientX - rect.left - rect.width / 2;
+      const py = event.clientY - rect.top - rect.height / 2;
       const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? (win.innerHeight || 800) : 1;
       const delta = -clamp(Number(event.deltaY) * unit, -1000, 1000);
       if (!Number.isFinite(delta) || delta === 0) return;
@@ -3353,10 +3571,10 @@
       event.stopPropagation();
       if (state.element !== img) attach(img);
 
-      const scaleRatio = newScale / state.scale;
+      const scaleRatio = newScale / state.renderedScale;
       const translation = calculateZoomTranslation({
-        tx: state.tx,
-        ty: state.ty,
+        tx: state.renderedTx,
+        ty: state.renderedTy,
         pointerOffsetX: px,
         pointerOffsetY: py,
         scaleRatio,
@@ -3379,9 +3597,23 @@
       if (event.button !== 0) return;
       if (event.target && typeof event.target.closest === 'function' &&
           event.target.closest('button, input, textarea, select, [role="button"], #' + PANEL_ID + '-toast')) return;
-      if (findNativeOneUpZoomController(doc)) {
-        cancelNativeZoom();
-        return; // iCloud's own pan recognizer must handle native zoomed images.
+      const native = findNativeOneUpZoomController(doc);
+      if (native) {
+        const image = findPreviewImage(event.target, event.clientX, event.clientY);
+        const matrix = readNativeMatrix(native);
+        const scale = readNativeScale(native);
+        if (!image || !matrix || scale <= native.min) { cancelNativeZoom(); return; }
+        // Adopt what is actually painted, never the unfinished wheel target.
+        prepareNativeCamera(native);
+        nativeZoom.image = image;
+        if (nativeZoom.frame !== null) win.cancelAnimationFrame(nativeZoom.frame);
+        nativeZoom.frame = null; nativeZoom.time = null;
+        nativeZoom.target = scale; nativeZoom.painted = scale; nativeZoom.anchor = null;
+        const rect = image.getBoundingClientRect();
+        nativeDrag = { controller: native, matrix, x: event.clientX, y: event.clientY,
+          width: rect.width / scale, height: rect.height / scale, scale, pointerId: event.pointerId };
+        beginPointerDrag(event);
+        return;
       }
       if (!state.zoomTarget || state.scale <= MIN_SCALE) return;
       const rect = state.zoomTarget.getBoundingClientRect();
@@ -3399,11 +3631,51 @@
       state.origTx = state.tx;
       state.origTy = state.ty;
       setOwnedInlineStyle('cursor', 'grabbing', 'appliedCursor');
+      beginPointerDrag(event);
+    }
+
+    function beginPointerDrag(event) {
       event.preventDefault();
       event.stopPropagation();
+      if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+      capturedPointer = { target: event.target, id: event.pointerId };
+      if (event.target && event.target.setPointerCapture && event.pointerId !== undefined) {
+        try { event.target.setPointerCapture(event.pointerId); } catch (error) { /* detached overlay */ }
+      }
+      eventRoot.addEventListener('pointermove', onMouseMove, true);
+      eventRoot.addEventListener('pointerup', endDrag, true);
+      eventRoot.addEventListener('lostpointercapture', endDrag, true);
     }
 
     function onMouseMove(event) {
+      if (capturedPointer && event.pointerId !== capturedPointer.id) return;
+      if (!nativeDrag && !state.dragging) {
+        const image = findPreviewImage(event.target, event.clientX, event.clientY);
+        if (nativeZoom && nativeZoom.frame !== null && image) {
+          const controller = findNativeOneUpZoomController(doc);
+          if (matchesNativeZoom(controller)) requestNativeZoom(controller, nativeZoom.target, false, image, event);
+          else cancelNativeZoom();
+        } else if (state.animationFrame !== null && image === state.element) {
+          const rect = image.getBoundingClientRect();
+          state.tx = state.renderedTx + (event.clientX - rect.left - rect.width / 2) * (1 - state.scale / state.renderedScale);
+          state.ty = state.renderedTy + (event.clientY - rect.top - rect.height / 2) * (1 - state.scale / state.renderedScale);
+          clampTranslation();
+        }
+        return;
+      }
+      if (nativeDrag) {
+        const controller = findNativeOneUpZoomController(doc);
+        if (!matchesNativeZoom(controller)) { cancelNativeZoom(); return; }
+        const matrix = readNativeMatrix(controller);
+        if (!matrix) { cancelNativeZoom(); return; }
+        const limits = calculatePanLimits(nativeDrag.width, nativeDrag.height, nativeDrag.scale);
+        matrix.e = clamp(nativeDrag.matrix.e + event.clientX - nativeDrag.x, -limits.x, limits.x);
+        matrix.f = clamp(nativeDrag.matrix.f + event.clientY - nativeDrag.y, -limits.y, limits.y);
+        writeNativeMatrix(controller, matrix);
+        event.preventDefault(); event.stopPropagation();
+        if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+        return;
+      }
       if (!state.dragging || !state.element) return;
       state.tx = state.origTx + (event.clientX - state.startX);
       state.ty = state.origTy + (event.clientY - state.startY);
@@ -3415,7 +3687,17 @@
       event.preventDefault();
     }
 
-    function endDrag() {
+    function endDrag(event) {
+      if (event && capturedPointer && event.pointerId !== capturedPointer.id) return;
+      eventRoot.removeEventListener('pointermove', onMouseMove, true);
+      eventRoot.removeEventListener('pointerup', endDrag, true);
+      eventRoot.removeEventListener('lostpointercapture', endDrag, true);
+      nativeDrag = null;
+      const captured = capturedPointer;
+      capturedPointer = null;
+      if (captured && captured.target && captured.target.releasePointerCapture && captured.id !== undefined) {
+        try { captured.target.releasePointerCapture(captured.id); } catch (error) { /* already released */ }
+      }
       if (!state.dragging) return;
       state.dragging = false;
       if (state.zoomTarget) setOwnedInlineStyle('cursor', 'grab', 'appliedCursor');
@@ -3428,13 +3710,14 @@
           target.closest('button, input, textarea, select, [role="button"], #' + PANEL_ID + '-toast')) return;
       const img = findPreviewImage(target, event.clientX, event.clientY);
       if (!img || (typeof img.closest === 'function' && img.closest('.grid-item, [role="grid"]'))) return;
+      if (!findNativeOneUpZoomController(doc) && hasPendingNativeViewer()) return;
       event.preventDefault();
       event.stopPropagation();
       if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
       const native = findNativeOneUpZoomController(doc);
       if (native) {
         const next = getNativeZoomScale(native) > native.min + 0.001 ? native.min : Math.min(2, native.max);
-        requestNativeZoom(native, next);
+        requestNativeZoom(native, next, false, img, event);
         showZoomHint();
         return;
       }
@@ -3483,26 +3766,38 @@
       }
     }
 
-    // Capture phase so we run before iCloud's own wheel/drag handlers.
-    const targets = [doc];
-    if (win && win !== doc) targets.unshift(win);
-    targets.forEach(function (target) {
-      try {
-        target.addEventListener('wheel', onWheel, { passive: false, capture: true });
-      } catch (error) {
-        try { target.addEventListener('wheel', onWheel, true); } catch (e) { /* ignore */ }
-      }
-      target.addEventListener('mousedown', onMouseDown, true);
-      target.addEventListener('mousemove', onMouseMove, true);
-      target.addEventListener('mouseup', endDrag, true);
-      target.addEventListener('mouseleave', endDrag, true);
-      target.addEventListener('dblclick', onDoubleClick, true);
-      target.addEventListener('keydown', onKeyDown, true);
-    });
-    if (win && typeof win.addEventListener === 'function') {
-      win.addEventListener('resize', resetZoomOnResize);
-      win.addEventListener('blur', endDrag);
+    // One capture root avoids processing the same bubbling event twice.
+    function hasPendingNativeViewer() {
+      if (!doc.querySelector) return false;
+      const toolbar = doc.querySelector('.ToolbarOneUpZoomSlider');
+      if (!toolbar || toolbar.isConnected === false) return false;
+      const rect = toolbar.getBoundingClientRect();
+      return Boolean(rect.width && rect.height);
     }
+    eventRoot.addEventListener('wheel', onWheel, { passive: false, capture: true });
+    eventRoot.addEventListener('dblclick', onDoubleClick, true);
+    function dispose() {
+      if (disposed) return;
+      disposed = true;
+      resetZoomOnResize();
+      if (discoveryObserver) discoveryObserver.disconnect();
+      eventRoot.removeEventListener('wheel', onWheel, true);
+      eventRoot.removeEventListener('dblclick', onDoubleClick, true);
+      zoomPanInstallations.delete(doc);
+    }
+    zoomPanInstallations.set(doc, dispose);
+    const Observer = win.MutationObserver || root.MutationObserver;
+    if (typeof Observer === 'function' && (doc.documentElement || doc.body)) {
+      // Idle mount discovery only; active viewer owns its scoped observer.
+      discoveryObserver = new Observer(function () {
+        if (!disposed && !sessionActive && findNativeOneUpZoomController(doc)) startSession();
+      });
+      discoveryObserver.observe(doc.documentElement || doc.body, {
+        childList: true, subtree: true, attributes: true, attributeFilter: ['class'],
+      });
+    }
+    if (findNativeOneUpZoomController(doc)) startSession();
+    return dispose;
   }
 
   // DOM markers unique to the Photos app chrome. Used as a fallback so a renamed
