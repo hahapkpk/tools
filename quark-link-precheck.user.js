@@ -1,16 +1,16 @@
 // ==UserScript==
 // @name         夸克网盘链接预检
 // @namespace    local.codex
-// @version      0.6.6
+// @version      0.7.0
 // @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效。支持从 GitHub 公共白名单文件自动读取启动地址，并在非白名单页面快速退出。
+// @author       hahapkpk
+// @license      MIT
 // @match        https://www.xn--wcv59z.com/*
-// @match        https://www.wdku.net/*
 // @match        https://www.qmp4.com/*
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/quark-link-precheck.user.js
 // @connect      drive-h.quark.cn
-// @connect      pan.quark.cn
-// @connect      *
+// @connect      raw.githubusercontent.com
 // @run-at       document-idle
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
@@ -151,11 +151,22 @@
     }
   }
 
+  /**
+   * 按 origin + pathname 前缀匹配。旧实现用 href.indexOf()，
+   * 像 https://evil.cn/?next=https://www.qmp4.com/ 这种会被误判为白名单。
+   */
   function isInWhitelist() {
     if (!AUTO_START_WHITELIST.length) return false;
-    var href = location.href;
+    let here;
+    try { here = new URL(location.href); } catch (_) { return false; }
     return AUTO_START_WHITELIST.some(function (pattern) {
-      return typeof pattern === 'string' && pattern.trim() && href.indexOf(pattern.trim()) !== -1;
+      if (typeof pattern !== 'string' || !pattern.trim()) return false;
+      try {
+        const target = new URL(pattern.trim(), location.href);
+        return target.origin === here.origin && here.pathname.startsWith(target.pathname);
+      } catch (_) {
+        return location.href.indexOf(pattern.trim()) !== -1;
+      }
     });
   }
 
@@ -168,13 +179,11 @@
     }
 
     // 白名单为空时：沿用原有自动检测逻辑
-    const href = location.href;
     const host = location.hostname;
-    const text = document.body?.innerText || '';
     return /xn--wcv59z\.com$/i.test(host) ||
       /教父\.com$/i.test(host) ||
-      /pan\.quark\.cn\/s\//i.test(document.documentElement.innerHTML) ||
-      /夸克网盘|网盘下载/.test(text);
+      Boolean(document.querySelector('a[href*="pan.quark.cn/s/"]')) ||
+      /夸克网盘|网盘下载/.test((document.body?.innerText || '').slice(0, 5000));
   }
 
   function normalizeUrl(raw) {
@@ -197,11 +206,16 @@
     return [anchor.href, anchor.textContent, host.textContent].filter(Boolean).join(' ');
   }
 
+  /**
+   * 只认「提取码 / 访问码 / 分享码」和 URL 里的 pwd=。
+   * 旧实现会把「解压密码：1234」「验证码 8888」也当成提取码，导致误报「需提取码」。
+   */
   function findPasscode(text) {
-    const urlPwd = String(text).match(/[?&](?:pwd|password|passcode|code)=([A-Za-z0-9]{4,8})/i);
+    const s = String(text || '');
+    const urlPwd = s.match(/[?&](?:pwd|password|passcode)=([A-Za-z0-9]{4,8})/i);
     if (urlPwd) return urlPwd[1];
 
-    const cnPwd = String(text).match(/(?:提取码|访问码|密[码碼]|code|pwd)\s*[：:\s]\s*([A-Za-z0-9]{4,8})/i);
+    const cnPwd = s.match(/(?:提取码|访问码|分享码|提取碼|訪問碼)\s*[：:]?\s*([A-Za-z0-9]{4,8})/);
     return cnPwd ? cnPwd[1] : '';
   }
 
@@ -384,23 +398,34 @@
     }
   }
 
+  /**
+   * 成功与否以业务码为准。旧实现用 message.includes('ok') 判断，
+   * 而夸克 token 接口成功时 message 常常是空串，会把「可用」全部判成「未知」。
+   */
   function classifyTokenResponse(body) {
-    const message = String(body?.message || body?.code || '');
-    if (!body) return { status: 'unknown', message: '空响应' };
-    if (message.includes('需要提取码') || message.includes('提取码错误') || message.includes('PASS_CODE')) {
+    if (!body || typeof body !== 'object') return { status: 'unknown', message: '空响应' };
+
+    const message = String(body.message || '');
+    const code = body.code;
+    const okCode = code === 0 || code === '0' || (code === undefined && Number(body.status) === 200);
+
+    if (body.data && body.data.stoken && okCode) {
+      return { status: 'token', stoken: body.data.stoken, title: body.data.title || '' };
+    }
+
+    if (/需要提取码|提取码错误|PASS_CODE/i.test(message)) {
       return {
         status: 'passcode',
-        message: message.includes('提取码错误')
+        message: /提取码错误|PASS_CODE/i.test(message)
           ? '分享存在，但页面识别到的提取码不正确'
           : '分享存在，但需要提取码'
       };
     }
-    if (message.toLowerCase().includes('ok') && body?.data?.stoken) {
-      return { status: 'token', stoken: body.data.stoken, title: body.data.title || '' };
-    }
+
     if (/不存在|失效|取消|删除|EXPIRED|NOT_FOUND|SENSITIVE/i.test(JSON.stringify(body))) {
       return { status: 'invalid', message: message || '分享失效或不可访问' };
     }
+
     return { status: 'unknown', message: message || '无法判断 token 响应' };
   }
 
@@ -465,7 +490,7 @@
       data: JSON.stringify({ pwd_id: item.id, passcode: item.passcode || '' })
     });
 
-    // 夸克接口对“分享不存在/已失效/提取码错误”返回 HTTP 404，
+    // 夸克接口对「分享不存在/已失效/提取码错误」返回 HTTP 404，
     // 业务结果在响应体里，必须先分类响应体，无法识别时才按服务错误抛出。
     const tokenResult = classifyTokenResponse(tokenResp.body);
     if (!isHttpOk(tokenResp) && tokenResult.status !== 'invalid' && tokenResult.status !== 'passcode') {
@@ -498,6 +523,7 @@
     try {
       hasRunChecks = true;
       collectLinks();
+      panelVisible = true;
       renderPanel();
 
       const queue = links.filter((item) => force || item.status === 'idle' || item.status === 'unknown' || item.status === 'error');
@@ -518,7 +544,8 @@
       await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
     } finally {
       checking = false;
-      panelVisible = false;
+      // 扫描结束保持面板展开，否则用户点完「检测」看不到结果列表
+      panelVisible = true;
       renderPanel();
     }
   }
@@ -806,10 +833,9 @@
   }
 
   async function clearCache() {
-    for (const item of collectLinks()) {
-      await GM_deleteValue(cacheKey(item.id, item.passcode));
-    }
-    links.forEach((item) => updateItem(item, 'idle', ''));
+    const items = collectLinks();
+    await Promise.all(items.map((item) => GM_deleteValue(cacheKey(item.id, item.passcode))));
+    items.forEach((item) => updateItem(item, 'idle', ''));
     renderPanel();
   }
 
@@ -862,6 +888,29 @@
     return true;
   }
 
+  function normalizeRenameTitle(title) {
+    return String(title || '')
+      .replace(/[\u0000-\u001f\u007f]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  /**
+   * 影片名取详情页的 H1，而不是资源行的链接文字。
+   * 资源行文字是上传者自己起的分享名，经常被改成「人姓本授」这类规避关键词的写法；
+   * 这里与移动版 0.7.1 的实现保持一致。
+   */
+  function getMovieTitleFromPage() {
+    // 限定一级标题，避免抓到下方网盘资源的发布标题或下载文件夹名
+    const heading = document.querySelector('h1, [role="heading"][aria-level="1"]');
+    const title = normalizeRenameTitle(heading?.textContent || '');
+    if (title) return title;
+
+    // 详情页异常时才使用 Open Graph 标题；去掉常见站点后缀，避免写入「 - 教父」等站名
+    const ogTitle = document.querySelector('meta[property="og:title"], meta[name="og:title"]')?.getAttribute('content') || '';
+    return normalizeRenameTitle(ogTitle).replace(/\s*[-_|｜]\s*[^-_|｜]+$/, '').trim();
+  }
+
   function activate() {
     document.documentElement.setAttribute('data-' + SCRIPT_ID, '1');
 
@@ -876,24 +925,36 @@
     renderPanel();
     log('links', links);
 
+    // 站点 DOM 变动很频繁，这里必须 debounce，否则每次 mutation 都会做一次
+    // 全量 querySelectorAll + innerText（强制 layout）
+    let refreshTimer = null;
     const observer = new MutationObserver(() => {
-      if (checking) return;
-      const before = links.length;
-      autoSelectQuarkTab();
-      collectLinks();
-      insertInlineButton();
-      if (links.length !== before) renderPanel();
+      if (checking || refreshTimer) return;
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null;
+        if (checking) return;
+        const before = links.length;
+        autoSelectQuarkTab();
+        collectLinks();
+        insertInlineButton();
+        if (links.length !== before) renderPanel();
+      }, 400);
     });
     observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
 
     document.addEventListener('click', (e) => {
-      const a = e.target.closest('a[href*="pan.quark.cn/s/"]');
+      const a = e.target?.closest?.('a[href*="pan.quark.cn/s/"]');
       if (!a) return;
       try {
-        const linkText = a.textContent.trim().replace(/\s+/g, ' ');
+        const linkText = (a.textContent || '').trim().replace(/\s+/g, ' ');
+        const title = getMovieTitleFromPage() || linkText;
         const url = new URL(a.href);
-        url.hash = '/list/share?_title=' + encodeURIComponent(linkText);
+        url.hash = '/list/share?_title=' + encodeURIComponent(title);
         a.href = url.toString();
+        // 方便排查：取到的标题和链接文字不一致时打一行日志
+        if (title !== linkText) {
+          console.info('[quark-precheck] 标题：', title, '｜链接文字：', linkText);
+        }
       } catch (_) {}
     }, true);
   }
@@ -903,21 +964,24 @@
 
     GM_registerMenuCommand('夸克链接预检：重新检测', () => runChecks(true));
     GM_registerMenuCommand('夸克链接预检：清除本页缓存', clearCache);
-    const cacheFresh = restoreWhitelistFromCache();
-    if (!cacheFresh) {
-      await loadRemoteWhitelist(false);
-    }
 
-    if (!shouldActivate()) {
-      log('not in auto-start whitelist', location.href);
+    const cacheFresh = restoreWhitelistFromCache();
+
+    if (shouldActivate()) {
+      activate();
+    } else {
       // 页面内容（或 SPA 路由）稍后才出现夸克链接时，观察 10 秒内是否转为可激活。
       waitForActivation();
-      return;
     }
 
-    activate();
+    // 白名单刷新放后台，不要阻塞页面激活（旧实现会 await，GitHub 慢时页面要等 20 秒）
+    if (!cacheFresh) {
+      loadRemoteWhitelist(false).then(() => {
+        if (document.documentElement.getAttribute('data-' + SCRIPT_ID)) return;
+        if (shouldActivate()) activate();
+      });
+    }
   }
 
   init();
 })();
-

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夸克网盘链接预检（移动版）
 // @namespace    local.codex
-// @version      0.7.1
+// @version      0.7.2
 // @description  扫描当前页面的夸克网盘分享链接，手动批量预检是否有效、是否需要提取码或是否疑似失效；打开夸克分享页时自动以资源站影片标题预填“保存后重命名”。适配 iPhone 手机浏览器（Teak 等）：底部抽屉面板、触控友好、GM API 缺失时自动降级。
 // @match        *://xn--wcv59z.com/*
 // @match        *://*.xn--wcv59z.com/*
@@ -534,19 +534,26 @@
   }
 
   function classifyTokenResponse(body) {
-    const message = String(body?.message || body?.code || '');
-    if (!body) return { status: 'unknown', message: '空响应' };
-    if (message.includes('需要提取码') || message.includes('提取码错误') || message.includes('PASS_CODE')) {
+    if (!body || typeof body !== 'object') return { status: 'unknown', message: '空响应' };
+
+    const message = String(body.message || '');
+    const code = body.code;
+    const okCode = code === 0 || code === '0' || (code === undefined && Number(body.status) === 200);
+
+    // 成功与否以业务码为准：夸克 token 接口成功时 message 常常是空串
+    if (body.data && body.data.stoken && okCode) {
+      return { status: 'token', stoken: body.data.stoken, title: body.data.title || '' };
+    }
+
+    if (/需要提取码|提取码错误|PASS_CODE/i.test(message)) {
       return {
         status: 'passcode',
-        message: message.includes('提取码错误')
+        message: /提取码错误|PASS_CODE/i.test(message)
           ? '分享存在，但页面识别到的提取码不正确'
           : '分享存在，但需要提取码'
       };
     }
-    if (message.toLowerCase().includes('ok') && body?.data?.stoken) {
-      return { status: 'token', stoken: body.data.stoken, title: body.data.title || '' };
-    }
+
     if (/不存在|失效|取消|删除|EXPIRED|NOT_FOUND|SENSITIVE/i.test(JSON.stringify(body))) {
       return { status: 'invalid', message: message || '分享失效或不可访问' };
     }
