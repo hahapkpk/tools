@@ -209,6 +209,16 @@ class BoundaryTests(unittest.TestCase):
             w.quiet_command(['test'])
             self.assertEqual(called.call_args.kwargs['stdout'], subprocess.DEVNULL)
 
+    def test_translation_failure_reports_only_allowlisted_category(self):
+        from unittest.mock import patch
+        import subprocess, json
+        stderr = json.dumps({'error': 'Translation API failed after 3 attempts (invalid response)', 'usage': {'total_tokens': 123}, 'private': 'must-not-print'})
+        error = subprocess.CalledProcessError(1, ['python'], stderr=stderr.encode())
+        with patch('subprocess.run', side_effect=error):
+            with self.assertRaisesRegex(w.SafeError, 'invalid-response') as caught:
+                w.quiet_command(['python', '-m', 'ebook_translator', 'translate'])
+            self.assertNotIn('must-not-print', str(caught.exception))
+
     def test_main_summary_contains_only_fixed_metadata(self):
         import tempfile
         from pathlib import Path

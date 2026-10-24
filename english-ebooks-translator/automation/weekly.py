@@ -242,8 +242,23 @@ class GitHub:
 def quiet_command(args):
     import subprocess
     try:
-        subprocess.run(args, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        subprocess.run(args, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                        stdin=subprocess.DEVNULL, timeout=6 * 60 * 60)
+    except subprocess.CalledProcessError as error:
+        if args[1:3] == ['-m', 'ebook_translator']:
+            try:
+                message = json.loads(error.stderr or b'{}').get('error', '')
+                categories = {'inline-marker-mismatch': 'inline-marker-mismatch',
+                              'empty-inline-segment': 'empty-inline-segment',
+                              'response-id-mismatch': 'response-id-mismatch',
+                              'invalid response': 'invalid-response',
+                              'network or timeout error': 'network-or-timeout'}
+                category = next((v for k, v in categories.items() if k in message), None)
+                if category:
+                    raise SafeError('Translation stopped: ' + category) from None
+            except (ValueError, TypeError, AttributeError):
+                pass
+        raise SafeError('Command failed; sensitive process output suppressed.') from None
     except (OSError, subprocess.SubprocessError):
         raise SafeError('Command failed; sensitive process output suppressed.') from None
 
@@ -254,6 +269,9 @@ def main(env=None):
     try:
         status = run(env, GitHub(env.get('GITHUB_TOKEN', '')), quiet_command)
         code = 0
+    except SafeError as error:
+        status = str(error)
+        print(status, file=sys.stderr)
     except Exception:
         # Never emit exception messages, request bodies, commands or model responses.
         pass

@@ -132,7 +132,11 @@ class ChatTranslator:
                     raise TranslationError('Translation API refused request (%s)' % failure) from None
             except (urllib.error.URLError, TimeoutError, OSError):
                 failure = 'network or timeout error'
-            except (ValueError, KeyError, IndexError, TypeError, AttributeError, TranslationError):
+            except TranslationError as error:
+                failure = {'Inline slot markers were changed or duplicated': 'inline-marker-mismatch',
+                           'Translation contains empty or invalid text': 'empty-inline-segment',
+                           'Translation IDs must match the requested IDs exactly': 'response-id-mismatch'}.get(str(error), 'invalid response')
+            except (ValueError, KeyError, IndexError, TypeError, AttributeError):
                 failure = 'invalid response'
             if attempt < self.retries:
                 time.sleep(min(self.backoff * (2 ** attempt), 30))
