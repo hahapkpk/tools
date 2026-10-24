@@ -109,6 +109,9 @@ def run(env, api, command):
     mode = env.get('TRANSLATION_MODE') or 'full'
     if mode not in {'sample', 'full'}:
         raise SafeError('Invalid translation mode.')
+    revision = env.get('TRANSLATION_REVISION') or ''
+    if revision and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}', revision):
+        raise SafeError('Invalid translation revision.')
     output_name = 'translated.sample.zh.epub' if mode == 'sample' else 'translated.zh.epub'
     repo = env.get('GITHUB_REPOSITORY', '')
     if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo):
@@ -140,7 +143,7 @@ def run(env, api, command):
     with tempfile.TemporaryDirectory(prefix='weekly-epub-') as folder:
         work = Path(folder)
         for issue in issues:
-            tag = ('sample-' if mode == 'sample' else '') + release_tag(issue)
+            tag = ('sample-' if mode == 'sample' else '') + release_tag(issue) + ('-' + revision if revision else '')
             release = next((r for r in releases if r.get('tag_name') == tag), None)
             verified = False
             if release:
@@ -182,7 +185,8 @@ def run(env, api, command):
                             'source_path': issue.path, 'source_sha': issue.sha, 'issue': issue.date,
                             'output_name': output.name, 'output_size': output.stat().st_size,
                             'output_sha256': hashlib.sha256(output.read_bytes()).hexdigest(),
-                            'model': env.get('DEEPSEEK_MODEL') or 'deepseek-v4-flash', 'mode': mode}
+                            'model': env.get('DEEPSEEK_MODEL') or 'deepseek-v4-flash', 'mode': mode,
+                            'translation_revision': revision or 'legacy-node-v1'}
                 (work/'manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
                 require_private(api(f'/repos/{repo}'), repo)
                 if release is None:

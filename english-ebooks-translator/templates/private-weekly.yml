@@ -58,6 +58,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           TRANSLATION_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'full' }}
+          TRANSLATION_REVISION: paragraph-v2
           START_ISSUE: ${{ vars.START_ISSUE || '2026.10.24' }}
           DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL || 'deepseek-v4-flash' }}
           DEEPSEEK_BASE_URL: ${{ vars.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1' }}

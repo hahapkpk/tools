@@ -21,6 +21,7 @@ class TranslationError(Exception):
 TOKEN = re.compile(r'<!--.*?-->|<!\[CDATA\[.*?\]\]>|<\?.*?\?>|<!DOCTYPE[^>]*>|<(?:[^>\"\']|\"[^\"]*\"|\'[^\']*\')*>|[^<]+', re.S)
 SKIP = {'script', 'style', 'code', 'pre', 'kbd', 'samp', 'math', 'svg'}
 XML_EXTENSIONS = ('.xml', '.opf', '.ncx', '.xhtml', '.html', '.svg')
+BLOCK_TAGS = {'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'figcaption', 'caption', 'td', 'th', 'title', 'dt', 'dd', 'blockquote'}
 MAX_MEMBER_BYTES = 32 * 1024 * 1024
 MAX_MEMBERS = 10_000
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
@@ -48,6 +49,7 @@ class Unit:
     context: str
     start: int = 0
     end: int | None = None
+    group: str = ''
 
 
 def text_chunks(text, limit=2000):
@@ -129,23 +131,34 @@ class Book:
                 raise TranslationError('Unsupported XML tokenization')
             self.tokens[name] = tokens
             stack = []
+            starts = []
             for index, token in enumerate(tokens):
                 if token.startswith(('<?', '<!', '\ufeff')) and not token.startswith('<![CDATA['):
                     continue
                 if token.startswith('</'):
                     stack.pop()
+                    starts.pop()
                 elif token.startswith('<') and not token.startswith('<![CDATA['):
                     if not token.endswith('/>'):
                         stack.append(local(re.match(r'<([^\s/>]+)', token).group(1)))
+                        starts.append(index)
                 else:
                     value = token[9:-3] if token.startswith('<![CDATA[') else html.unescape(token)
                     eligible = kind == 'xhtml' and not (set(stack) & SKIP)
                     eligible |= kind == 'ncx' and bool(stack) and stack[-1] == 'text'
                     eligible |= kind == 'opf' and metadata_title and bool(stack) and stack[-1] == 'title'
                     if value.strip() and eligible:
-                        context = html.unescape(re.sub(r'<[^>]*>', ' ', ''.join(tokens[max(0,index-8):index+9])))[:1200]
+                        parent = next((starts[j] for j in range(len(stack)-1, -1, -1) if stack[j] in BLOCK_TAGS), starts[-1] if starts else index)
+                        group = f'{name}:{parent}'
                         for start, end, fragment in text_chunks(value):
-                            self.units.append(Unit(str(len(self.units)), name, index, fragment, context, start, end))
+                            self.units.append(Unit(str(len(self.units)), name, index, fragment, '', start, end, group))
+        grouped = {}
+        for unit in self.units:
+            grouped.setdefault(unit.group, []).append(unit)
+        for units in grouped.values():
+            digest = hashlib.sha256(json.dumps([u.text for u in units], ensure_ascii=False).encode('utf-8')).hexdigest()
+            for ordinal, unit in enumerate(units):
+                unit.context = f'paragraph-v2:{digest}:slot:{ordinal}'
 
     def summary(self):
         return {'members': len(self.members), 'xhtml_files': sum(n.lower().endswith(('.html', '.xhtml')) for n in self.members),
@@ -272,7 +285,7 @@ class Cache:
 def batches(units, limit):
     batch, size = [], 0
     for u in units:
-        if batch and (size + len(u.text) > limit or len(batch) >= 40):
+        if batch and (size + len(u.text) > limit or len(batch) >= 40) and (not u.group or u.group != batch[-1].group):
             yield batch
             batch, size = [], 0
         batch.append(u)
@@ -292,6 +305,12 @@ def translate_epub(input_path, output_path, *, translator, metadata_title=False,
     if max_units is not None and (max_units < 1 or 'sample' not in Path(output_path).stem.lower()):
         raise TranslationError('Partial runs require a positive --max-units and an output filename containing sample')
     selected = book.units if max_units is None else book.units[:max_units]
+    if max_units is not None and selected and len(selected) < len(book.units):
+        cut_group = book.units[len(selected)].group
+        while selected and selected[-1].group == cut_group:
+            selected.pop()
+        if not selected:
+            raise TranslationError('Sample limit is too small to include a complete paragraph')
     if max_chars < 1 or sum(len(u.text) for u in selected) > max_chars:
         raise TranslationError('Source text exceeds --max-chars; inspect first and explicitly raise the limit')
     if batch_chars < 1:

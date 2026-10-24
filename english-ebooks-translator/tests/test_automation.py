@@ -67,7 +67,7 @@ class BlobTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.TestCase):
-    def exercise(self, private=True, fail_upload=False, recover=False, two_issues=False, corrupt=False, sample=False):
+    def exercise(self, private=True, fail_upload=False, recover=False, two_issues=False, corrupt=False, sample=False, revision=''):
         import base64, hashlib, json, tempfile
         from pathlib import Path
         source = b'input epub'
@@ -79,6 +79,9 @@ class RuntimeTests(unittest.TestCase):
         if sample:
             env['TRANSLATION_MODE'] = 'sample'
             tag = 'sample-' + tag
+        if revision:
+            env['TRANSLATION_REVISION'] = revision
+            tag += '-' + revision
         def api(path, public=False):
             calls.append(('api', path, public))
             if path == '/repos/me/english-reading-zh':
@@ -161,6 +164,9 @@ class RuntimeTests(unittest.TestCase):
 
     def test_sample_uses_separate_release_and_partial_cli(self):
         self.exercise(sample=True)
+
+    def test_new_translation_revision_has_distinct_release_identity(self):
+        self.exercise(sample=True, revision='paragraph-v2')
 
     def test_corrupted_upload_never_publishes(self):
         self.exercise(corrupt=True)

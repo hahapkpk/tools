@@ -169,6 +169,24 @@ class EpubTests(unittest.TestCase):
                 if name.endswith(('.xml', '.opf', '.xhtml', '.ncx')):
                     ET.fromstring(b.read(name))
 
+    def test_inline_text_nodes_share_paragraph_identity_and_batch_boundary(self):
+        from ebook_translator.core import Book, batches
+        units = Book(self.src).units
+        selected = [u for u in units if u.text in {'Hello', 'world', 'today.'}]
+        self.assertEqual(len(selected), 3)
+        self.assertEqual(len({u.group for u in selected}), 1)
+        groups = list(batches(selected, 1))
+        self.assertEqual(len(groups), 1, 'Never split one inline paragraph across API batches')
+        self.assertEqual(len({u.context for u in selected}), 3, 'Cache keys distinguish slots')
+
+    def test_sample_does_not_cache_a_partial_inline_paragraph(self):
+        from ebook_translator.core import translate_epub
+        class Fake:
+            def translate(self, units):
+                return {u.id: '中文' for u in units}
+        result = translate_epub(self.src, self.root/'out.sample.epub', translator=Fake(), max_units=3)
+        self.assertEqual(result['translated_units'], 2, 'A sample must stop before a partly selected paragraph')
+
     def test_safety_guards_refuse_before_network_and_keep_old_output(self):
         from ebook_translator.core import translate_epub, TranslationError
         class Never:

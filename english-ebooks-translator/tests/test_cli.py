@@ -26,7 +26,7 @@ class CliTests(unittest.TestCase):
             missing = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', env=env)
             self.assertNotEqual(missing.returncode, 0)
             self.assertIn('environment', json.loads(missing.stderr)['error'])
-            mapping = json.dumps({str(i): '中文' for i in range(8)})
+            mapping = json.dumps({'0': '新闻', '1': '标题', '2': '你好⟦S1⟧世界⟦S2⟧。', '5': '图片', '6': '目录', '7': '新闻'})
             env['UNIT_TEST_ONLY_KEY'] = 'unit-test-placeholder'
             with FixtureServer([(200, response(mapping))]) as server:
                 result = subprocess.run(cmd + ['--api-key-env', 'UNIT_TEST_ONLY_KEY', '--base-url', server.url,

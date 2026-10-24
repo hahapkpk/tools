@@ -48,6 +48,34 @@ def response(content, finish='stop'):
 
 
 class ProviderTests(unittest.TestCase):
+    def test_inline_slots_are_translated_as_one_paragraph_without_context_leak(self):
+        from ebook_translator.provider import ChatTranslator
+        units = [Unit('4', 'a.xhtml', 1, 'Curfews followed the', 'Do not translate this unrelated context'),
+                 Unit('5', 'a.xhtml', 3, 'worst riots', 'Do not translate this unrelated context'),
+                 Unit('6', 'a.xhtml', 5, 'in years. Two thousand were arrested.', 'Do not translate this unrelated context')]
+        for unit in units:
+            unit.group = 'paragraph-1'
+        good = response(json.dumps({'4': '宵禁实施，此前发生了⟦S1⟧多年来最严重的骚乱⟦S2⟧。两千人被捕。'}))
+        with FixtureServer([(200, good)]) as server:
+            c = ChatTranslator(api_key='unit-test-placeholder', base_url=server.url, retries=0)
+            result = c.translate(units)
+            self.assertEqual(result, {'4': '宵禁实施，此前发生了', '5': '多年来最严重的骚乱', '6': '。两千人被捕。'})
+            payload = json.loads(server.requests[0][1]['messages'][1]['content'])
+            self.assertEqual(len(payload), 1)
+            self.assertIn('⟦S1⟧', payload[0]['text'])
+            self.assertNotIn('unrelated context', server.requests[0][1]['messages'][1]['content'])
+
+    def test_missing_or_duplicated_slot_markers_are_refused(self):
+        from ebook_translator.provider import ChatTranslator
+        units = [Unit('4', 'a.xhtml', 1, 'Hello', ''), Unit('5', 'a.xhtml', 3, 'world', '')]
+        for unit in units:
+            unit.group = 'p'
+        for value in ('你好世界', '你好⟦S1⟧世界⟦S1⟧重复', '你好⟦S2⟧世界', '⟦S1⟧世界'):
+            with self.subTest(value=value), FixtureServer([(200, response(json.dumps({'4': value})))]) as server:
+                c = ChatTranslator(api_key='unit-test-placeholder', base_url=server.url, retries=0)
+                with self.assertRaises(TranslationError):
+                    c.translate(units)
+
     def test_retries_invalid_responses_strictly_and_sanitizes_errors(self):
         from ebook_translator.provider import ChatTranslator
         units = [Unit('4', 'a.xhtml', 0, 'Hello', 'reference')]
@@ -110,7 +138,7 @@ class ProviderTests(unittest.TestCase):
             self.assertFalse(body['stream'])
             self.assertIn('简体中文', body['messages'][0]['content'])
             self.assertIn('glossary', body['messages'][0]['content'])
-            self.assertIn('A headline about economics', body['messages'][1]['content'])
+            self.assertNotIn('A headline about economics', body['messages'][1]['content'])
             self.assertEqual(client.usage['total_tokens'], 120)
 
 

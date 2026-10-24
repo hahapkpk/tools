@@ -6,9 +6,9 @@
 
 - 已实现：EPUB 检查/翻译 CLI；私有仓库定时发现上游、每次最多处理一期、校验下载、草稿 Release 上传/回读验证/发布；进程内安全输入 API key 的本地入口。
 - 自动化单元测试使用受控的 API/子进程替身，不联网、不扣费、不创建真实 Release。Python 标准库即可运行。
-- 本地真实 `2026.10.24` EPUB 已完成只读 inspect；**没有因此生成整本中文译书**。
-- 已通过 GitHub 浏览器授权并创建私有仓库 `hahapkpk/english-reading-zh`。本地完整测试套件 35 项通过。
-- 尚未验证：真实 DeepSeek 翻译效果/耗时/账单、GitHub Actions 和真实 Release 端到端翻译。模板中的 `__CODE_REF__` 必须在部署前替换。单元测试不代表真实翻译已经完成。
+- 真实 DeepSeek 接口、GitHub Actions 与私有 Release 上传已跑通，但第一版样本抽查发现带链接段落会重复上下文，不能当作合格译稿。尚未生成整本中文译书。
+- 本地完整测试套件 40 项通过。第二版按整段合并翻译，以严格校验的边界标记保留链接/强调标签；不再把附近原文作为逐节点翻译上下文。样本在完整段落边界停止，避免把半段缓存用于整期。
+- 翻译提示词和缓存已换代，Release 新增 `paragraph-v2` 修订标识，旧版成品不会被静默当作新版。上线仍需真实样本质量与费用检查。模板中的 `__CODE_REF__` 必须替换成审核过的完整提交 SHA。
 
 ## 1. 本地先检查，不收费
 
@@ -45,7 +45,7 @@ python -m ebook_translator translate --input "D:\Books\issue.epub" --output "D:\
 2. 新建名为 **`english-reading-zh`** 的仓库，选择 **Private** 并初始化默认分支。授权完成后本人核对仓库右上方 Private 标志；不要把译书放在公共 `hahapkpk/tools`。
 3. 在私有仓库 Settings → Secrets and variables → Actions → Repository secrets 添加 `DEEPSEEK_API_KEY`。只在 GitHub 自己的 Secret 表单里输入。运行时使用 GitHub 自动提供的 `GITHUB_TOKEN`，**不需要另建 PAT**。
 4. 将 `templates/private-weekly.yml` 复制到私有仓库的 `.github/workflows/weekly.yml`。将所有 `__CODE_REF__` 替换成已经审核并推送到 `hahapkpk/tools` 的同一个 **40 位完整 commit SHA**。公共代码位于该仓库的 `english-ebooks-translator/` 子目录，checkout 到 `code/`。
-5. 先保持 Repository variable `ENABLE_TRANSLATION=false`。在 Actions 手动运行时选择默认的 `mode=sample`，只翻译前 100 个文本片段，输出有 SAMPLE 标记，剩余内容仍为英文。样本也会调用付费接口；本期约覆盖 1.3 万源字符。检查质量与账单后，再将 `ENABLE_TRANSLATION` 改为字符串 `true`，手动选择 `full` 或等待每日调度。未开启时，整期和定时任务均跳过，不会因为添加密钥而直接开始整期翻译。
+5. 先保持 Repository variable `ENABLE_TRANSLATION=false`。在 Actions 手动运行时选择默认的 `mode=sample`，只翻译最多 100 个文本片段（以完整段落为界），输出有 SAMPLE 标记，剩余内容仍为英文。样本也会调用付费接口；本期约覆盖 1.3 万源字符。检查质量与账单后，再将 `ENABLE_TRANSLATION` 改为字符串 `true`，手动选择 `full` 或等待每日调度。未开启时，整期和定时任务均跳过，不会因为添加密钥而直接开始整期翻译。
 6. 成功后只在该私有仓库 Releases 下载 `translated.zh.epub`（整期）、`translated.sample.zh.epub`（样本）与 `manifest.json`。样本使用独立 `sample-` 前缀 tag，绝不会被计作整期完成。不要开启 Pages，不要手工把仓库改为 Public，不要重新分发无授权内容。
 
 模板仅放在 `templates/`，本公共源码不包含触发付费任务的 `.github/workflows/`。模板工作任务先检查事件仓库为 private，Python 又通过**带认证的 GitHub REST API**验证当前 `GITHUB_REPOSITORY` 的 `full_name` 与 `private is True`，在下载原书前，以及翻译/上传/发布前重复检查。仓库可见性被其他人并发修改仍有竞态风险，因此必须保持私有且限制管理权限。
@@ -66,7 +66,7 @@ python -m ebook_translator translate --input "D:\Books\issue.epub" --output "D:\
 
 - 上游固定为 `hehonghui/awesome-english-ebooks`，`master` 分支、`01_economist` 路径；通过公共 GitHub API 枚举，不执行上游内容。无效日期、其他路径、非 EPUB、非法 blob SHA 被忽略；树返回 truncated 时拒绝继续。
 - 按日期从早到晚选择尚未完成的版本，**每次最多一期**。调度为每天 UTC `01:23`（cron `23 1 * * *`）；这不是每次只看最新一期，也不是一次补齐所有积压。并发组不取消前一个任务。
-- Release tag 为 `economist-日期-完整源blobSHA`；相同期数内容修订后会有新 tag。完整发布资产有 manifest 与输出 SHA-256，跳过前重新下载并核验；不能仅凭同名 tag 判定成功。
+- Release tag 为 `economist-日期-完整源blobSHA-翻译修订`，样本另加 `sample-` 前缀；当前修订为 `paragraph-v2`。相同期数内容或翻译策略修订后使用新 tag。完整发布资产有 manifest 与输出 SHA-256，跳过前重新下载并核验；不能仅凭同名 tag 判定成功。切换模型或翻译策略后也应更新 `TRANSLATION_REVISION`，避免误用旧成品。
 - 原书限 20 MiB；下载 Git blob API 返回的 base64，核对元数据的 SHA/size，重新计算 Git 的 `SHA1("blob " + 大小 + NUL + 实际字节)`。API JSON 响应也有体积上限。
 - 先完整翻译，再创建/复用 **Draft Release**，上传译书与 manifest，下载回读并逐字节核验两项资产，最后取消 Draft 并读取对应 tag 验证已发布。目标仅为当前私有仓库，不向上游或公共代码仓库发布。
 - 若留下完整且校验通过的草稿，下次可直接发布而不再付费翻译。缺资产/上传中断的草稿会复用同一 tag，借助 SQLite 缓存重试；缓存丢失、模型改变或未完成片段仍可能再次收费，**不保证 exactly-once 计费**。已发布但校验失败的资产会停止运行，要求人工检查，不会静默覆盖。
