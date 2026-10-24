@@ -1,0 +1,2 @@
+# Runtime and tests use only Python's standard library (Python >= 3.11).
+# No pip dependencies; run: python -m unittest discover -s tests -v

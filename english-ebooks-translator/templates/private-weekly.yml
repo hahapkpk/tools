@@ -1,0 +1,71 @@
+# Copy ONLY into a PRIVATE repository: .github/workflows/weekly.yml
+# Replace __CODE_REF__ with the reviewed full public commit SHA before enabling.
+name: Private weekly Economist translation
+on:
+  schedule:
+    - cron: '23 1 * * *' # UTC daily; at most one outstanding issue per run
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'sample = first 100 text units; full requires ENABLE_TRANSLATION=true'
+        type: choice
+        options: [sample, full]
+        default: sample
+        required: true
+permissions:
+  contents: write
+concurrency:
+  group: private-weekly-epub
+  cancel-in-progress: false
+jobs:
+  translate:
+    if: ${{ github.event.repository.private == true && ((github.event_name == 'workflow_dispatch' && inputs.mode == 'sample') || vars.ENABLE_TRANSLATION == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Validate immutable public code reference
+        env:
+          CODE_REF: __CODE_REF__
+        run: '[[ "$CODE_REF" =~ ^[0-9a-f]{40}$ ]]'
+      - name: Checkout reviewed public code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4; verified upstream tag
+        with:
+          repository: hahapkpk/tools
+          ref: __CODE_REF__
+          path: code
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5; verified upstream tag
+        with:
+          python-version: '3.12'
+      - name: Offline test suite
+        working-directory: code/english-ebooks-translator
+        run: python -m unittest discover -s tests -v
+      - name: Restore private translation cache
+        id: cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4; verified upstream tag
+        with:
+          path: code/english-ebooks-translator/.cache/
+          key: translation-v1-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            translation-v1-${{ runner.os }}-
+      - name: Translate at most one issue and publish privately
+        working-directory: code/english-ebooks-translator
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          TRANSLATION_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'full' }}
+          START_ISSUE: ${{ vars.START_ISSUE || '2026.10.24' }}
+          DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL || 'deepseek-v4-flash' }}
+          DEEPSEEK_BASE_URL: ${{ vars.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1' }}
+          MAX_SOURCE_CHARS: ${{ vars.MAX_SOURCE_CHARS || '600000' }}
+        run: python -m automation.weekly
+      - name: Save private translation cache even after failure
+        if: ${{ always() && hashFiles('code/english-ebooks-translator/.cache/**') != '' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4; verified upstream tag
+        with:
+          path: code/english-ebooks-translator/.cache/
+          key: translation-v1-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
