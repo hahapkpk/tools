@@ -1,0 +1,37 @@
+name: Update car IPTV playlist
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+  push:
+    paths:
+      - "iptv-car/update.py"
+      - ".github/workflows/iptv-car-update.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: car-iptv-list-update
+  cancel-in-progress: false
+
+jobs:
+  aggregate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate the current M3U playlist
+        run: python3 iptv-car/update.py
+      - name: Commit updated M3U and status
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add iptv-car/live.m3u iptv-car/status.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore(iptv): refresh car playlist"
+            git push
+          fi
