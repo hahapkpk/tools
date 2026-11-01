@@ -24,7 +24,7 @@ MAX_BYTES = 9_000_000
 MAX_PER_CHANNEL = 4
 USER_AGENT = "mytv-car-playlist-updater/1.0 (+GitHub Actions)"
 ATTRIBUTE = re.compile(r'([a-zA-Z0-9_-]+)="([^"]*)"')
-SENSITIVE_KEYS = {"token", "access_token", "apikey", "api_key", "password", "passwd", "secret", "signature", "session", "authorization"}
+SENSITIVE_KEYS = {"token", "access_token", "apikey", "api_key", "password", "passwd", "secret", "signature", "session", "authorization", "key", "auth", "sign", "sig", "pwd"}
 
 
 def safe_url(url: str) -> bool:
@@ -53,7 +53,7 @@ def safe_url(url: str) -> bool:
 def normalize_name(name: str) -> str:
     name = re.sub(r"[\r\n\x00-\x1f]", "", name).strip()
     name = re.sub(r"\s+", " ", name)
-    m = re.fullmatch(r"(?i)CCTV[\s-]*(\d{1,2})(?:\s*(?:HD|高清|超清))?", name)
+    m = re.fullmatch(r"(?i)CCTV[\s-]*(\d{1,2})(?:\s*(?:HD|高清|超清|4K))?(?:\s*\([^)]{1,40}\))?", name)
     if m:
         return "CCTV-" + str(int(m.group(1)))
     return name[:70]
