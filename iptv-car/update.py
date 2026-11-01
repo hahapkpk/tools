@@ -10,7 +10,9 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import OrderedDict
+from collections import Counter, OrderedDict
+
+from streamcheck import validate_stream
 from pathlib import Path
 
 SOURCES = [
@@ -106,22 +108,6 @@ def download(name: str, url: str):
     return rows
 
 
-def probe(url: str) -> str:
-    # A HEAD check is only a weak reachability signal, not proof of playback.
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT}, method="HEAD")
-        with urllib.request.urlopen(req, timeout=3.5) as response:
-            if 200 <= response.status < 400:
-                return "reachable"
-            return "unknown"
-    except urllib.error.HTTPError as err:
-        if err.code in (404, 410):
-            return "missing"
-        return "unknown"  # 403/405/geo limits do not prove a stream is dead
-    except Exception:
-        return "unknown"
-
-
 def main():
     by_name = OrderedDict()
     reports = []
@@ -144,24 +130,33 @@ def main():
         raise RuntimeError("Insufficient source data; retaining previous playlist")
 
     candidates = list(dict.fromkeys(url for row in by_name.values() for url in row["urls"]))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
-        checked = list(executor.map(probe, candidates))
-    reachable = dict(zip(candidates, checked))
+    # Download actual HLS manifests and media segments. A 200 HEAD response alone
+    # cannot establish stream playability or sufficient network throughput.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        results = list(executor.map(lambda url: validate_stream(url, safe_url), candidates))
+    results_by_url = dict(zip(candidates, results))
+    rejected = Counter(result.reason for result in results if result.state != "verified")
 
     chosen = []
-    stats = {"reachable": 0, "unknown": 0, "missing": 0}
+    stats = {"verified": 0, "rejected": sum(rejected.values())}
     ordering = {"央视频道": 0, "卫视频道": 1, "地方频道": 2, "其他频道": 3}
     for item in sorted(by_name.values(), key=lambda r: (ordering[r["group"]], r["name"])):
-        urls = sorted(item["urls"], key=lambda u: {"reachable": 0, "unknown": 1, "missing": 2}[reachable[u]])
-        urls = [u for u in urls if reachable[u] != "missing"][:MAX_PER_CHANNEL]
-        for url in urls:
+        urls = [u for u in item["urls"] if results_by_url[u].state == "verified"]
+        # Fast starts first, then higher throughput; keep at most four tested lines.
+        urls.sort(key=lambda u: (results_by_url[u].latency_ms, -results_by_url[u].speed_kib_s))
+        for url in urls[:MAX_PER_CHANNEL]:
             chosen.append((item["name"], item["group"], item["logo"], url))
-            stats[reachable[url]] += 1
+            stats["verified"] += 1
 
-    if len(chosen) < 8:
-        raise RuntimeError("Not enough usable entries; retaining previous playlist")
+    # Guard against a widespread provider / GitHub runner outage. Keep the
+    # last published playlist intact instead of replacing it with a tiny list.
+    if len(chosen) < 15 or len({row[0] for row in chosen}) < 10:
+        raise RuntimeError(
+            f"Only {len(chosen)} verified lines; keeping previous playlist "
+            f"(rejections: {dict(rejected.most_common(8))})"
+        )
 
-    lines = ["#EXTM3U", "# Playlist aggregated from public upstreams; reachability does not guarantee playback."]
+    lines = ["#EXTM3U", "# Only streams with media samples passing GitHub runner validation are included."]
     for name, group, logo, stream in chosen:
         clean = lambda t: str(t).replace('"', "").replace("\n", "").replace("\r", "")
         attrs = f'group-title="{clean(group)}"'
@@ -174,9 +169,16 @@ def main():
         "updated_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         "channel_count": len({r[0] for r in chosen}),
         "stream_count": len(chosen),
-        "probe": stats,
+        "verification": {
+            **stats,
+            "candidate_urls": len(candidates),
+            "rejected_reasons": dict(rejected.most_common()),
+            "min_speed_kib_s": 280,
+            "max_start_latency_s": 4,
+            "method": "HLS media-segment download / sample bytes + timing",
+        },
         "sources": reports,
-        "note": "HEAD reachability is not proof of playback; geographical restrictions may apply.",
+        "note": "Validated from the GitHub runner only. Mobile-carrier playability and geographic restrictions may differ.",
     }
     (OUTPUT / "status.json").write_text(json.dumps(status, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(status, ensure_ascii=False))
