@@ -1,0 +1,33 @@
+{
+  "updated_at_utc": "2026-11-01T12:32:04+00:00",
+  "channel_count": 544,
+  "stream_count": 770,
+  "probe": {
+    "reachable": 524,
+    "unknown": 246,
+    "missing": 0
+  },
+  "sources": [
+    {
+      "source": "OrangeWay520",
+      "downloaded": 519,
+      "status": "ok"
+    },
+    {
+      "source": "Lightconer",
+      "downloaded": 102,
+      "status": "ok"
+    },
+    {
+      "source": "Chaniug",
+      "downloaded": 209,
+      "status": "ok"
+    },
+    {
+      "source": "iptv-org",
+      "downloaded": 150,
+      "status": "ok"
+    }
+  ],
+  "note": "HEAD reachability is not proof of playback; geographical restrictions may apply."
+}
