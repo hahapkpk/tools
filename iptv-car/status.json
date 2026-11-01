@@ -1,7 +1,7 @@
 {
-  "updated_at_utc": "2026-11-01T14:04:36+00:00",
-  "channel_count": 5,
-  "stream_count": 11,
+  "updated_at_utc": "2026-11-01T14:06:22+00:00",
+  "channel_count": 29,
+  "stream_count": 34,
   "priority_channels": {
     "CCTV-1": {
       "verified": 0,
@@ -13,70 +13,70 @@
     },
     "CCTV-2": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "CCTV-3": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "CCTV-4": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "CCTV-5": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "CCTV-5+": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "CCTV-6": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "CCTV-7": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "CCTV-8": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "CCTV-9": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "CCTV-10": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "CCTV-11": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "CCTV-12": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "CCTV-14": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "CCTV-15": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "CCTV-16": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "CCTV-17": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "湖南卫视": {
-      "verified": 2,
+      "verified": 1,
       "unverified_fallback": 0
     },
     "浙江卫视": {
@@ -85,11 +85,11 @@
     },
     "江苏卫视": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "东方卫视": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "北京卫视": {
       "verified": 0,
@@ -101,11 +101,11 @@
     },
     "山东卫视": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "安徽卫视": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "湖北卫视": {
       "verified": 0,
@@ -113,15 +113,15 @@
     },
     "深圳卫视": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "天津卫视": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "四川卫视": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "重庆卫视": {
       "verified": 0,
@@ -129,22 +129,23 @@
     },
     "辽宁卫视": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     }
   },
   "verification": {
-    "verified_entries": 4,
-    "unverified_fallback_entries": 7,
-    "rejected_candidates": 129,
+    "verified_entries": 3,
+    "unverified_fallback_entries": 31,
+    "rejected_candidates": 130,
     "candidate_urls": 133,
     "rejected_reasons": {
-      "fetch_error": 88,
+      "fetch_error": 89,
       "segment_failed": 20,
-      "slow": 15,
-      "http_403": 2,
+      "slow": 14,
       "http_500": 2,
-      "high_latency": 1,
-      "not_live": 1
+      "timeout": 2,
+      "http_403": 1,
+      "not_live": 1,
+      "high_latency": 1
     },
     "min_speed_kib_s": 280,
     "max_start_latency_s": 4,
