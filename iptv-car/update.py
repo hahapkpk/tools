@@ -174,14 +174,20 @@ def main():
     def pick_lines(item):
         good = sorted((u for u in item["urls"] if results_by_url[u].state == "verified"),
                       key=rank_good)[:MAX_PER_CHANNEL]
-        if item["name"] not in CRITICAL_CHANNELS or len(good) >= 2:
+        if item["name"] in CRITICAL_CHANNELS and len(good) >= 2:
+            return good, []
+        if item["name"] not in CRITICAL_CHANNELS and good:
             return good, []
         # Overseas GitHub hosts can falsely reject mainland-carrier streams.
-        # Never mark these as verified. Retain a few *unverified* trial routes
-        # only for the two most important CCTV channels.
+        # Never mark these as verified. Keep up to four trial routes for
+        # CCTV-1/13; if other priority channels have none verified, keep
+        # at most one trial route each, clearly labeled as unverified.
         trials = [u for u in item["urls"]
                   if u not in good and results_by_url[u].reason in NON_DEFINITIVE_FAILURES]
+        channel_slug = item["name"].lower().replace("-", "")
         trials.sort(key=lambda u: (
+            # Prefer a stream whose path clearly names CCTV1/CCTV13.
+            0 if channel_slug in urllib.parse.urlsplit(u).path.lower() else 1,
             {"http_403": 0, "slow": 1, "high_latency": 2, "timeout": 3,
              "short_sample": 4, "segment_failed": 5, "fetch_error": 6}.get(
                  results_by_url[u].reason, 8),
@@ -195,7 +201,8 @@ def main():
                 continue
             fallback.append(url)
             used_hosts.add(host)
-            if len(good) + len(fallback) >= MAX_PER_CHANNEL:
+            target_lines = MAX_PER_CHANNEL if item["name"] in CRITICAL_CHANNELS else 1
+            if len(good) + len(fallback) >= target_lines:
                 break
         return good, fallback
 
@@ -203,7 +210,11 @@ def main():
         lines = ["#EXTM3U", "# " + detail]
         for name, group, logo, stream, tested in rows:
             clean = lambda t: str(t).replace('"', "").replace("\n", "").replace("\r", "")
-            tag = group if tested else "常看央视（待车机验证）"
+            tag = group if tested else (
+                "常看央视（待车机验证）" if name in CRITICAL_CHANNELS else
+                "央视频道（待车机验证）" if name.startswith("CCTV-") else
+                "常看卫视（待车机验证）"
+            )
             attrs = f'group-title="{clean(tag)}"'
             if logo:
                 attrs += f' tvg-logo="{clean(logo)}"'
@@ -235,7 +246,7 @@ def main():
                per_channel.get(c, {}).get("unverified_fallback", 0) > 0
                for c in CRITICAL_CHANNELS):
         raise RuntimeError("CCTV-1 or CCTV-13 missing, keeping previous playlist")
-    if len(verified) < 3 or len({x[0] for x in chosen}) < 3:
+    if len(verified) < 3 or len({x[0] for x in chosen}) < 6:
         raise RuntimeError(f"Only {len(verified)} verified lines in fewer than 3 channels; keeping previous playlist")
 
     # "live.m3u" is the preexisting car subscription URL: keep it stable.
