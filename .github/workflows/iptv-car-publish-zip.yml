@@ -1,0 +1,56 @@
+name: Publish MyTV Windows checker ZIP
+
+on:
+  push:
+    paths:
+      - "iptv-car/releases/.payload/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: iptv-windows-zip-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble verified ZIP
+        id: assemble
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64,hashlib,zipfile,io
+          parts=sorted(Path('iptv-car/releases/.payload').glob('part*.b64'))
+          if not parts:
+              print('No payload, skipping.')
+              with open('/tmp/no-payload','w') as f: f.write('1')
+              raise SystemExit(0)
+          b64=''.join(p.read_text(encoding='ascii').strip() for p in parts)
+          data=base64.b64decode(b64,validate=True)
+          expected='20f1a79f012a46926ec4e46951509e764318fa781fb7eb59d459db8237c43896'
+          digest=hashlib.sha256(data).hexdigest()
+          if digest != expected:
+              raise RuntimeError(f'Checksum mismatch: {digest}')
+          with zipfile.ZipFile(io.BytesIO(data)) as z:
+              failed=z.testzip()
+              if failed: raise RuntimeError(f'Corrupt ZIP member {failed}')
+              print('ZIP contents:', z.namelist())
+          out=Path('iptv-car/releases/MyTV_Car_IPTV_CN_Checker_Win11_v1.0.zip')
+          out.parent.mkdir(parents=True,exist_ok=True)
+          out.write_bytes(data)
+          print('Published',out,'bytes',len(data),'sha256',digest)
+          PY
+      - name: Commit binary package and remove temporary payload
+        run: |
+          if [ -f /tmp/no-payload ]; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add iptv-car/releases/MyTV_Car_IPTV_CN_Checker_Win11_v1.0.zip
+          git rm -r iptv-car/releases/.payload
+          git commit -m "release: publish verified MyTV Windows car IPTV checker v1.0"
+          git pull --rebase origin main
+          git push origin HEAD:main
