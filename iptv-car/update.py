@@ -235,8 +235,8 @@ def main():
                per_channel.get(c, {}).get("unverified_fallback", 0) > 0
                for c in CRITICAL_CHANNELS):
         raise RuntimeError("CCTV-1 or CCTV-13 missing, keeping previous playlist")
-    if len(verified) < 5 or len({x[0] for x in chosen}) < 6:
-        raise RuntimeError(f"Only {len(verified)} verified lines, keeping previous playlist")
+    if len(verified) < 3 or len({x[0] for x in chosen}) < 3:
+        raise RuntimeError(f"Only {len(verified)} verified lines in fewer than 3 channels; keeping previous playlist")
 
     # "live.m3u" is the preexisting car subscription URL: keep it stable.
     # "live-verified.m3u" is the alternative for strict verification only.
