@@ -7,7 +7,7 @@
 日常使用（CCTV-1/CCTV-13 最前，必要时含明确标记的国内待验证备用源）：
 https://raw.githubusercontent.com/hahapkpk/tools/main/iptv-car/live.m3u
 
-严格已验证模式（仅含海外 GitHub 实测通过的线路，可能缺失央视主频道）：
+严格已验证模式（仅含海外 GitHub 实测通过的线路，可能缺失部分央视频道）：
 https://raw.githubusercontent.com/hahapkpk/tools/main/iptv-car/live-verified.m3u
 
 检测报告：
@@ -36,7 +36,7 @@ GitHub Actions 工作流：.github/workflows/iptv-car-update.yml
 
 海外 GitHub 节点测速未通过，不等于国内车机网络不可播放。因此这两台若严格验证通过的线路不足两条，可以增加少量“常看央视（待车机验证）”的备用线路，最多合计四条。它们仅是从上游采集、尚未在车机环境确认的线路，并不意味着能看或不卡顿；明确返回 404、媒体格式虚假等错误的线路不加入备用。
 
-日常订阅 live.m3u 保留这类标记清楚的备用源，方便车机真实试播；live-verified.m3u 不包含任何待验证线路，适合对比。
+日常订阅 live.m3u 保留这类标记清楚的备用源，方便车机真实试播。其他央视及重点卫视若完全没有严格通过的线路，每频道也最多保留一条标记为“待车机验证”的候选地址，以减少海外误杀。live-verified.m3u 不包含任何待验证线路，适合对比。
 整体抓取/检测发生严重异常时，保持上一版节目单不被清空。
 
 ## 运行状态及调整
