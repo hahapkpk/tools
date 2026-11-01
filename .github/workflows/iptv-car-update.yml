@@ -9,6 +9,7 @@ on:
       - "iptv-car/update.py"
       - "iptv-car/streamcheck.py"
       - "iptv-car/test_streamcheck.py"
+      - "iptv-car/test_update.py"
       - ".github/workflows/iptv-car-update.yml"
 
 permissions:
@@ -32,7 +33,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add iptv-car/live.m3u iptv-car/status.json
+          git add iptv-car/live.m3u iptv-car/live-verified.m3u iptv-car/status.json
           if git diff --cached --quiet; then
             echo "No changes to commit."
           else
