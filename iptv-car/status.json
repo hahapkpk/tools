@@ -1,21 +1,21 @@
 {
-  "updated_at_utc": "2026-11-01T12:32:04+00:00",
-  "channel_count": 544,
-  "stream_count": 770,
+  "updated_at_utc": "2026-11-01T12:34:32+00:00",
+  "channel_count": 505,
+  "stream_count": 711,
   "probe": {
-    "reachable": 524,
-    "unknown": 246,
+    "reachable": 463,
+    "unknown": 248,
     "missing": 0
   },
   "sources": [
     {
       "source": "OrangeWay520",
-      "downloaded": 519,
+      "downloaded": 498,
       "status": "ok"
     },
     {
       "source": "Lightconer",
-      "downloaded": 102,
+      "downloaded": 77,
       "status": "ok"
     },
     {
@@ -25,7 +25,7 @@
     },
     {
       "source": "iptv-org",
-      "downloaded": 150,
+      "downloaded": 135,
       "status": "ok"
     }
   ],
