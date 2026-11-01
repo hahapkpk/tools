@@ -1,11 +1,29 @@
 {
-  "updated_at_utc": "2026-11-01T12:34:32+00:00",
-  "channel_count": 505,
-  "stream_count": 711,
-  "probe": {
-    "reachable": 463,
-    "unknown": 248,
-    "missing": 0
+  "updated_at_utc": "2026-11-01T13:25:39+00:00",
+  "channel_count": 56,
+  "stream_count": 69,
+  "verification": {
+    "verified": 69,
+    "rejected": 642,
+    "candidate_urls": 707,
+    "rejected_reasons": {
+      "slow": 267,
+      "fetch_error": 226,
+      "segment_failed": 33,
+      "http_403": 33,
+      "timeout": 19,
+      "short_sample": 19,
+      "invalid_media": 18,
+      "high_latency": 7,
+      "http_404": 7,
+      "http_567": 5,
+      "not_live": 3,
+      "unsafe_child": 3,
+      "http_500": 2
+    },
+    "min_speed_kib_s": 280,
+    "max_start_latency_s": 4,
+    "method": "HLS media-segment download / sample bytes + timing"
   },
   "sources": [
     {
@@ -29,5 +47,5 @@
       "status": "ok"
     }
   ],
-  "note": "HEAD reachability is not proof of playback; geographical restrictions may apply."
+  "note": "Validated from the GitHub runner only. Mobile-carrier playability and geographic restrictions may differ."
 }
