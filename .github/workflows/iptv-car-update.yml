@@ -7,6 +7,8 @@ on:
   push:
     paths:
       - "iptv-car/update.py"
+      - "iptv-car/streamcheck.py"
+      - "iptv-car/test_streamcheck.py"
       - ".github/workflows/iptv-car-update.yml"
 
 permissions:
@@ -22,6 +24,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Test media validation logic
+        run: python3 -m unittest discover -s iptv-car -p "test_*.py" -v
       - name: Generate the current M3U playlist
         run: python3 iptv-car/update.py
       - name: Commit updated M3U and status
