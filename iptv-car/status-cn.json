@@ -1,0 +1,429 @@
+{
+  "checked_at": "2026-11-02T08:09:47+00:00",
+  "network": "locally run on user's own computer",
+  "validated_from": "user local network (media direct)",
+  "candidate_urls": 294,
+  "verified_urls": 24,
+  "published_entries": 21,
+  "published_channels": 13,
+  "critical": {
+    "CCTV-1": 0,
+    "CCTV-13": 1
+  },
+  "critical_candidate_diagnostics": {
+    "CCTV-1": [
+      {
+        "host": "115.48.161.74",
+        "path": "/tsfile/live/0001_1.m3u8",
+        "ok": false,
+        "reason": "critical_timeout_or_network+timeout_or_network",
+        "speed_kib_s": 0.0
+      },
+      {
+        "host": "2409:8087:8:21::18",
+        "path": "/otttv.bj.chinamobile.com/PLTV/88888888/224/3221226895/1.m3u8",
+        "ok": false,
+        "reason": "critical_timeout_or_network+timeout_or_network",
+        "speed_kib_s": 0.0
+      },
+      {
+        "host": "74.91.26.218",
+        "path": "/live/cctv1hd.m3u8",
+        "ok": false,
+        "reason": "critical_timeout_or_network+timeout_or_network",
+        "speed_kib_s": 0.0
+      },
+      {
+        "host": "74.91.26.218",
+        "path": "/live/cctv11hd.m3u8",
+        "ok": false,
+        "reason": "critical_timeout_or_network+timeout_or_network",
+        "speed_kib_s": 0.0
+      },
+      {
+        "host": "69.30.245.50",
+        "path": "/live/cctv1.m3u8",
+        "ok": false,
+        "reason": "critical_timeout_or_network+timeout_or_network",
+        "speed_kib_s": 0.0
+      },
+      {
+        "host": "ottrrs.hl.chinamobile.com",
+        "path": "/PLTV/88888888/224/3221226559/index.m3u8",
+        "ok": false,
+        "reason": "critical_timeout_or_network+timeout_or_network",
+        "speed_kib_s": 0.0
+      },
+      {
+        "host": "204.12.221.218",
+        "path": "/3m1080p/cctv1.m3u8",
+        "ok": false,
+        "reason": "critical_timeout_or_network+timeout_or_network",
+        "speed_kib_s": 0.0
+      },
+      {
+        "host": "198.204.240.250",
+        "path": "/live/cctv1.m3u8",
+        "ok": false,
+        "reason": "critical_timeout_or_network+timeout_or_network",
+        "speed_kib_s": 0.0
+      },
+      {
+        "host": "173.208.212.130",
+        "path": "/720p/cctv1.m3u8",
+        "ok": false,
+        "reason": "critical_timeout_or_network+timeout_or_network",
+        "speed_kib_s": 0.0
+      },
+      {
+        "host": "iptv.huuc.edu.cn",
+        "path": "/hls/cctv1hd.m3u8",
+        "ok": false,
+        "reason": "critical_timeout_or_network+timeout_or_network",
+        "speed_kib_s": 0.0
+      },
+      {
+        "host": "liveplay-srs.voc.com.cn",
+        "path": "/hls/tv/134_180adf.m3u8",
+        "ok": false,
+        "reason": "critical_fetch_failed+fetch_failed",
+        "speed_kib_s": 0.0
+      }
+    ],
+    "CCTV-13": [
+      {
+        "host": "ali-m-l.cztv.com",
+        "path": "/channels/lantian/channel21/1080p.m3u8",
+        "ok": true,
+        "reason": "verified_twice",
+        "speed_kib_s": 1731.8
+      },
+      {
+        "host": "2409:8087:8:21::18",
+        "path": "/otttv.bj.chinamobile.com/PLTV/88888888/224/3221226316/1.m3u8",
+        "ok": false,
+        "reason": "critical_timeout_or_network+timeout_or_network",
+        "speed_kib_s": 0.0
+      },
+      {
+        "host": "63.141.230.178",
+        "path": "/gslb/zbdq5.m3u8",
+        "ok": false,
+        "reason": "critical_timeout_or_network+timeout_or_network",
+        "speed_kib_s": 0.0
+      },
+      {
+        "host": "74.91.26.218",
+        "path": "/live/cctv13hd.m3u8",
+        "ok": false,
+        "reason": "critical_timeout_or_network+timeout_or_network",
+        "speed_kib_s": 0.0
+      },
+      {
+        "host": "go.bkpcp.top",
+        "path": "/mg/cctv13",
+        "ok": false,
+        "reason": "critical_timeout_or_network+timeout_or_network",
+        "speed_kib_s": 0.0
+      },
+      {
+        "host": "ottrrs.hl.chinamobile.com",
+        "path": "/PLTV/88888888/224/3221226571/index.m3u8",
+        "ok": false,
+        "reason": "critical_timeout_or_network+timeout_or_network",
+        "speed_kib_s": 0.0
+      },
+      {
+        "host": "event.pull.hebtv.com",
+        "path": "/jishi/cp1.m3u8",
+        "ok": false,
+        "reason": "critical_fetch_failed+fetch_failed",
+        "speed_kib_s": 0.0
+      },
+      {
+        "host": "iptv.huuc.edu.cn",
+        "path": "/hls/cctv13hd.m3u8",
+        "ok": false,
+        "reason": "critical_timeout_or_network+timeout_or_network",
+        "speed_kib_s": 0.0
+      }
+    ]
+  },
+  "channels": {
+    "CCTV-1": [],
+    "CCTV-13": [
+      {
+        "speed_kib_s": 1731.8,
+        "first_byte_s": 0.07
+      }
+    ],
+    "CCTV-2": [],
+    "CCTV-3": [],
+    "CCTV-4": [],
+    "CCTV-5": [],
+    "CCTV-5+": [
+      {
+        "speed_kib_s": 934.4,
+        "first_byte_s": 0.13
+      }
+    ],
+    "CCTV-6": [
+      {
+        "speed_kib_s": 417.3,
+        "first_byte_s": 0.1
+      }
+    ],
+    "CCTV-7": [],
+    "CCTV-8": [
+      {
+        "speed_kib_s": 330.7,
+        "first_byte_s": 0.09
+      }
+    ],
+    "CCTV-9": [],
+    "CCTV-10": [],
+    "CCTV-11": [],
+    "CCTV-12": [
+      {
+        "speed_kib_s": 371.9,
+        "first_byte_s": 0.09
+      }
+    ],
+    "CCTV-14": [],
+    "CCTV-15": [],
+    "CCTV-16": [],
+    "CCTV-17": [],
+    "湖南卫视": [
+      {
+        "speed_kib_s": 5013.0,
+        "first_byte_s": 0.02
+      },
+      {
+        "speed_kib_s": 5809.8,
+        "first_byte_s": 0.02
+      }
+    ],
+    "浙江卫视": [
+      {
+        "speed_kib_s": 4708.6,
+        "first_byte_s": 0.03
+      },
+      {
+        "speed_kib_s": 3456.2,
+        "first_byte_s": 0.05
+      },
+      {
+        "speed_kib_s": 1882.7,
+        "first_byte_s": 0.05
+      }
+    ],
+    "江苏卫视": [],
+    "东方卫视": [
+      {
+        "speed_kib_s": 3293.9,
+        "first_byte_s": 0.05
+      }
+    ],
+    "北京卫视": [],
+    "广东卫视": [],
+    "山东卫视": [
+      {
+        "speed_kib_s": 1071.7,
+        "first_byte_s": 0.11
+      }
+    ],
+    "安徽卫视": [
+      {
+        "speed_kib_s": 386.3,
+        "first_byte_s": 0.12
+      }
+    ],
+    "湖北卫视": [],
+    "深圳卫视": [
+      {
+        "speed_kib_s": 420.7,
+        "first_byte_s": 0.11
+      },
+      {
+        "speed_kib_s": 825.3,
+        "first_byte_s": 0.11
+      },
+      {
+        "speed_kib_s": 338.5,
+        "first_byte_s": 0.12
+      }
+    ],
+    "天津卫视": [
+      {
+        "speed_kib_s": 1080.4,
+        "first_byte_s": 0.12
+      },
+      {
+        "speed_kib_s": 334.1,
+        "first_byte_s": 0.12
+      },
+      {
+        "speed_kib_s": 365.0,
+        "first_byte_s": 0.14
+      }
+    ],
+    "四川卫视": [],
+    "重庆卫视": [],
+    "辽宁卫视": [
+      {
+        "speed_kib_s": 410.0,
+        "first_byte_s": 0.12
+      },
+      {
+        "speed_kib_s": 285.7,
+        "first_byte_s": 0.13
+      }
+    ]
+  },
+  "rejection_reasons": {
+    "timeout_or_network": 208,
+    "fetch_failed": 35,
+    "critical_timeout_or_network+timeout_or_network": 16,
+    "low_speed": 6,
+    "segment_fetch_failed": 2,
+    "critical_fetch_failed+fetch_failed": 2,
+    "http_404": 1
+  },
+  "thresholds": {
+    "min_speed_kib_s": 280,
+    "max_first_byte_s": 4.0
+  },
+  "publication_safe": true,
+  "warnings": [],
+  "disclaimer": "Passing a short media test does not guarantee uninterrupted playback; playback authorization and location restrictions remain with providers.",
+  "sources": [
+    {
+      "source": "PeterHchina CCTV IPv4",
+      "status": "ok",
+      "entries": 19,
+      "priority_candidates": 15
+    },
+    {
+      "source": "PeterHchina CCTV IPv6",
+      "status": "ok",
+      "entries": 24,
+      "priority_candidates": 14
+    },
+    {
+      "source": "PeterHchina 央视卫视 IPv4",
+      "status": "ok",
+      "entries": 303,
+      "priority_candidates": 26
+    },
+    {
+      "source": "PeterHchina 央视卫视 IPv6",
+      "status": "ok",
+      "entries": 61,
+      "priority_candidates": 28
+    },
+    {
+      "source": "Guovin 官方结果",
+      "status": "ok",
+      "entries": 794,
+      "priority_candidates": 145
+    },
+    {
+      "source": "cs3306 IPTV-Sources",
+      "status": "ok",
+      "entries": 6559,
+      "priority_candidates": 21
+    },
+    {
+      "source": "IPTV Aggregator",
+      "status": "ok",
+      "entries": 0,
+      "priority_candidates": 0
+    },
+    {
+      "source": "Free-TV 全球",
+      "status": "ok",
+      "entries": 1999,
+      "priority_candidates": 11
+    },
+    {
+      "source": "kimwang1978 自动整理",
+      "status": "ok",
+      "entries": 3,
+      "priority_candidates": 0
+    },
+    {
+      "source": "OrangeWay520",
+      "status": "ok",
+      "entries": 352,
+      "priority_candidates": 34
+    },
+    {
+      "source": "Lightconer",
+      "status": "ok",
+      "entries": 125,
+      "priority_candidates": 45
+    },
+    {
+      "source": "Chaniug",
+      "status": "ok",
+      "entries": 209,
+      "priority_candidates": 59
+    },
+    {
+      "source": "iptv-org-China",
+      "status": "ok",
+      "entries": 138,
+      "priority_candidates": 19
+    },
+    {
+      "source": "ZBDS-IPv4 (2024记录)",
+      "status": "ok",
+      "entries": 421,
+      "priority_candidates": 26
+    },
+    {
+      "source": "BurningC4-IPv4",
+      "status": "ok",
+      "entries": 58,
+      "priority_candidates": 28
+    },
+    {
+      "source": "YanG-Github-Gather",
+      "status": "ok",
+      "entries": 123,
+      "priority_candidates": 0
+    },
+    {
+      "source": "YanG-Gather (2024记录)",
+      "status": "failed",
+      "reason": "URLError"
+    },
+    {
+      "source": "zhi35",
+      "status": "ok",
+      "entries": 394,
+      "priority_candidates": 28
+    },
+    {
+      "source": "fanmingming-IPv6 (2024记录)",
+      "status": "failed",
+      "reason": "URLError"
+    },
+    {
+      "source": "ZBDS-IPv6 (2024记录)",
+      "status": "ok",
+      "entries": 0,
+      "priority_candidates": 0
+    }
+  ],
+  "probe_profiles": {
+    "direct_ipv4": {
+      "tested": 294,
+      "passed": 24
+    },
+    "direct_ipv6": {
+      "tested": 294,
+      "passed": 0
+    }
+  }
+}
