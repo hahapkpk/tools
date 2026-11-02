@@ -1,11 +1,11 @@
 {
-  "checked_at": "2026-11-02T08:40:48+00:00",
+  "checked_at": "2026-11-02T09:17:39+00:00",
   "network": "locally run on user's own computer",
   "validated_from": "user local network (media direct)",
-  "candidate_urls": 20,
-  "verified_urls": 20,
-  "published_entries": 20,
-  "published_channels": 12,
+  "candidate_urls": 14,
+  "verified_urls": 14,
+  "published_entries": 14,
+  "published_channels": 8,
   "critical": {
     "CCTV-1": 0,
     "CCTV-13": 1
@@ -18,7 +18,7 @@
         "path": "/channels/lantian/channel21/1080p.m3u8",
         "ok": true,
         "reason": "verified_twice",
-        "speed_kib_s": 1615.7
+        "speed_kib_s": 1392.0
       }
     ]
   },
@@ -26,80 +26,64 @@
     "CCTV-1": [],
     "CCTV-13": [
       {
-        "speed_kib_s": 1615.7,
-        "first_byte_s": 0.1
+        "speed_kib_s": 1392.0,
+        "first_byte_s": 0.09
       }
     ],
     "CCTV-2": [],
     "CCTV-3": [],
-    "CCTV-4": [
+    "CCTV-4": [],
+    "CCTV-5": [],
+    "CCTV-5+": [],
+    "CCTV-6": [],
+    "CCTV-7": [],
+    "CCTV-8": [],
+    "CCTV-9": [],
+    "CCTV-10": [],
+    "CCTV-11": [],
+    "CCTV-12": [
       {
-        "speed_kib_s": 341.6,
+        "speed_kib_s": 353.5,
         "first_byte_s": 0.13
       }
     ],
-    "CCTV-5": [],
-    "CCTV-5+": [
-      {
-        "speed_kib_s": 815.7,
-        "first_byte_s": 0.14
-      }
-    ],
-    "CCTV-6": [],
-    "CCTV-7": [
-      {
-        "speed_kib_s": 657.4,
-        "first_byte_s": 0.14
-      }
-    ],
-    "CCTV-8": [
-      {
-        "speed_kib_s": 335.4,
-        "first_byte_s": 0.08
-      }
-    ],
-    "CCTV-9": [
-      {
-        "speed_kib_s": 384.6,
-        "first_byte_s": 0.12
-      }
-    ],
-    "CCTV-10": [],
-    "CCTV-11": [],
-    "CCTV-12": [],
     "CCTV-14": [],
     "CCTV-15": [],
     "CCTV-16": [],
     "CCTV-17": [],
     "湖南卫视": [
       {
-        "speed_kib_s": 5961.6,
+        "speed_kib_s": 4944.4,
         "first_byte_s": 0.02
       },
       {
-        "speed_kib_s": 4339.2,
-        "first_byte_s": 0.03
+        "speed_kib_s": 4011.1,
+        "first_byte_s": 0.04
       }
     ],
     "浙江卫视": [
       {
-        "speed_kib_s": 2841.0,
+        "speed_kib_s": 2153.4,
+        "first_byte_s": 0.04
+      },
+      {
+        "speed_kib_s": 2061.5,
         "first_byte_s": 0.05
       },
       {
-        "speed_kib_s": 1550.0,
-        "first_byte_s": 0.06
-      },
-      {
-        "speed_kib_s": 1967.9,
-        "first_byte_s": 0.06
+        "speed_kib_s": 1955.3,
+        "first_byte_s": 0.07
       }
     ],
     "江苏卫视": [],
     "东方卫视": [
       {
-        "speed_kib_s": 3130.1,
+        "speed_kib_s": 3184.7,
         "first_byte_s": 0.05
+      },
+      {
+        "speed_kib_s": 3076.4,
+        "first_byte_s": 0.06
       }
     ],
     "北京卫视": [],
@@ -109,42 +93,30 @@
     "湖北卫视": [],
     "深圳卫视": [
       {
-        "speed_kib_s": 402.9,
+        "speed_kib_s": 359.1,
         "first_byte_s": 0.11
       },
       {
-        "speed_kib_s": 1007.4,
-        "first_byte_s": 0.13
+        "speed_kib_s": 399.5,
+        "first_byte_s": 0.12
       },
       {
-        "speed_kib_s": 393.7,
-        "first_byte_s": 0.25
+        "speed_kib_s": 366.2,
+        "first_byte_s": 0.13
       }
     ],
     "天津卫视": [
       {
-        "speed_kib_s": 333.8,
-        "first_byte_s": 0.11
-      },
-      {
-        "speed_kib_s": 737.3,
-        "first_byte_s": 0.12
-      },
-      {
-        "speed_kib_s": 841.6,
-        "first_byte_s": 0.14
+        "speed_kib_s": 1058.1,
+        "first_byte_s": 0.13
       }
     ],
     "四川卫视": [],
     "重庆卫视": [],
     "辽宁卫视": [
       {
-        "speed_kib_s": 339.6,
-        "first_byte_s": 0.12
-      },
-      {
-        "speed_kib_s": 358.0,
-        "first_byte_s": 0.13
+        "speed_kib_s": 399.4,
+        "first_byte_s": 0.11
       }
     ]
   },
@@ -166,14 +138,14 @@
     {
       "source": "suxuang IPv4",
       "status": "ok",
-      "entries": 1187,
-      "priority_candidates": 151
+      "entries": 1364,
+      "priority_candidates": 156
     },
     {
       "source": "suxuang IPv6",
       "status": "ok",
-      "entries": 842,
-      "priority_candidates": 88
+      "entries": 1034,
+      "priority_candidates": 96
     },
     {
       "source": "Collect-IPTV 自动整理",
@@ -184,7 +156,7 @@
     {
       "source": "ChinaIPTV 自动更新",
       "status": "ok",
-      "entries": 67,
+      "entries": 68,
       "priority_candidates": 7
     },
     {
@@ -208,7 +180,7 @@
     {
       "source": "YueChan 国内",
       "status": "ok",
-      "entries": 138,
+      "entries": 147,
       "priority_candidates": 0
     },
     {
@@ -220,8 +192,8 @@
     {
       "source": "PeterHchina CCTV IPv6",
       "status": "ok",
-      "entries": 24,
-      "priority_candidates": 14
+      "entries": 30,
+      "priority_candidates": 19
     },
     {
       "source": "PeterHchina 央视卫视 IPv4",
@@ -232,20 +204,20 @@
     {
       "source": "PeterHchina 央视卫视 IPv6",
       "status": "ok",
-      "entries": 61,
-      "priority_candidates": 28
+      "entries": 67,
+      "priority_candidates": 33
     },
     {
       "source": "Guovin 官方结果",
       "status": "ok",
-      "entries": 794,
+      "entries": 795,
       "priority_candidates": 145
     },
     {
       "source": "cs3306 IPTV-Sources",
       "status": "ok",
-      "entries": 6559,
-      "priority_candidates": 21
+      "entries": 6567,
+      "priority_candidates": 25
     },
     {
       "source": "IPTV Aggregator",
@@ -256,8 +228,8 @@
     {
       "source": "Free-TV 全球",
       "status": "ok",
-      "entries": 2011,
-      "priority_candidates": 11
+      "entries": 2452,
+      "priority_candidates": 14
     },
     {
       "source": "kimwang1978 自动整理",
@@ -268,8 +240,8 @@
     {
       "source": "OrangeWay520",
       "status": "ok",
-      "entries": 352,
-      "priority_candidates": 34
+      "entries": 501,
+      "priority_candidates": 62
     },
     {
       "source": "Lightconer",
@@ -299,12 +271,12 @@
       "source": "BurningC4-IPv4",
       "status": "ok",
       "entries": 58,
-      "priority_candidates": 28
+      "priority_candidates": 29
     },
     {
       "source": "YanG-Github-Gather",
       "status": "ok",
-      "entries": 123,
+      "entries": 165,
       "priority_candidates": 0
     },
     {
@@ -315,8 +287,8 @@
     {
       "source": "zhi35",
       "status": "ok",
-      "entries": 394,
-      "priority_candidates": 28
+      "entries": 475,
+      "priority_candidates": 33
     },
     {
       "source": "fanmingming-IPv6 (2024记录)",
