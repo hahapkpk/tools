@@ -1,7 +1,7 @@
 {
-  "updated_at_utc": "2026-11-01T22:04:59+00:00",
-  "channel_count": 29,
-  "stream_count": 35,
+  "updated_at_utc": "2026-11-02T06:10:28+00:00",
+  "channel_count": 28,
+  "stream_count": 34,
   "priority_channels": {
     "CCTV-1": {
       "verified": 0,
@@ -105,7 +105,7 @@
     },
     "安徽卫视": {
       "verified": 0,
-      "unverified_fallback": 1
+      "unverified_fallback": 0
     },
     "湖北卫视": {
       "verified": 0,
@@ -134,14 +134,15 @@
   },
   "verification": {
     "verified_entries": 4,
-    "unverified_fallback_entries": 31,
-    "rejected_candidates": 123,
-    "candidate_urls": 127,
+    "unverified_fallback_entries": 30,
+    "rejected_candidates": 110,
+    "candidate_urls": 114,
     "rejected_reasons": {
-      "fetch_error": 90,
-      "slow": 18,
-      "segment_failed": 10,
+      "fetch_error": 86,
+      "slow": 10,
+      "segment_failed": 8,
       "http_500": 2,
+      "high_latency": 1,
       "http_403": 1,
       "short_sample": 1,
       "not_live": 1
@@ -153,12 +154,12 @@
   "sources": [
     {
       "source": "OrangeWay520",
-      "downloaded": 494,
+      "downloaded": 341,
       "status": "ok"
     },
     {
       "source": "Lightconer",
-      "downloaded": 81,
+      "downloaded": 82,
       "status": "ok"
     },
     {

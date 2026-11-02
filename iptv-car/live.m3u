@@ -20,9 +20,9 @@ http://74.91.26.218:82/live/cctv2hd.m3u8
 http://74.91.26.218:82/live/cctv3hd.m3u8
 #EXTINF:-1 group-title="央视频道（待车机验证）" tvg-logo="https://gitee.com/mytv-android/myTVlogo/raw/main/img/CCTV4.png",CCTV-4
 http://207.56.13.146:81/cdnlive/cctv4.m3u8
-#EXTINF:-1 group-title="央视频道（待车机验证）" tvg-logo="https://tb.zbds.top/logo/CCTV5.png",CCTV-5
+#EXTINF:-1 group-title="央视频道（待车机验证）" tvg-logo="https://gitee.com/mytv-android/myTVlogo/raw/main/img/CCTV5.png",CCTV-5
 http://207.56.13.146:81/cdnlive/cctv5.m3u8
-#EXTINF:-1 group-title="央视频道（待车机验证）" tvg-logo="https://i.imgur.com/OK8mdJV.png",CCTV-5+
+#EXTINF:-1 group-title="央视频道（待车机验证）" tvg-logo="https://tb.zbds.top/logo/CCTV5+.png",CCTV-5+
 https://php.jdshipin.com/TVOD/iptv.php?id=cctv5p
 #EXTINF:-1 group-title="央视频道（待车机验证）" tvg-logo="https://i.imgur.com/rFiaef7.png",CCTV-6
 http://69.30.245.50/live/cctv6.m3u8
@@ -40,12 +40,12 @@ http://74.91.26.218:82/live/cctv11hd.m3u8
 http://74.91.26.218:82/live/cctv12hd.m3u8
 #EXTINF:-1 group-title="央视频道（待车机验证）" tvg-logo="https://i.imgur.com/c5SXW7i.png",CCTV-14
 http://173.208.212.130:8181/1080p/cctv14.m3u8
-#EXTINF:-1 group-title="央视频道（待车机验证）" tvg-logo="https://tb.zbds.top/logo/CCTV15.png",CCTV-15
+#EXTINF:-1 group-title="央视频道（待车机验证）" tvg-logo="https://i.imgur.com/CCV0eRG.png",CCTV-15
 http://74.91.26.218:82/live/cctv15hd.m3u8
-#EXTINF:-1 group-title="央视频道（待车机验证）" tvg-logo="https://tb.zbds.top/logo/CCTV16.png",CCTV-16
+#EXTINF:-1 group-title="央视频道（待车机验证）" tvg-logo="https://i.imgur.com/ZzV6JQp.png",CCTV-16
 http://173.208.234.146/live/cctv16.m3u8
-#EXTINF:-1 group-title="央视频道（待车机验证）" tvg-logo="https://tb.zbds.top/logo/CCTV17.png",CCTV-17
-https://live.264788.xyz/channel/cctv17?streamid=348c8c0c04a6d2b900e5a3bcb4af8ce1&livekey=01WgOR41rriMmMkzNsd0UoaxJRwetZdxIvtVk
+#EXTINF:-1 group-title="央视频道（待车机验证）" tvg-logo="https://i.imgur.com/jSQURxS.png",CCTV-17
+http://74.91.26.218:82/live/cctv17hd.m3u8
 #EXTINF:-1 group-title="常看卫视" tvg-logo="https://tb.zbds.top/logo/湖南卫视.png",湖南卫视
 http://hlsal-ldvt.qing.mgtv.com/nn_live/nn_x64/Y2RuZXhfaWQ9YWxfaGxzX2xkdnQmZT02OTE0NjA0JnY9MSZpZD1ITldTWkdTVCZzPTcwN2RiYTc2YzJjNmJmMTQ4MmUyZGYzOWU2NWM3YWFi/HNWSZGST.m3u8
 #EXTINF:-1 group-title="常看卫视" tvg-logo="https://tb.zbds.top/logo/湖南卫视.png",湖南卫视
@@ -55,18 +55,16 @@ http://ali-xwl.cztv.com/live/channel011080Plxw.m3u8
 #EXTINF:-1 group-title="常看卫视（待车机验证）" tvg-logo="https://gitee.com/mytv-android/myTVlogo/raw/main/img/江苏卫视.png",江苏卫视
 http://204.12.221.218:8181/3m1080p/jsws.m3u8
 #EXTINF:-1 group-title="常看卫视（待车机验证）" tvg-logo="https://tb.zbds.top/logo/东方卫视.png",东方卫视
-http://bp-resource-dfl.bestv.cn/148/3/video.m3u8
+http://bp-resource-dfl.bestv.cn/155/3/video.m3u8
 #EXTINF:-1 group-title="常看卫视" tvg-logo="https://parco-zh.github.io/demo/guangdong.jpg",广东卫视
 https://h5cul1yar48um3t.wcetv.com/hls/gdsatellite.m3u8
 #EXTINF:-1 group-title="常看卫视（待车机验证）",山东卫视
 http://39.134.115.163:8080/PLTV/88888910/224/3221225697/index.m3u8
-#EXTINF:-1 group-title="常看卫视（待车机验证）" tvg-logo="https://tb.zbds.top/logo/安徽卫视.png",安徽卫视
-http://gmxw.7766.org:808/hls/40/index.m3u8
-#EXTINF:-1 group-title="常看卫视（待车机验证）" tvg-logo="https://tb.zbds.top/logo/深圳卫视.png",深圳卫视
-http://gmxw.7766.org:808/hls/45/index.m3u8
+#EXTINF:-1 group-title="常看卫视（待车机验证）",深圳卫视
+http://183.207.248.71/cntv/live1/HD-2500k-1080P-shenzhenstv/HD-2500k-1080P-shenzhenstv
 #EXTINF:-1 group-title="常看卫视（待车机验证）",天津卫视
 http://39.134.115.163:8080/PLTV/88888910/224/3221225698/index.m3u8
-#EXTINF:-1 group-title="常看卫视（待车机验证）" tvg-logo="https://tb.zbds.top/logo/四川卫视.png",四川卫视
-https://live.264788.xyz/channel/sichuanweishi4k?streamid=401bf692a1a8b91298f26077d53316d6&livekey=01WgOR41rriMmMkzNsd0UoaxJRwetZdxIvtVk
+#EXTINF:-1 group-title="常看卫视（待车机验证）",四川卫视
+http://39.134.115.163:8080/PLTV/88888910/224/3221225733/index.m3u8
 #EXTINF:-1 group-title="常看卫视（待车机验证）",辽宁卫视
 http://39.134.39.37/PLTV/88888888/224/3221226209/index.m3u8
