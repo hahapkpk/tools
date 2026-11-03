@@ -1,0 +1,46 @@
+name: Apply user verified IPTV playlist
+
+on:
+  push:
+    paths:
+      - ".github/workflows/iptv-car-apply-user-playlist.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore exact user-supplied M3U and verify integrity
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, zlib
+          from pathlib import Path
+          payload = "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"
+          content = zlib.decompress(base64.b64decode(payload))
+          expected_sha256 = "a64392bdf9db1831a6c80fbf34132ec800c128544debc990384f7eeeaa49518f"
+          if hashlib.sha256(content).hexdigest() != expected_sha256:
+              raise SystemExit("The uploaded file integrity check failed")
+          if not content.startswith(b"#EXTM3U"):
+              raise SystemExit("Not an M3U file")
+          dest = Path("iptv-car/live.m3u")
+          dest.write_bytes(content)
+          print(f"Restored user playlist: {len(content)} bytes; {content.count(b'#EXTINF:')} entries")
+          PY
+      - name: Commit updated user subscription
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add iptv-car/live.m3u
+          if git diff --cached --quiet; then
+            echo "Already matches the uploaded file"
+          else
+            git commit -m "feat(iptv): replace car live.m3u with user's verified China playlist"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
