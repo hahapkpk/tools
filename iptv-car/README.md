@@ -57,3 +57,12 @@ Gist 7ac16f68822d2bcaa8c84ee128634692 仍用于播放器配置备份。直播源
 仓库：https://github.com/hahapkpk/tools/tree/main/iptv-car
 自动更新：https://github.com/hahapkpk/tools/actions/workflows/iptv-car-update.yml
 测速参考：https://github.com/Guovin/iptv-api
+
+## 车机主订阅与自动生成分离（2026-11-03）
+
+- **车机主订阅**：`live.m3u`，由用户自己的国内测速程序生成并手动上传，保留当前同一 URL。
+- **GitHub 海外节点自动结果**：`live-auto.m3u`，每六小时由 Actions 更新，绝不覆盖 `live.m3u`。
+- **海外严格结果**：`live-verified.m3u`，仅用于对照和排障。
+- **国内程序产出**：`live-cn.m3u`，用户确认后可替换仓库的 `live.m3u`。
+
+注意：如果本地导出的国内源缺少 CCTV-1，覆盖主订阅后 CCTV-1 将不会出现在车机频道列表；应先在国内测速程序补齐该频道。
