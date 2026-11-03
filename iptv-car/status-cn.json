@@ -1,124 +1,314 @@
 {
-  "checked_at": "2026-11-02T09:17:39+00:00",
+  "checked_at": "2026-11-03T09:18:20+00:00",
   "network": "locally run on user's own computer",
   "validated_from": "user local network (media direct)",
-  "candidate_urls": 14,
-  "verified_urls": 14,
-  "published_entries": 14,
-  "published_channels": 8,
+  "candidate_urls": 51,
+  "verified_urls": 51,
+  "published_entries": 51,
+  "published_channels": 26,
   "critical": {
-    "CCTV-1": 0,
-    "CCTV-13": 1
+    "CCTV-1": 1,
+    "CCTV-13": 3
   },
   "critical_candidate_diagnostics": {
-    "CCTV-1": [],
+    "CCTV-1": [
+      {
+        "host": "120.198.95.220",
+        "path": "/tsfile/live/1015_1.m3u8",
+        "ok": true,
+        "reason": "verified_twice",
+        "speed_kib_s": 463.4
+      }
+    ],
     "CCTV-13": [
+      {
+        "host": "event.pull.hebtv.com",
+        "path": "/jishi/cp1.m3u8",
+        "ok": true,
+        "reason": "verified_twice",
+        "speed_kib_s": 943.9
+      },
       {
         "host": "ali-m-l.cztv.com",
         "path": "/channels/lantian/channel21/1080p.m3u8",
         "ok": true,
         "reason": "verified_twice",
-        "speed_kib_s": 1392.0
+        "speed_kib_s": 1403.8
+      },
+      {
+        "host": "www.cdnstv.com",
+        "path": "/hls/13/index.m3u8",
+        "ok": true,
+        "reason": "verified_twice",
+        "speed_kib_s": 1472.0
       }
     ]
   },
   "channels": {
-    "CCTV-1": [],
-    "CCTV-13": [
+    "CCTV-1": [
       {
-        "speed_kib_s": 1392.0,
-        "first_byte_s": 0.09
-      }
-    ],
-    "CCTV-2": [],
-    "CCTV-3": [],
-    "CCTV-4": [],
-    "CCTV-5": [],
-    "CCTV-5+": [],
-    "CCTV-6": [],
-    "CCTV-7": [],
-    "CCTV-8": [],
-    "CCTV-9": [],
-    "CCTV-10": [],
-    "CCTV-11": [],
-    "CCTV-12": [
-      {
-        "speed_kib_s": 353.5,
+        "speed_kib_s": 463.4,
         "first_byte_s": 0.13
       }
     ],
-    "CCTV-14": [],
-    "CCTV-15": [],
-    "CCTV-16": [],
-    "CCTV-17": [],
-    "湖南卫视": [
+    "CCTV-2": [
       {
-        "speed_kib_s": 4944.4,
-        "first_byte_s": 0.02
+        "speed_kib_s": 989.6,
+        "first_byte_s": 0.11
+      }
+    ],
+    "CCTV-3": [
+      {
+        "speed_kib_s": 530.8,
+        "first_byte_s": 0.05
       },
       {
-        "speed_kib_s": 4011.1,
-        "first_byte_s": 0.04
+        "speed_kib_s": 1051.1,
+        "first_byte_s": 0.11
+      },
+      {
+        "speed_kib_s": 339.6,
+        "first_byte_s": 0.3
+      },
+      {
+        "speed_kib_s": 440.6,
+        "first_byte_s": 0.33
+      }
+    ],
+    "CCTV-4": [
+      {
+        "speed_kib_s": 2312.5,
+        "first_byte_s": 0.05
+      },
+      {
+        "speed_kib_s": 1273.2,
+        "first_byte_s": 0.11
+      }
+    ],
+    "CCTV-5": [
+      {
+        "speed_kib_s": 1118.5,
+        "first_byte_s": 0.12
+      },
+      {
+        "speed_kib_s": 366.5,
+        "first_byte_s": 0.31
+      }
+    ],
+    "CCTV-5+": [
+      {
+        "speed_kib_s": 1169.7,
+        "first_byte_s": 0.12
+      }
+    ],
+    "CCTV-6": [
+      {
+        "speed_kib_s": 1353.2,
+        "first_byte_s": 0.11
+      }
+    ],
+    "CCTV-7": [],
+    "CCTV-8": [
+      {
+        "speed_kib_s": 1427.1,
+        "first_byte_s": 0.09
+      }
+    ],
+    "CCTV-9": [
+      {
+        "speed_kib_s": 1159.3,
+        "first_byte_s": 0.1
+      },
+      {
+        "speed_kib_s": 413.5,
+        "first_byte_s": 0.29
+      },
+      {
+        "speed_kib_s": 494.5,
+        "first_byte_s": 0.3
+      }
+    ],
+    "CCTV-10": [
+      {
+        "speed_kib_s": 358.7,
+        "first_byte_s": 0.12
+      },
+      {
+        "speed_kib_s": 342.6,
+        "first_byte_s": 0.43
+      }
+    ],
+    "CCTV-11": [
+      {
+        "speed_kib_s": 370.1,
+        "first_byte_s": 0.12
+      }
+    ],
+    "CCTV-12": [],
+    "CCTV-13": [
+      {
+        "speed_kib_s": 1403.8,
+        "first_byte_s": 0.07
+      },
+      {
+        "speed_kib_s": 1472.0,
+        "first_byte_s": 0.08
+      },
+      {
+        "speed_kib_s": 943.9,
+        "first_byte_s": 0.19
+      }
+    ],
+    "CCTV-14": [
+      {
+        "speed_kib_s": 1616.5,
+        "first_byte_s": 0.09
+      },
+      {
+        "speed_kib_s": 892.2,
+        "first_byte_s": 0.2
+      }
+    ],
+    "CCTV-15": [
+      {
+        "speed_kib_s": 1370.8,
+        "first_byte_s": 0.09
+      }
+    ],
+    "CCTV-16": [
+      {
+        "speed_kib_s": 622.9,
+        "first_byte_s": 0.09
+      }
+    ],
+    "CCTV-17": [
+      {
+        "speed_kib_s": 1449.1,
+        "first_byte_s": 0.1
+      }
+    ],
+    "CCTV-4K": [
+      {
+        "speed_kib_s": 2702.2,
+        "first_byte_s": 0.06
+      }
+    ],
+    "CCTV-8K": [],
+    "北京卫视": [],
+    "天津卫视": [
+      {
+        "speed_kib_s": 393.7,
+        "first_byte_s": 0.13
+      },
+      {
+        "speed_kib_s": 343.1,
+        "first_byte_s": 0.14
+      },
+      {
+        "speed_kib_s": 787.7,
+        "first_byte_s": 0.16
+      }
+    ],
+    "辽宁卫视": [],
+    "东方卫视": [
+      {
+        "speed_kib_s": 2748.3,
+        "first_byte_s": 0.05
+      },
+      {
+        "speed_kib_s": 2889.7,
+        "first_byte_s": 0.06
+      },
+      {
+        "speed_kib_s": 1323.3,
+        "first_byte_s": 0.1
+      }
+    ],
+    "江苏卫视": [
+      {
+        "speed_kib_s": 1268.2,
+        "first_byte_s": 0.11
+      },
+      {
+        "speed_kib_s": 767.1,
+        "first_byte_s": 0.21
       }
     ],
     "浙江卫视": [
       {
-        "speed_kib_s": 2153.4,
+        "speed_kib_s": 1801.4,
+        "first_byte_s": 0.05
+      },
+      {
+        "speed_kib_s": 1849.6,
+        "first_byte_s": 0.06
+      },
+      {
+        "speed_kib_s": 1791.9,
+        "first_byte_s": 0.06
+      },
+      {
+        "speed_kib_s": 1562.3,
+        "first_byte_s": 0.08
+      },
+      {
+        "speed_kib_s": 1626.3,
+        "first_byte_s": 0.08
+      },
+      {
+        "speed_kib_s": 1512.2,
+        "first_byte_s": 0.1
+      },
+      {
+        "speed_kib_s": 1208.7,
+        "first_byte_s": 0.11
+      },
+      {
+        "speed_kib_s": 1451.4,
+        "first_byte_s": 0.12
+      }
+    ],
+    "安徽卫视": [],
+    "山东卫视": [
+      {
+        "speed_kib_s": 1165.6,
+        "first_byte_s": 0.11
+      }
+    ],
+    "湖北卫视": [
+      {
+        "speed_kib_s": 1368.3,
+        "first_byte_s": 0.09
+      }
+    ],
+    "湖南卫视": [
+      {
+        "speed_kib_s": 4237.9,
+        "first_byte_s": 0.03
+      },
+      {
+        "speed_kib_s": 2860.2,
         "first_byte_s": 0.04
       },
       {
-        "speed_kib_s": 2061.5,
-        "first_byte_s": 0.05
-      },
-      {
-        "speed_kib_s": 1955.3,
-        "first_byte_s": 0.07
+        "speed_kib_s": 663.2,
+        "first_byte_s": 0.1
       }
     ],
-    "江苏卫视": [],
-    "东方卫视": [
+    "广东卫视": [
       {
-        "speed_kib_s": 3184.7,
-        "first_byte_s": 0.05
-      },
-      {
-        "speed_kib_s": 3076.4,
-        "first_byte_s": 0.06
+        "speed_kib_s": 1295.2,
+        "first_byte_s": 0.11
       }
     ],
-    "北京卫视": [],
-    "广东卫视": [],
-    "山东卫视": [],
-    "安徽卫视": [],
-    "湖北卫视": [],
     "深圳卫视": [
       {
-        "speed_kib_s": 359.1,
-        "first_byte_s": 0.11
-      },
-      {
-        "speed_kib_s": 399.5,
-        "first_byte_s": 0.12
-      },
-      {
-        "speed_kib_s": 366.2,
-        "first_byte_s": 0.13
+        "speed_kib_s": 380.7,
+        "first_byte_s": 0.25
       }
     ],
-    "天津卫视": [
-      {
-        "speed_kib_s": 1058.1,
-        "first_byte_s": 0.13
-      }
-    ],
-    "四川卫视": [],
     "重庆卫视": [],
-    "辽宁卫视": [
-      {
-        "speed_kib_s": 399.4,
-        "first_byte_s": 0.11
-      }
-    ]
+    "四川卫视": []
   },
   "rejection_reasons": {},
   "thresholds": {
@@ -132,50 +322,50 @@
     {
       "source": "iptv-org 全球",
       "status": "ok",
-      "entries": 11154,
+      "entries": 11157,
       "priority_candidates": 19
     },
     {
       "source": "suxuang IPv4",
       "status": "ok",
-      "entries": 1364,
-      "priority_candidates": 156
+      "entries": 1363,
+      "priority_candidates": 182
     },
     {
       "source": "suxuang IPv6",
       "status": "ok",
-      "entries": 1034,
-      "priority_candidates": 96
+      "entries": 1032,
+      "priority_candidates": 98
     },
     {
       "source": "Collect-IPTV 自动整理",
       "status": "ok",
-      "entries": 452,
-      "priority_candidates": 9
+      "entries": 692,
+      "priority_candidates": 31
     },
     {
       "source": "ChinaIPTV 自动更新",
       "status": "ok",
-      "entries": 68,
-      "priority_candidates": 7
+      "entries": 69,
+      "priority_candidates": 9
     },
     {
       "source": "wwb521 国内直播",
       "status": "ok",
       "entries": 140,
-      "priority_candidates": 77
+      "priority_candidates": 84
     },
     {
       "source": "CCSH 自动整理",
       "status": "ok",
-      "entries": 3741,
-      "priority_candidates": 180
+      "entries": 3750,
+      "priority_candidates": 607
     },
     {
       "source": "best-fan 国内综合",
       "status": "ok",
-      "entries": 136,
-      "priority_candidates": 60
+      "entries": 119,
+      "priority_candidates": 69
     },
     {
       "source": "YueChan 国内",
@@ -186,8 +376,8 @@
     {
       "source": "PeterHchina CCTV IPv4",
       "status": "ok",
-      "entries": 19,
-      "priority_candidates": 15
+      "entries": 17,
+      "priority_candidates": 8
     },
     {
       "source": "PeterHchina CCTV IPv6",
@@ -198,8 +388,8 @@
     {
       "source": "PeterHchina 央视卫视 IPv4",
       "status": "ok",
-      "entries": 303,
-      "priority_candidates": 26
+      "entries": 362,
+      "priority_candidates": 16
     },
     {
       "source": "PeterHchina 央视卫视 IPv6",
@@ -211,13 +401,13 @@
       "source": "Guovin 官方结果",
       "status": "ok",
       "entries": 795,
-      "priority_candidates": 145
+      "priority_candidates": 152
     },
     {
       "source": "cs3306 IPTV-Sources",
       "status": "ok",
-      "entries": 6567,
-      "priority_candidates": 25
+      "entries": 6700,
+      "priority_candidates": 23
     },
     {
       "source": "IPTV Aggregator",
@@ -240,20 +430,20 @@
     {
       "source": "OrangeWay520",
       "status": "ok",
-      "entries": 501,
-      "priority_candidates": 62
+      "entries": 444,
+      "priority_candidates": 32
     },
     {
       "source": "Lightconer",
       "status": "ok",
-      "entries": 125,
-      "priority_candidates": 45
+      "entries": 123,
+      "priority_candidates": 57
     },
     {
       "source": "Chaniug",
       "status": "ok",
       "entries": 209,
-      "priority_candidates": 59
+      "priority_candidates": 95
     },
     {
       "source": "iptv-org-China",
@@ -264,8 +454,8 @@
     {
       "source": "ZBDS-IPv4 (2024记录)",
       "status": "ok",
-      "entries": 421,
-      "priority_candidates": 26
+      "entries": 490,
+      "priority_candidates": 16
     },
     {
       "source": "BurningC4-IPv4",
@@ -287,7 +477,7 @@
     {
       "source": "zhi35",
       "status": "ok",
-      "entries": 475,
+      "entries": 476,
       "priority_candidates": 33
     },
     {
