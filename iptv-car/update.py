@@ -249,9 +249,9 @@ def main():
     if len(verified) < 3 or len({x[0] for x in chosen}) < 6:
         raise RuntimeError(f"Only {len(verified)} verified lines in fewer than 3 channels; keeping previous playlist")
 
-    # "live.m3u" is the preexisting car subscription URL: keep it stable.
+    # User-managed live.m3u is protected. Scheduled overseas results use live-auto.m3u.
     # "live-verified.m3u" is the alternative for strict verification only.
-    (OUTPUT / "live.m3u").write_text(
+    (OUTPUT / "live-auto.m3u").write_text(
         render_m3u(chosen, "CCTV-1 and CCTV-13 first. Unverified backups are labeled."),
         encoding="utf-8",
     )
