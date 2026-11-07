@@ -1,7 +1,7 @@
 {
-  "updated_at_utc": "2026-11-07T13:06:58+00:00",
-  "channel_count": 30,
-  "stream_count": 39,
+  "updated_at_utc": "2026-11-07T21:54:01+00:00",
+  "channel_count": 29,
+  "stream_count": 36,
   "priority_channels": {
     "CCTV-1": {
       "verified": 0,
@@ -80,7 +80,7 @@
       "unverified_fallback": 0
     },
     "浙江卫视": {
-      "verified": 3,
+      "verified": 1,
       "unverified_fallback": 0
     },
     "江苏卫视": {
@@ -125,7 +125,7 @@
     },
     "重庆卫视": {
       "verified": 0,
-      "unverified_fallback": 1
+      "unverified_fallback": 0
     },
     "辽宁卫视": {
       "verified": 0,
@@ -133,21 +133,20 @@
     }
   },
   "verification": {
-    "verified_entries": 6,
-    "unverified_fallback_entries": 33,
-    "rejected_candidates": 189,
-    "candidate_urls": 195,
+    "verified_entries": 4,
+    "unverified_fallback_entries": 32,
+    "rejected_candidates": 154,
+    "candidate_urls": 158,
     "rejected_reasons": {
-      "fetch_error": 96,
-      "slow": 41,
-      "segment_failed": 37,
-      "high_latency": 3,
-      "not_live": 3,
+      "fetch_error": 95,
+      "slow": 40,
+      "segment_failed": 10,
       "http_403": 2,
-      "unsafe_child": 2,
       "http_500": 2,
-      "short_sample": 2,
-      "timeout": 1
+      "not_live": 2,
+      "high_latency": 1,
+      "unsafe_child": 1,
+      "short_sample": 1
     },
     "min_speed_kib_s": 280,
     "max_start_latency_s": 4,
@@ -156,12 +155,12 @@
   "sources": [
     {
       "source": "OrangeWay520",
-      "downloaded": 506,
+      "downloaded": 473,
       "status": "ok"
     },
     {
       "source": "Lightconer",
-      "downloaded": 180,
+      "downloaded": 119,
       "status": "ok"
     },
     {
