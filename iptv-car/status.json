@@ -1,7 +1,7 @@
 {
-  "updated_at_utc": "2026-11-06T19:27:27+00:00",
-  "channel_count": 29,
-  "stream_count": 36,
+  "updated_at_utc": "2026-11-07T06:02:24+00:00",
+  "channel_count": 30,
+  "stream_count": 37,
   "priority_channels": {
     "CCTV-1": {
       "verified": 0,
@@ -125,7 +125,7 @@
     },
     "重庆卫视": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "辽宁卫视": {
       "verified": 0,
@@ -134,19 +134,19 @@
   },
   "verification": {
     "verified_entries": 4,
-    "unverified_fallback_entries": 32,
-    "rejected_candidates": 168,
-    "candidate_urls": 172,
+    "unverified_fallback_entries": 33,
+    "rejected_candidates": 196,
+    "candidate_urls": 200,
     "rejected_reasons": {
-      "fetch_error": 99,
-      "slow": 47,
-      "segment_failed": 8,
-      "http_404": 6,
+      "fetch_error": 78,
+      "slow": 54,
+      "segment_failed": 51,
+      "not_live": 3,
+      "high_latency": 2,
       "http_403": 2,
+      "unsafe_child": 2,
       "http_500": 2,
-      "not_live": 2,
-      "high_latency": 1,
-      "unsafe_child": 1
+      "short_sample": 2
     },
     "min_speed_kib_s": 280,
     "max_start_latency_s": 4,
@@ -155,12 +155,12 @@
   "sources": [
     {
       "source": "OrangeWay520",
-      "downloaded": 454,
+      "downloaded": 453,
       "status": "ok"
     },
     {
       "source": "Lightconer",
-      "downloaded": 131,
+      "downloaded": 179,
       "status": "ok"
     },
     {
@@ -170,7 +170,7 @@
     },
     {
       "source": "iptv-org",
-      "downloaded": 130,
+      "downloaded": 132,
       "status": "ok"
     }
   ],
