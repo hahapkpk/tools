@@ -1,6 +1,6 @@
 {
-  "updated_at_utc": "2026-11-07T21:54:01+00:00",
-  "channel_count": 29,
+  "updated_at_utc": "2026-11-08T06:06:26+00:00",
+  "channel_count": 31,
   "stream_count": 36,
   "priority_channels": {
     "CCTV-1": {
@@ -9,7 +9,7 @@
     },
     "CCTV-13": {
       "verified": 0,
-      "unverified_fallback": 4
+      "unverified_fallback": 2
     },
     "CCTV-2": {
       "verified": 0,
@@ -76,11 +76,11 @@
       "unverified_fallback": 1
     },
     "湖南卫视": {
-      "verified": 2,
+      "verified": 1,
       "unverified_fallback": 0
     },
     "浙江卫视": {
-      "verified": 1,
+      "verified": 2,
       "unverified_fallback": 0
     },
     "江苏卫视": {
@@ -93,7 +93,7 @@
     },
     "北京卫视": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "广东卫视": {
       "verified": 1,
@@ -125,7 +125,7 @@
     },
     "重庆卫视": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "辽宁卫视": {
       "verified": 0,
@@ -135,18 +135,17 @@
   "verification": {
     "verified_entries": 4,
     "unverified_fallback_entries": 32,
-    "rejected_candidates": 154,
-    "candidate_urls": 158,
+    "rejected_candidates": 150,
+    "candidate_urls": 154,
     "rejected_reasons": {
-      "fetch_error": 95,
-      "slow": 40,
-      "segment_failed": 10,
+      "fetch_error": 78,
+      "segment_failed": 35,
+      "slow": 27,
+      "not_live": 4,
       "http_403": 2,
       "http_500": 2,
-      "not_live": 2,
       "high_latency": 1,
-      "unsafe_child": 1,
-      "short_sample": 1
+      "unsafe_child": 1
     },
     "min_speed_kib_s": 280,
     "max_start_latency_s": 4,
@@ -155,12 +154,12 @@
   "sources": [
     {
       "source": "OrangeWay520",
-      "downloaded": 473,
+      "downloaded": 353,
       "status": "ok"
     },
     {
       "source": "Lightconer",
-      "downloaded": 119,
+      "downloaded": 135,
       "status": "ok"
     },
     {
