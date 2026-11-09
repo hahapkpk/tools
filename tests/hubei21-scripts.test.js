@@ -66,10 +66,37 @@ test('exam submit flow clicks common confirmation buttons after submit', () => {
   assert.match(exam, /确认交卷|确定|确认|提交/);
 });
 
-test('autolearn stops a lesson when progress reporting fails', () => {
-  assert.match(autolearn, /throw new Error\(`学习进度上报失败/);
-  assert.match(autolearn, /const duration = getLessonDuration\(lesson\)/);
-  assert.match(autolearn, /function getLessonDuration\(/);
+test('autolearn surfaces progress-reporting failures instead of swallowing them', () => {
+  // 上报失败必须抛错，由单节 try/catch 记进失败清单（v2 起不再中断整轮）
+  assert.match(autolearn, /class ApiError extends Error/);
+  assert.match(autolearn, /throw new ApiError\(String\(msg\), \{ retryable \}\)/);
+  assert.match(autolearn, /run\.failures\.push\(/);
+  assert.match(autolearn, /if \(err instanceof StopError \|\| err instanceof FatalError\) throw err;/);
+});
+
+test('autolearn resolves lesson duration from video-length fields only', () => {
+  assert.match(autolearn, /function pickDurationSec\(/);
+  assert.match(autolearn, /source\.time,/);
+  // study_detail 里的 time / study_time 是"已学时长"，不能当视频长度，否则上报时长减半
+  assert.doesNotMatch(autolearn, /merged\.time,/);
+  assert.doesNotMatch(autolearn, /merged\.study_time,/);
+});
+
+test('autolearn keeps the study API wire format stable', () => {
+  assert.match(autolearn, /const ratioText = ratio\.toFixed\(2\)/);
+  assert.match(autolearn, /video_id: ctx\.courseId/);
+  assert.match(autolearn, /video_detail_id: lesson\.detailId/);
+  // 水课程 body 只有 4 个字段，不带 year
+  assert.match(
+    autolearn,
+    /water_plan_id: ctx\.courseId,\s*water_plan_detail_id: lesson\.detailId,\s*ratio: ratioText,\s*time,/
+  );
+});
+
+test('autolearn paginates water lessons and blocks concurrent runs', () => {
+  assert.match(autolearn, /for \(let page = 1; page <= CONFIG\.maxPages; page\+\+\)/);
+  assert.match(autolearn, /if \(activeRun\) return;/);
+  assert.match(autolearn, /new AbortController\(\)/);
 });
 
 test('exam documentation links to existing autolearn script', () => {
