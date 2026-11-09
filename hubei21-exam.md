@@ -144,6 +144,15 @@ function letterToValue(letter) {
 
 - [hubei21-autolearn.user.js](hubei21-autolearn.user.js) — 自动完成视频学习进度
 
+## v2 版本（独立脚本）
+
+仓库另有两个 v2 重写版。它们的 `@name` 与旧版不同，属于**独立脚本**：安装后不会自动替换或更新已装的旧版，可以并存对比。
+
+- [hubei21-autolearn-v2.user.js](hubei21-autolearn-v2.user.js) — 刷课 v2：分页拉全、断点续刷、单节失败不中断整轮、请求可中断
+- [hubei21-exam-v2.user.js](hubei21-exam-v2.user.js) — 答题 v2：选项带字母前缀、分批提问、失败重试、答案校验、等待交卷可取消
+
+> 两个版本同时安装会同时出现两个面板，确认 v2 好用后建议停用旧版。
+
 ## 文件信息
 
 - **作者**：Flywind

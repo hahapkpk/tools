@@ -15,6 +15,14 @@ const examDoc = fs.readFileSync(
   path.join(__dirname, '..', 'hubei21-exam.md'),
   'utf8'
 );
+const autolearnV2 = fs.readFileSync(
+  path.join(__dirname, '..', 'hubei21-autolearn-v2.user.js'),
+  'utf8'
+);
+const examV2 = fs.readFileSync(
+  path.join(__dirname, '..', 'hubei21-exam-v2.user.js'),
+  'utf8'
+);
 
 test('hubei21 userscripts expose raw install and update URLs', () => {
   assert.match(
@@ -66,39 +74,98 @@ test('exam submit flow clicks common confirmation buttons after submit', () => {
   assert.match(exam, /确认交卷|确定|确认|提交/);
 });
 
-test('autolearn surfaces progress-reporting failures instead of swallowing them', () => {
-  // 上报失败必须抛错，由单节 try/catch 记进失败清单（v2 起不再中断整轮）
-  assert.match(autolearn, /class ApiError extends Error/);
-  assert.match(autolearn, /throw new ApiError\(String\(msg\), \{ retryable \}\)/);
-  assert.match(autolearn, /run\.failures\.push\(/);
-  assert.match(autolearn, /if \(err instanceof StopError \|\| err instanceof FatalError\) throw err;/);
-});
-
-test('autolearn resolves lesson duration from video-length fields only', () => {
-  assert.match(autolearn, /function pickDurationSec\(/);
-  assert.match(autolearn, /source\.time,/);
-  // study_detail 里的 time / study_time 是"已学时长"，不能当视频长度，否则上报时长减半
-  assert.doesNotMatch(autolearn, /merged\.time,/);
-  assert.doesNotMatch(autolearn, /merged\.study_time,/);
-});
-
-test('autolearn keeps the study API wire format stable', () => {
-  assert.match(autolearn, /const ratioText = ratio\.toFixed\(2\)/);
-  assert.match(autolearn, /video_id: ctx\.courseId/);
-  assert.match(autolearn, /video_detail_id: lesson\.detailId/);
-  // 水课程 body 只有 4 个字段，不带 year
-  assert.match(
-    autolearn,
-    /water_plan_id: ctx\.courseId,\s*water_plan_detail_id: lesson\.detailId,\s*ratio: ratioText,\s*time,/
-  );
-});
-
-test('autolearn paginates water lessons and blocks concurrent runs', () => {
-  assert.match(autolearn, /for \(let page = 1; page <= CONFIG\.maxPages; page\+\+\)/);
-  assert.match(autolearn, /if \(activeRun\) return;/);
-  assert.match(autolearn, /new AbortController\(\)/);
+test('autolearn stops a lesson when progress reporting fails', () => {
+  assert.match(autolearn, /throw new Error\(`学习进度上报失败/);
+  assert.match(autolearn, /const duration = getLessonDuration\(lesson\)/);
+  assert.match(autolearn, /function getLessonDuration\(/);
 });
 
 test('exam documentation links to existing autolearn script', () => {
   assert.match(examDoc, /\[hubei21-autolearn\.user\.js\]\(hubei21-autolearn\.user\.js\)/);
+});
+
+// ---------- v2 独立脚本 ----------
+// v2 是另建的新脚本，不能顶替旧版的更新地址，否则已安装的旧版会被静默升级
+test('v2 scripts are standalone installs, not auto-updates of the old ones', () => {
+  assert.match(autolearnV2, /@name\s+.*\(v2\)/);
+  assert.match(examV2, /@name\s+.*\(v2\)/);
+  assert.match(
+    autolearnV2,
+    /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/hubei21-autolearn-v2\.user\.js/
+  );
+  assert.match(
+    autolearnV2,
+    /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/hubei21-autolearn-v2\.user\.js/
+  );
+  assert.match(
+    examV2,
+    /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/hubei21-exam-v2\.user\.js/
+  );
+  assert.match(
+    examV2,
+    /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/hubei21-exam-v2\.user\.js/
+  );
+  // 旧版仍指向自己的地址，保持原样
+  assert.match(
+    autolearn,
+    /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/hubei21-autolearn\.user\.js/
+  );
+  assert.match(
+    exam,
+    /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/hahapkpk\/tools\/main\/hubei21-exam\.user\.js/
+  );
+});
+
+test('autolearn v2 isolates a failed lesson instead of aborting the run', () => {
+  assert.match(autolearnV2, /class ApiError extends Error/);
+  assert.match(autolearnV2, /throw new ApiError\(String\(msg\), \{ retryable \}\)/);
+  assert.match(autolearnV2, /run\.failures\.push\(/);
+  assert.match(autolearnV2, /if \(err instanceof StopError \|\| err instanceof FatalError\) throw err;/);
+});
+
+test('autolearn v2 keeps the study API wire format stable', () => {
+  assert.match(autolearnV2, /const ratioText = ratio\.toFixed\(2\)/);
+  assert.match(autolearnV2, /video_detail_id: lesson\.detailId/);
+  assert.match(
+    autolearnV2,
+    /water_plan_id: ctx\.courseId,\s*water_plan_detail_id: lesson\.detailId,\s*ratio: ratioText,\s*time,/
+  );
+  // 已学时长不能当视频长度
+  assert.doesNotMatch(autolearnV2, /merged\.time,/);
+  assert.doesNotMatch(autolearnV2, /merged\.study_time,/);
+});
+
+test('autolearn v2 paginates water lessons and blocks concurrent runs', () => {
+  assert.match(autolearnV2, /for \(let page = 1; page <= CONFIG\.maxPages; page\+\+\)/);
+  assert.match(autolearnV2, /if \(activeRun\) return;/);
+  assert.match(autolearnV2, /new AbortController\(\)/);
+});
+
+test('exam v2 sends option letters to the AI and validates answers', () => {
+  // 选项必须带 A./B./C. 前缀，否则 AI 只能靠位置猜字母
+  assert.match(examV2, /String\.fromCharCode\(65 \+ index\)/);
+  assert.match(examV2, /function resolveJudgeAnswer\(/);
+  assert.match(examV2, /function prepareAnswers\(/);
+  assert.match(examV2, /function chunk\(/);
+  assert.match(examV2, /requireAllAnswered/);
+  // 交卷确认不能点到取消/关闭
+  assert.match(examV2, /取消\|关闭\|返回\|放弃/);
+  assert.doesNotMatch(examV2, /return \{ A: 1, B: 2, C: 3, D: 4, E: 5, F: 6 \}\[letter\.toUpperCase\(\)\] \|\| 1;/);
+});
+
+test('exam v2 keeps the same config surface as 1.0.2', () => {
+  assert.match(examV2, /apiBase: 'https:\/\/api\.deepseek\.com'/);
+  assert.match(examV2, /model: 'deepseek-v4-pro'/);
+  assert.match(examV2, /id="cfg-provider"/);
+  assert.match(examV2, /DeepSeek 官方/);
+  assert.match(examV2, /function applyProviderPreset\(/);
+  assert.match(examV2, /setInputValue\('cfg-base', config\.apiBase\)/);
+  assert.match(examV2, /setInputValue\('cfg-key', config\.apiKey\)/);
+  assert.match(examV2, /setInputValue\('cfg-model', 'deepseek-v4-pro'\)/);
+  assert.doesNotMatch(examV2, /id="cfg-base" value="\$\{config\.apiBase\}"/);
+});
+
+test('exam documentation lists the v2 scripts', () => {
+  assert.match(examDoc, /hubei21-autolearn-v2\.user\.js/);
+  assert.match(examDoc, /hubei21-exam-v2\.user\.js/);
 });
