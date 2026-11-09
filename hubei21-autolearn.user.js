@@ -668,7 +668,7 @@
         <div class="h21al-bar"><div id="h21al-bar-fill">0%</div></div>
         <div class="h21al-cfg">
           <label>每节步数<input id="h21al-cfg-steps" type="number" min="1" max="20" step="1"></label>
-          <label>上报间隔(ms)<input id="h21al-cfg-interval" type="number" min="0" max="60000" step="500"></label>
+          <label>上报间隔(ms)<input id="h21al-cfg-interval" type="number" min="300" max="60000" step="100"></label>
           <label>课间间隔(ms)<input id="h21al-cfg-gap" type="number" min="0" max="60000" step="500"></label>
         </div>
         <div class="h21al-log" id="h21al-log"></div>
@@ -718,7 +718,7 @@
       });
     };
     bind(cfgSteps, 'steps', 1, 20);
-    bind(cfgInterval, 'stepIntervalMs', 0, 60000);
+    bind(cfgInterval, 'stepIntervalMs', 300, 60000);
     bind(cfgGap, 'lessonGapMs', 0, 60000);
 
     updateModeTag(ctx);
@@ -1042,7 +1042,8 @@
       document.addEventListener('DOMContentLoaded', init, { once: true });
       return;
     }
-    window.addEventListener('hashchange', syncWithRoute);    syncWithRoute();
+    window.addEventListener('hashchange', syncWithRoute);
+    syncWithRoute();
     // SPA 有时不走 hashchange（用 pushState / 重渲染），MutationObserver 兜底
     const observer = new MutationObserver(() => {
       if (!panelClosedByUser && !el(PANEL_ID) && document.body && detectContext().supported) ensurePanel();
