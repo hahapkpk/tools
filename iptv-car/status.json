@@ -1,5 +1,5 @@
 {
-  "updated_at_utc": "2026-11-13T06:50:27+00:00",
+  "updated_at_utc": "2026-11-13T19:45:14+00:00",
   "channel_count": 30,
   "stream_count": 37,
   "priority_channels": {
@@ -135,15 +135,15 @@
   "verification": {
     "verified_entries": 3,
     "unverified_fallback_entries": 34,
-    "rejected_candidates": 192,
-    "candidate_urls": 195,
+    "rejected_candidates": 186,
+    "candidate_urls": 189,
     "rejected_reasons": {
-      "fetch_error": 91,
-      "slow": 52,
-      "segment_failed": 37,
+      "fetch_error": 93,
+      "slow": 49,
+      "segment_failed": 31,
       "short_sample": 3,
+      "high_latency": 3,
       "not_live": 3,
-      "high_latency": 2,
       "http_403": 2,
       "http_500": 2
     },
@@ -154,7 +154,7 @@
   "sources": [
     {
       "source": "OrangeWay520",
-      "downloaded": 500,
+      "downloaded": 503,
       "status": "ok"
     },
     {
