@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Telegram Web 广告过滤器
 // @namespace    local.telegram.web.adfilter
-// @version      1.1.0
+// @version      1.2.0
 // @description  隐藏 Telegram Web 赞助内容，并支持自定义关键词和 CSS 规则
 // @match        https://web.telegram.org/*
 // @grant        GM_getValue
@@ -13,7 +13,7 @@
 
 (() => {
   'use strict';
-  const defaults = { enabled: true, sponsored: true, keywords: '', selectors: '' };
+  const defaults = { enabled: true, sponsored: true, channelAds: true, keywords: '', domains: '', selectors: '' };
   const marker = 'data-tg-ad-filter-hidden';
   const key = 'tg-ad-filter-settings';
   const official = ['.bubble.is-sponsored', '.pinned-sponsored', '.sponsored-message', '.SponsoredMessage'];
@@ -24,11 +24,35 @@
   style.textContent = `[${marker}]{display:none !important}`;
   (document.head || document.documentElement).appendChild(style);
 
+  // Publisher-created advertisements are ordinary channel posts, not sponsored bubbles.
+  // Require multiple independent signals; there is no reliable universal ad flag.
+  function looksPromotional(el) {
+    const text = (el.innerText || el.textContent || '').toLocaleLowerCase().replace(/\s+/g, ' ');
+    const gambling = /博彩|百家乐|真人(?:视讯|娱乐|盘口)|体育投注|线上娱乐平台|赌(?:场|博)|彩票(?:平台|网站)|返水|打码|爆庄|彩金/.test(text);
+    const incentives = /注册送|注册即送|新人注册|新用户|新会员|首存|存款.*送|体验金|包赔|返水|彩金|返佣|福利|奖励|爆奖|提款|出款/.test(text);
+    const promotion = /官网|官方网址|注册链接|注册网址|官方客服|客服|品牌|平台|玩家|代理|信誉|担保|全网|实力|娱乐|爆奖/.test(text);
+    const money = /(?:\d[\d,.]*\s*(?:万|亿)?\s*(?:u|usdt|元|%)|\d+\s*%)/i.test(text);
+    return (gambling && (incentives || promotion || money)) || (incentives && promotion && money);
+  }
+  function matchesDomain(el, domains) {
+    const text = (el.innerText || el.textContent || '').toLowerCase();
+    const hosts = [...el.querySelectorAll('a[href]')].map(a => {
+      try { const url = new URL(a.href, location.href); return /^https?:$/.test(url.protocol) ? url.hostname.toLowerCase() : ''; } catch (_) { return ''; }
+    });
+    return domains.some(domain => {
+      const escaped = domain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return hosts.some(host => host === domain || host.endsWith('.' + domain)) || new RegExp('(^|[^a-z0-9.-])' + escaped + '(?![a-z0-9.-])', 'i').test(text);
+    });
+  }
   function scan() {
     document.querySelectorAll(`[${marker}]`).forEach(el => el.removeAttribute(marker));
     if (!settings.enabled) return;
     const hide = el => el.setAttribute(marker, '');
     if (settings.sponsored) official.forEach(selector => document.querySelectorAll(selector).forEach(hide));
+    const domains = String(settings.domains || '').split('\n').map(s => s.trim().toLowerCase().replace(/^https?:\/\//, '').split('/')[0]).filter(Boolean);
+    document.querySelectorAll('.bubble.channel-post:not(.is-sponsored), .pinned-message').forEach(el => {
+      if ((settings.channelAds && looksPromotional(el)) || (domains.length && matchesDomain(el, domains))) hide(el);
+    });
     const words = String(settings.keywords || '').split('\n').map(s => s.trim().toLocaleLowerCase()).filter(Boolean);
     if (words.length) document.querySelectorAll(messages).forEach(el => {
       const content = (el.innerText || el.textContent || '').toLocaleLowerCase();
@@ -60,13 +84,18 @@
     </style><div class="overlay"><section class="panel" role="dialog" aria-modal="true" aria-labelledby="title"><h1 id="title">Telegram Web 广告过滤器</h1>
       <label class="row">启用过滤<input id="enabled" type="checkbox"></label>
       <label class="row">隐藏已知赞助内容<input id="sponsored" type="checkbox"></label>
+      <label class="row">识别频道推广和置顶广告<input id="channelAds" type="checkbox"></label>
+      <small>按文本特征组合判断，可能误伤；关闭后可只用关键词、域名或手动规则。</small>
       <label class="field" for="keywords">关键词规则<small>每行一个，匹配消息文字时隐藏整条消息；不区分大小写。</small></label><textarea id="keywords" placeholder="例如：推广合作"></textarea>
+      <label class="field" for="domains">广告域名规则<small>每行一个域名，匹配频道消息和置顶栏中的链接或文字；包含子域名。</small></label><textarea id="domains" placeholder="例如：example.com"></textarea>
       <label class="field" for="selectors">CSS 元素规则<small>每行一个 CSS 选择器；匹配的页面元素会被隐藏。手动选择生成的规则可在此修改或删除。</small></label><textarea id="selectors" placeholder="例如：.custom-ad"></textarea>
       <small>规则仅保存在本机。关键词或 CSS 规则可能隐藏正常内容。</small><div class="buttons"><span class="error" role="status"></span><button class="cancel">取消</button><button class="save">保存规则</button></div></section></div>`;
     document.documentElement.appendChild(host);
     const $ = selector => shadow.querySelector(selector);
     $('#enabled').checked = settings.enabled;
     $('#sponsored').checked = settings.sponsored;
+    $('#channelAds').checked = settings.channelAds;
+    $('#domains').value = settings.domains;
     $('#keywords').value = settings.keywords;
     $('#selectors').value = [settings.selectors.trim(), suggested].filter(Boolean).join('\n');
     $('.cancel').addEventListener('click', () => host.remove());
@@ -76,7 +105,7 @@
       for (const selector of selectors.split('\n').map(s => s.trim()).filter(Boolean)) {
         try { document.querySelector(selector); } catch (_) { $('.error').textContent = 'CSS 规则无效，请检查'; return; }
       }
-      settings = { enabled: $('#enabled').checked, sponsored: $('#sponsored').checked, keywords: $('#keywords').value, selectors };
+      settings = { enabled: $('#enabled').checked, sponsored: $('#sponsored').checked, channelAds: $('#channelAds').checked, keywords: $('#keywords').value, domains: $('#domains').value, selectors };
       GM_setValue(key, settings);
       host.remove();
       schedule();
