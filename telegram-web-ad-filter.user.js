@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Telegram Web 广告过滤器
 // @namespace    local.telegram.web.adfilter
-// @version      1.3.0
+// @version      1.4.0
 // @description  隐藏 Telegram Web 赞助内容，并支持自定义关键词和 CSS 规则
 // @match        https://web.telegram.org/*
 // @grant        GM_getValue
@@ -13,7 +13,7 @@
 
 (() => {
   'use strict';
-  const defaults = { enabled: true, sponsored: true, channelAds: true, keywords: '', domains: '', selectors: '' };
+  const defaults = { enabled: true, sponsored: true, channelAds: true, keywords: '', domains: '', fingerprints: '', selectors: '' };
   const marker = 'data-tg-ad-filter-hidden';
   const key = 'tg-ad-filter-settings';
   const official = ['.bubble.is-sponsored', '.pinned-sponsored', '.sponsored-message', '.SponsoredMessage'];
@@ -50,8 +50,10 @@
     const hide = el => el.setAttribute(marker, '');
     if (settings.sponsored) official.forEach(selector => document.querySelectorAll(selector).forEach(hide));
     const domains = String(settings.domains || '').split('\n').map(s => s.trim().toLowerCase().replace(/^https?:\/\//, '').split('/')[0]).filter(Boolean);
+    const fingerprints = String(settings.fingerprints || '').split('\n').map(s => s.trim().toLocaleLowerCase().replace(/\s+/g, ' ')).filter(s => s.length >= 12);
     document.querySelectorAll('.bubble.channel-post:not(.is-sponsored), .pinned-message').forEach(el => {
-      if ((settings.channelAds && looksPromotional(el)) || (domains.length && matchesDomain(el, domains))) hide(el);
+      const text = (el.innerText || el.textContent || '').toLocaleLowerCase().replace(/\s+/g, ' ');
+      if ((settings.channelAds && looksPromotional(el)) || (domains.length && matchesDomain(el, domains)) || fingerprints.some(f => text.includes(f))) hide(el);
     });
     const words = String(settings.keywords || '').split('\n').map(s => s.trim().toLocaleLowerCase()).filter(Boolean);
     if (words.length) document.querySelectorAll(messages).forEach(el => {
@@ -70,7 +72,7 @@
   });
   scan();
 
-  function openSettings(suggested = '') {
+  function openSettings(suggested = '', learned = {}) {
     if (document.getElementById('tg-ad-filter-settings-host')) return;
     const host = document.createElement('div');
     host.id = 'tg-ad-filter-settings-host';
@@ -88,6 +90,7 @@
       <small>按文本特征组合判断，可能误伤；关闭后可只用关键词、域名或手动规则。</small>
       <label class="field" for="keywords">关键词规则<small>每行一个，匹配消息文字时隐藏整条消息；不区分大小写。</small></label><textarea id="keywords" placeholder="例如：推广合作"></textarea>
       <label class="field" for="domains">广告域名规则<small>每行一个域名，匹配频道消息和置顶栏中的链接或文字；包含子域名。</small></label><textarea id="domains" placeholder="例如：example.com"></textarea>
+      <label class="field" for="fingerprints">重复广告文案<small>每行一段至少 12 个字符的文案；匹配频道消息或置顶栏。</small></label><textarea id="fingerprints" placeholder="手动选择时可自动生成"></textarea>
       <label class="field" for="selectors">CSS 元素规则<small>每行一个 CSS 选择器；匹配的页面元素会被隐藏。手动选择生成的规则可在此修改或删除。</small></label><textarea id="selectors" placeholder="例如：.custom-ad"></textarea>
       <small>规则仅保存在本机。关键词或 CSS 规则可能隐藏正常内容。</small><div class="buttons"><span class="error" role="status"></span><button class="cancel">取消</button><button class="save">保存规则</button></div></section></div>`;
     document.documentElement.appendChild(host);
@@ -95,7 +98,8 @@
     $('#enabled').checked = settings.enabled;
     $('#sponsored').checked = settings.sponsored;
     $('#channelAds').checked = settings.channelAds;
-    $('#domains').value = settings.domains;
+    $('#domains').value = [...new Set([...String(settings.domains || '').split('\n'), ...(learned.domains || [])].map(s => s.trim()).filter(Boolean))].join('\n');
+    $('#fingerprints').value = [...new Set([...String(settings.fingerprints || '').split('\n'), ...(learned.fingerprints || [])].map(s => s.trim()).filter(Boolean))].join('\n');
     $('#keywords').value = settings.keywords;
     $('#selectors').value = [settings.selectors.trim(), suggested].filter(Boolean).join('\n');
     $('.cancel').addEventListener('click', () => host.remove());
@@ -105,7 +109,7 @@
       for (const selector of selectors.split('\n').map(s => s.trim()).filter(Boolean)) {
         try { document.querySelector(selector); } catch (_) { $('.error').textContent = 'CSS 规则无效，请检查'; return; }
       }
-      settings = { enabled: $('#enabled').checked, sponsored: $('#sponsored').checked, channelAds: $('#channelAds').checked, keywords: $('#keywords').value, domains: $('#domains').value, selectors };
+      settings = { enabled: $('#enabled').checked, sponsored: $('#sponsored').checked, channelAds: $('#channelAds').checked, keywords: $('#keywords').value, domains: $('#domains').value, fingerprints: $('#fingerprints').value, selectors };
       GM_setValue(key, settings);
       host.remove();
       schedule();
@@ -132,13 +136,31 @@
     return parts.join(' > ');
   }
 
+  function extractReusableSignals(bubble) {
+    if (!bubble) return {domains: [], fingerprints: []};
+    const ignored = ['t.me', 'telegram.me', 'telegram.org', 'telegra.ph', 'youtube.com', 'youtu.be', 'google.com', 'twitter.com', 'x.com'];
+    const domains = new Set();
+    for (const anchor of bubble.querySelectorAll('a[href]')) {
+      try {
+        const url = new URL(anchor.href, location.href);
+        const host = url.hostname.toLowerCase().replace(/^www\./, '');
+        if (!/^https?:$/.test(url.protocol) || !host.includes('.') || /^[\d.]+$/.test(host) || ignored.some(d => host === d || host.endsWith('.' + d))) continue;
+        domains.add(host);
+      } catch (_) {}
+    }
+    // Use a longer exact text excerpt only when no suitable external domain exists.
+    const lines = (bubble.innerText || bubble.textContent || '').split(/\n+/).map(s => s.replace(/\s+/g, ' ').trim()).filter(s => s.length >= 12 && s.length <= 180);
+    const fingerprints = domains.size ? [] : lines.slice(0, 1).map(s => s.slice(0, 100));
+    return {domains: [...domains].slice(0, 5), fingerprints};
+  }
+
   // Candidate review follows the X Element Blocker approach: stable attributes,
   // visible match counts, and explicit warning for wide or structural rules.
   function showCandidates(el) {
     const host = document.createElement('div');
     host.id = 'tg-ad-filter-candidates';
     const shadow = host.attachShadow({mode:'open'});
-    shadow.innerHTML = `<style>:host{all:initial}.veil{position:fixed;inset:0;z-index:2147483647;background:#10273888;display:flex;align-items:center;justify-content:center;font:14px -apple-system,BlinkMacSystemFont,sans-serif;color:#203247}.box{width:min(560px,calc(100vw - 32px));max-height:85vh;overflow:auto;padding:20px;background:#f7fafc;border-radius:14px;box-sizing:border-box}h2{font-size:18px;margin:0 0 8px}p{color:#60788b;font-size:12px;line-height:1.5}label{display:block;background:white;border:1px solid #dde8ef;border-radius:8px;margin:8px 0;padding:10px;cursor:pointer}label.selected{border-color:#168ccb}code{display:block;word-break:break-all;font:11px/1.4 monospace;margin:5px 0 0;color:#536b7e}.warning{color:#b65c15}.actions{text-align:right;margin-top:14px}button{padding:9px 14px;margin-left:8px;border:0;border-radius:8px;cursor:pointer}.next{background:#168ccb;color:white}.outline{position:fixed;z-index:2147483646;pointer-events:none;border:3px solid #f06450;background:#ff574f33;box-sizing:border-box}</style><div class="veil"><section class="box" role="dialog" aria-modal="true"><h2>选择屏蔽范围</h2><p>先选择候选规则，再检查并保存。消息规则只屏蔽当前帖子；多处命中可能影响其他内容。</p><div class="list"></div><p class="warning">结构路径依赖页面布局，刷新或切换频道后可能失效或误匹配。</p><div class="actions"><button class="cancel">取消</button><button class="next">继续</button></div></section></div><div class="previews"></div>`;
+    shadow.innerHTML = `<style>:host{all:initial}.veil{position:fixed;inset:0;z-index:2147483647;background:#10273888;display:flex;align-items:center;justify-content:center;font:14px -apple-system,BlinkMacSystemFont,sans-serif;color:#203247}.box{width:min(560px,calc(100vw - 32px));max-height:85vh;overflow:auto;padding:20px;background:#f7fafc;border-radius:14px;box-sizing:border-box}h2{font-size:18px;margin:0 0 8px}p{color:#60788b;font-size:12px;line-height:1.5}label{display:block;background:white;border:1px solid #dde8ef;border-radius:8px;margin:8px 0;padding:10px;cursor:pointer}label.selected{border-color:#168ccb}code{display:block;word-break:break-all;font:11px/1.4 monospace;margin:5px 0 0;color:#536b7e}.warning{color:#b65c15}.actions{text-align:right;margin-top:14px}button{padding:9px 14px;margin-left:8px;border:0;border-radius:8px;cursor:pointer}.next{background:#168ccb;color:white}.outline{position:fixed;z-index:2147483646;pointer-events:none;border:3px solid #f06450;background:#ff574f33;box-sizing:border-box}</style><div class="veil"><section class="box" role="dialog" aria-modal="true"><h2>选择屏蔽范围</h2><p>先选择候选规则，再检查并保存。消息规则只屏蔽当前帖子；多处命中可能影响其他内容。</p><div class="list"></div><label class="learn"><input type="checkbox" checked> 同时自动过滤重复广告 <small class="signals"></small></label><p class="warning">结构路径依赖页面布局，刷新或切换频道后可能失效或误匹配。</p><div class="actions"><button class="cancel">取消</button><button class="next">继续</button></div></section></div><div class="previews"></div>`;
     document.documentElement.appendChild(host);
     const candidates = [];
     function add(label, selector, structural = false) {
@@ -150,6 +172,10 @@
       } catch (_) {}
     }
     const bubble = el.closest('.bubble[data-mid][data-peer-id]');
+    const learned = extractReusableSignals(bubble);
+    const learnBox = shadow.querySelector('.learn');
+    if (!learned.domains.length && !learned.fingerprints.length) learnBox.style.display = 'none';
+    else shadow.querySelector('.signals').textContent = learned.domains.length ? '将添加域名：' + learned.domains.join('、') + '；可能影响包含这些域名的其他消息。' : '将添加文案：' + learned.fingerprints.join('、') + '；相同文案也会被隐藏。';
     if (bubble) add('整条消息（当前频道和消息）', selectorFor(bubble));
     if (el.id) add('元素 ID', '#' + CSS.escape(el.id));
     for (const attr of ['data-testid','aria-label']) {
@@ -188,7 +214,7 @@
     window.addEventListener('keydown', onKey, true);
     shadow.querySelector('.cancel').addEventListener('click', cleanup);
     shadow.querySelector('.next').addEventListener('click', () => {
-      const candidate = candidates[selected]; cleanup(); openSettings(candidate.selector);
+      const candidate = candidates[selected]; const reuse = shadow.querySelector('.learn input').checked ? learned : {}; cleanup(); openSettings(candidate.selector, reuse);
     });
     select(0);
   }
@@ -204,7 +230,7 @@
     let chosen = null;
     function target(event) {
       const el = event.target;
-      if (!(el instanceof Element) || el === host || el === document.documentElement || el === document.body) return null;
+      if (!(el instanceof Element) || el === host || el.id === 'tg-ad-filter-float' || el === document.documentElement || el === document.body) return null;
       return el;
     }
     function move(event) {
@@ -236,6 +262,45 @@
     document.addEventListener('click', click, true);
     window.addEventListener('keydown', keydown, true);
   }
+  function addFloatingButton() {
+    const host = document.createElement('div'); host.id = 'tg-ad-filter-float';
+    const shadow = host.attachShadow({mode: 'open'});
+    shadow.innerHTML = `<style>:host{all:initial;position:fixed;z-index:2147483645;touch-action:none}button{width:48px;height:48px;border:2px solid white;border-radius:50%;background:#168ccb;color:white;box-shadow:0 3px 14px #0006;font:700 18px sans-serif;cursor:grab;touch-action:none}button:active{cursor:grabbing}button:focus-visible{outline:3px solid #ffca45}</style><button title="点击选择广告；拖动调整位置" aria-label="选择广告屏蔽">屏</button>`;
+    document.documentElement.appendChild(host);
+    const button = shadow.querySelector('button');
+    const posKey = 'tg-ad-filter-float-position';
+    const saved = GM_getValue(posKey, null);
+    function place(x, y) {
+      const maxX = Math.max(0, innerWidth - 48), maxY = Math.max(0, innerHeight - 48);
+      host.style.left = Math.min(maxX, Math.max(0, x)) + 'px';
+      host.style.top = Math.min(maxY, Math.max(0, y)) + 'px';
+    }
+    place(Number.isFinite(saved?.x) ? saved.x : innerWidth - 64, Number.isFinite(saved?.y) ? saved.y : innerHeight * 0.55);
+    let drag = null, suppressClick = false;
+    button.addEventListener('pointerdown', event => {
+      if (event.button !== 0) return;
+      const rect = host.getBoundingClientRect();
+      drag = {id:event.pointerId, startX:event.clientX, startY:event.clientY, x:rect.left, y:rect.top, moved:false};
+      button.setPointerCapture(event.pointerId); event.stopPropagation();
+    });
+    button.addEventListener('pointermove', event => {
+      if (!drag || event.pointerId !== drag.id) return;
+      const dx=event.clientX-drag.startX, dy=event.clientY-drag.startY;
+      if (Math.hypot(dx,dy)>4) drag.moved=true;
+      if (drag.moved) place(drag.x+dx,drag.y+dy);
+      event.stopPropagation();
+    });
+    function end(event) {
+      if (!drag || event.pointerId !== drag.id) return;
+      suppressClick=drag.moved;
+      if (drag.moved) GM_setValue(posKey, {x:parseFloat(host.style.left),y:parseFloat(host.style.top)});
+      drag=null; event.stopPropagation();
+    }
+    button.addEventListener('pointerup', end); button.addEventListener('pointercancel', end);
+    button.addEventListener('click', event => {event.stopPropagation();if(suppressClick){suppressClick=false;return;}startPicker();});
+    window.addEventListener('resize', () => place(parseFloat(host.style.left),parseFloat(host.style.top)));
+  }
+  addFloatingButton();
   GM_registerMenuCommand('设置广告过滤规则', () => openSettings());
   GM_registerMenuCommand('手动选择页面广告', startPicker);
 })();
