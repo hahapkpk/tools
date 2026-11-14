@@ -1,5 +1,5 @@
 {
-  "updated_at_utc": "2026-11-14T18:07:19+00:00",
+  "updated_at_utc": "2026-11-14T22:28:15+00:00",
   "channel_count": 30,
   "stream_count": 37,
   "priority_channels": {
@@ -109,7 +109,7 @@
     },
     "湖北卫视": {
       "verified": 0,
-      "unverified_fallback": 0
+      "unverified_fallback": 1
     },
     "深圳卫视": {
       "verified": 0,
@@ -125,7 +125,7 @@
     },
     "重庆卫视": {
       "verified": 0,
-      "unverified_fallback": 1
+      "unverified_fallback": 0
     },
     "辽宁卫视": {
       "verified": 0,
@@ -135,17 +135,16 @@
   "verification": {
     "verified_entries": 4,
     "unverified_fallback_entries": 33,
-    "rejected_candidates": 189,
-    "candidate_urls": 193,
+    "rejected_candidates": 162,
+    "candidate_urls": 166,
     "rejected_reasons": {
-      "fetch_error": 91,
-      "slow": 50,
-      "segment_failed": 36,
-      "short_sample": 3,
-      "not_live": 3,
-      "high_latency": 2,
+      "fetch_error": 80,
+      "slow": 43,
+      "segment_failed": 32,
       "http_403": 2,
-      "http_500": 2
+      "http_500": 2,
+      "not_live": 2,
+      "high_latency": 1
     },
     "min_speed_kib_s": 280,
     "max_start_latency_s": 4,
@@ -154,12 +153,12 @@
   "sources": [
     {
       "source": "OrangeWay520",
-      "downloaded": 500,
+      "downloaded": 502,
       "status": "ok"
     },
     {
       "source": "Lightconer",
-      "downloaded": 140,
+      "downloaded": 123,
       "status": "ok"
     },
     {
