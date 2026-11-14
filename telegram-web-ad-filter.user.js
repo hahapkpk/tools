@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Telegram Web 广告过滤器
 // @namespace    local.telegram.web.adfilter
-// @version      1.2.0
+// @version      1.3.0
 // @description  隐藏 Telegram Web 赞助内容，并支持自定义关键词和 CSS 规则
 // @match        https://web.telegram.org/*
 // @grant        GM_getValue
@@ -111,8 +111,8 @@
       schedule();
     });
   }
-  function selectorFor(el) {
-    const bubble = el.closest('.bubble[data-mid][data-peer-id]');
+  function selectorFor(el, exact = false) {
+    const bubble = !exact && el.closest('.bubble[data-mid][data-peer-id]');
     if (bubble) return `.bubble[data-peer-id="${CSS.escape(bubble.dataset.peerId)}"][data-mid="${CSS.escape(bubble.dataset.mid)}"]`;
     const parts = [];
     for (let node = el; node && node.nodeType === 1 && node !== document.documentElement; node = node.parentElement) {
@@ -132,24 +132,85 @@
     return parts.join(' > ');
   }
 
+  // Candidate review follows the X Element Blocker approach: stable attributes,
+  // visible match counts, and explicit warning for wide or structural rules.
+  function showCandidates(el) {
+    const host = document.createElement('div');
+    host.id = 'tg-ad-filter-candidates';
+    const shadow = host.attachShadow({mode:'open'});
+    shadow.innerHTML = `<style>:host{all:initial}.veil{position:fixed;inset:0;z-index:2147483647;background:#10273888;display:flex;align-items:center;justify-content:center;font:14px -apple-system,BlinkMacSystemFont,sans-serif;color:#203247}.box{width:min(560px,calc(100vw - 32px));max-height:85vh;overflow:auto;padding:20px;background:#f7fafc;border-radius:14px;box-sizing:border-box}h2{font-size:18px;margin:0 0 8px}p{color:#60788b;font-size:12px;line-height:1.5}label{display:block;background:white;border:1px solid #dde8ef;border-radius:8px;margin:8px 0;padding:10px;cursor:pointer}label.selected{border-color:#168ccb}code{display:block;word-break:break-all;font:11px/1.4 monospace;margin:5px 0 0;color:#536b7e}.warning{color:#b65c15}.actions{text-align:right;margin-top:14px}button{padding:9px 14px;margin-left:8px;border:0;border-radius:8px;cursor:pointer}.next{background:#168ccb;color:white}.outline{position:fixed;z-index:2147483646;pointer-events:none;border:3px solid #f06450;background:#ff574f33;box-sizing:border-box}</style><div class="veil"><section class="box" role="dialog" aria-modal="true"><h2>选择屏蔽范围</h2><p>先选择候选规则，再检查并保存。消息规则只屏蔽当前帖子；多处命中可能影响其他内容。</p><div class="list"></div><p class="warning">结构路径依赖页面布局，刷新或切换频道后可能失效或误匹配。</p><div class="actions"><button class="cancel">取消</button><button class="next">继续</button></div></section></div><div class="previews"></div>`;
+    document.documentElement.appendChild(host);
+    const candidates = [];
+    function add(label, selector, structural = false) {
+      if (!selector || candidates.some(c => c.selector === selector)) return;
+      try {
+        const matches = [...document.querySelectorAll(selector)];
+        if (!matches.length) return;
+        candidates.push({label, selector, structural, matches});
+      } catch (_) {}
+    }
+    const bubble = el.closest('.bubble[data-mid][data-peer-id]');
+    if (bubble) add('整条消息（当前频道和消息）', selectorFor(bubble));
+    if (el.id) add('元素 ID', '#' + CSS.escape(el.id));
+    for (const attr of ['data-testid','aria-label']) {
+      const value = el.getAttribute(attr);
+      if (value && value.length < 120) add(attr, `${CSS.escape(el.localName)}[${attr}="${CSS.escape(value)}"]`);
+    }
+    const link = el.closest('a[href]');
+    if (link && link.getAttribute('href').length < 160) add('相同链接元素', `a[href="${CSS.escape(link.getAttribute('href'))}"]`);
+    add('当前元素（结构路径）', selectorFor(el, true), true);
+    if (!candidates.length) { host.remove(); return; }
+    const list = shadow.querySelector('.list');
+    const previews = shadow.querySelector('.previews');
+    let selected = 0;
+    function select(i) {
+      selected = i;
+      list.querySelectorAll('label').forEach((label, index) => label.classList.toggle('selected', index === i));
+      previews.replaceChildren();
+      candidates[i].matches.slice(0, 20).forEach(node => {
+        const rect = node.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const outline = document.createElement('div'); outline.className = 'outline';
+        Object.assign(outline.style, {left:rect.left+'px',top:rect.top+'px',width:rect.width+'px',height:rect.height+'px'});
+        previews.append(outline);
+      });
+    }
+    candidates.forEach((candidate, i) => {
+      const label = document.createElement('label');
+      const input = document.createElement('input'); input.type='radio'; input.name='candidate'; input.checked=i===0;
+      const title = document.createElement('span');
+      title.textContent = ` ${candidate.label} · 当前匹配 ${candidate.matches.length} 处${candidate.matches.length > 1 ? ' · 可能误伤' : ''}${candidate.structural ? ' · 结构规则' : ''}`;
+      const code = document.createElement('code'); code.textContent = candidate.selector;
+      label.append(input,title,code); label.addEventListener('click',()=>select(i)); list.append(label);
+    });
+    function cleanup(){window.removeEventListener('keydown', onKey, true);host.remove();}
+    function onKey(event){if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();cleanup();}}
+    window.addEventListener('keydown', onKey, true);
+    shadow.querySelector('.cancel').addEventListener('click', cleanup);
+    shadow.querySelector('.next').addEventListener('click', () => {
+      const candidate = candidates[selected]; cleanup(); openSettings(candidate.selector);
+    });
+    select(0);
+  }
+
   function startPicker() {
     if (document.getElementById('tg-ad-filter-picker')) return;
     const host = document.createElement('div');
     host.id = 'tg-ad-filter-picker';
     const shadow = host.attachShadow({mode: 'open'});
-    shadow.innerHTML = `<style>:host{all:initial}.tip{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:2147483647;background:#183b53;color:white;padding:11px 16px;border-radius:9px;box-shadow:0 4px 20px #0005;font:14px sans-serif;pointer-events:none}.outline{position:fixed;z-index:2147483646;pointer-events:none;box-sizing:border-box;border:3px solid #ff574f;background:#ff574f33;display:none}</style><div class="tip">点击广告以选择整条消息，按 Esc 取消</div><div class="outline"></div>`;
+    shadow.innerHTML = `<style>:host{all:initial}.tip{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:2147483647;background:#183b53;color:white;padding:11px 16px;border-radius:9px;box-shadow:0 4px 20px #0005;font:14px sans-serif;pointer-events:none}.outline{position:fixed;z-index:2147483646;pointer-events:none;box-sizing:border-box;border:3px solid #ff574f;background:#ff574f33;display:none}</style><div class="tip">点击广告后选择屏蔽范围，按 Esc 取消</div><div class="outline"></div>`;
     document.documentElement.appendChild(host);
     const outline = shadow.querySelector('.outline');
     let chosen = null;
     function target(event) {
       const el = event.target;
       if (!(el instanceof Element) || el === host || el === document.documentElement || el === document.body) return null;
-      return el.closest('.bubble[data-mid][data-peer-id]') || el;
+      return el;
     }
     function move(event) {
       chosen = target(event);
       if (!chosen) { outline.style.display = 'none'; return; }
-      const r = chosen.getBoundingClientRect();
+      const r = (chosen.closest('.bubble[data-mid][data-peer-id]') || chosen).getBoundingClientRect();
       Object.assign(outline.style, {display:'block',left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px'});
     }
     function stop(event) { event.preventDefault(); event.stopImmediatePropagation(); }
@@ -157,9 +218,8 @@
       stop(event);
       const el = target(event);
       if (!el) return;
-      const selector = selectorFor(el);
       cleanup();
-      if (selector) openSettings(selector);
+      showCandidates(el);
     }
     function keydown(event) { if (event.key === 'Escape') { stop(event); cleanup(); } }
     function cleanup() {
