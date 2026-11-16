@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube 英文视频简体中文字幕与 AI 配音
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.8.1
+// @version      0.8.2
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube and optionally provides Chinese AI dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -432,18 +432,20 @@
       #${STATUS_ID}.${SCRIPT_ID}-visible { opacity: 1; }
       #${CONTROL_ID} {
         right: 12px;
-        top: 12px;
+        bottom: 54px;
         display: none;
-        width: 340px;
-        max-width: min(360px, calc(100% - 24px));
-        max-height: calc(100% - 24px);
+        width: 360px;
+        max-width: calc(100% - 24px);
+        max-height: calc(100% - 66px);
         overflow-x: hidden;
         overflow-y: auto;
-        padding: 10px;
-        font-size: 12px;
+        padding: 12px;
+        font-size: 13px;
         line-height: 1.4;
         pointer-events: auto;
         box-sizing: border-box;
+        background: rgba(20, 20, 20, 0.97);
+        border: 1px solid rgba(255,255,255,0.14);
       }
       #${CONTROL_ID}.${SCRIPT_ID}-visible { display: block; }
       #${CONTROL_ID} *,
@@ -453,10 +455,10 @@
       }
       #${CONTROL_ID} .${SCRIPT_ID}-row {
         display: grid;
-        grid-template-columns: 92px minmax(0, 1fr);
+        grid-template-columns: minmax(72px, 90px) minmax(0, 1fr);
         align-items: center;
         gap: 8px;
-        margin: 7px 0;
+        margin: 9px 0;
       }
       #${CONTROL_ID} label {
         color: rgba(255,255,255,0.82);
@@ -480,7 +482,7 @@
         line-height: 1.45;
       }
       #${CONTROL_ID} button {
-        min-height: 26px;
+        min-height: 30px;
         padding: 3px 8px;
         cursor: pointer;
       }
@@ -492,7 +494,7 @@
         margin-top: 8px;
       }
       #${CONTROL_ID} .${SCRIPT_ID}-settings-section {
-        margin: 4px -10px 0;
+        margin: 4px -12px 0;
         border-top: 1px solid rgba(255,255,255,0.12);
       }
       #${CONTROL_ID} .${SCRIPT_ID}-settings-section-toggle {
@@ -526,7 +528,39 @@
         transform: rotate(225deg);
       }
       #${CONTROL_ID} .${SCRIPT_ID}-settings-section-content {
-        padding: 0 10px 5px;
+        padding: 0 12px 8px;
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-panel-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin: -2px 0 8px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid rgba(255,255,255,0.12);
+        font-size: 14px;
+        font-weight: 600;
+      }
+      #${CONTROL_ID} .${SCRIPT_ID}-panel-close {
+        width: 30px;
+        min-width: 30px;
+        height: 30px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        font-size: 22px;
+        line-height: 1;
+      }
+      #${CONTROL_ID} input[type="checkbox"] {
+        width: 17px;
+        height: 17px;
+        margin: 0;
+        accent-color: #3ea6ff;
+        justify-self: start;
+      }
+      #${CONTROL_ID} button:focus-visible, #${CONTROL_ID} input:focus-visible,
+      #${CONTROL_ID} textarea:focus-visible {
+        outline: 2px solid #3ea6ff;
+        outline-offset: 2px;
       }
       #${CONTROL_ID} .${SCRIPT_ID}-settings-section-content[hidden] {
         display: none;
@@ -895,6 +929,10 @@
     row.className = `${SCRIPT_ID}-row`;
     const label = document.createElement('label');
     label.textContent = labelText;
+    if (control.matches?.('input:not([type="hidden"]), textarea, select')) {
+      control.id ||= `${SCRIPT_ID}-field-${labelText}`;
+      label.htmlFor = control.id;
+    }
     row.append(label, control);
     return row;
   }
@@ -1656,8 +1694,7 @@
       makeButton('SRT', '导出 .srt 字幕', () => downloadSubtitle('srt')),
       makeButton('VTT', '导出 .vtt 字幕', () => downloadSubtitle('vtt')),
       makeButton('TXT', '导出 .txt 文本', () => downloadSubtitle('txt')),
-      makeButton('清缓存', '清除当前视频字幕缓存', () => clearCurrentCache()),
-      makeButton('关闭', '关闭面板', () => closeControlsPanel())
+      makeButton('清缓存', '清除当前视频字幕缓存', () => clearCurrentCache())
     );
 
     const browserVoiceRow = makeRow('语音人物', voicePicker);
@@ -1700,7 +1737,18 @@
       makeRemoteVoiceRow('配音状态', voiceProgressWrap)
     ]);
 
+    const header = document.createElement('div');
+    header.className = `${SCRIPT_ID}-panel-header`;
+    const title = document.createElement('span');
+    title.textContent = '字幕与配音';
+    const close = makeButton('×', '关闭设置', closeControlsPanel);
+    close.className = `${SCRIPT_ID}-panel-close`;
+    close.setAttribute('aria-label', '关闭设置');
+    header.append(title, close);
+    const toolsSection = makeSettingsSection('导出与维护', [buttons]);
+
     panel.append(
+      header,
       makeRow('启用', enabled),
       makeRow('模式', mode),
       makeRow('字幕翻译', translationEngine),
@@ -1711,7 +1759,7 @@
       subtitleSection,
       voiceServiceSection,
       syncSection,
-      buttons
+      toolsSection
     );
     player.appendChild(panel);
     syncVolcFavoriteControls();
