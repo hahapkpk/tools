@@ -38,7 +38,7 @@ test('seeking within the current remote cue does not interrupt audio', () => {
   const end = source.indexOf('  function syncVoice(', start);
   const state = { remoteAudio: {}, remoteVoiceCurrent: { index: 3 }, remoteVoiceQueue: [1], spokenCueIndex: 3, seekVoiceSuppressUntil: -1 };
   let cancelled = false;
-  const context = { state, getVideoEl: () => ({ currentTime: 5 }), isRemoteVoiceEngine: () => true, findVoiceCueIndex: () => 3, cancelSpeech() { cancelled = true; } };
+  const context = { state, getVideoEl: () => ({ currentTime: 5 }), isRemoteVoiceEngine: () => true, findVoiceCueIndex: () => 3, estimateVoiceLag: () => 0, VOICE_MAX_LAG_SECONDS: 1.5, cancelSpeech() { cancelled = true; } };
   vm.createContext(context);
   vm.runInContext(source.slice(start, end), context);
   context.handleVideoSeeking();
@@ -68,7 +68,7 @@ test('translation starts at the current position and publishes before finishing'
   const context = {
     state: { loadToken: 1 }, getVideoEl: () => ({ currentTime: 12 }),
     getLocalTranslator: async () => ({ translate: async text => { order.push(text); return `中${text}`; } }),
-    mergeSentenceCues: cues => cues, cleanCaptionText: text => text, limitLines: cue => cue, showStatus() {}
+    mergeSentenceCues: cues => cues, mergeVoiceCues: cues => cues.slice(), cleanCaptionText: text => text, limitLines: cue => cue, showStatus() {}
   };
   vm.createContext(context);
   vm.runInContext(source.slice(start, end), context);
@@ -76,6 +76,61 @@ test('translation starts at the current position and publishes before finishing'
   assert.deepEqual(order, ['b', 'c', 'a']);
   assert.equal(partial[0], '中b');
   assert.equal(Array.from(result, x => x.text).join(','), '中a,中b,中c');
+});
+
+test('translation changes priority when playback seeks to an untranslated cue', async () => {
+  const start = source.indexOf('  async function translateCuesLocally(');
+  const end = source.indexOf('  async function waitForCaptionSource(', start);
+  let time = 0;
+  const order = [];
+  const context = {state:{loadToken:1},getVideoEl:()=>({currentTime:time}),getLocalTranslator:async()=>({translate:async text=>{order.push(text);if(text==='a') time=16;return text;}}),mergeSentenceCues:cues=>cues,mergeVoiceCues:cues=>cues.slice(),cleanCaptionText:text=>text,limitLines:cue=>cue,showStatus(){}};
+  vm.createContext(context);
+  vm.runInContext(source.slice(start,end),context);
+  await context.translateCuesLocally([{start:0,end:5,text:'a'},{start:6,end:10,text:'b'},{start:16,end:20,text:'c'}],'en',1,()=>{});
+  assert.deepEqual(order,['a','c','b']);
+});
+
+test('partial translation never merges voice cues across untranslated gaps', () => {
+  const start = source.indexOf('  function buildPartialVoiceCues(');
+  const end = source.indexOf('  async function waitForCaptionSource(', start);
+  const context = {mergeVoiceCues:cues=>[{start:cues[0].start,end:cues.at(-1).end}]};
+  vm.createContext(context);
+  vm.runInContext(source.slice(start,end),context);
+  const voices = context.buildPartialVoiceCues([{start:0,end:1},undefined,{start:2,end:3},{start:3,end:4}],[true,false,true,true]);
+  assert.equal(voices.length,1);
+  assert.equal(voices[0].start,2);
+  assert.equal(voices[0].end,4);
+});
+
+test('voice lag accounts for audio progress and subtitle offset', () => {
+  const start = source.indexOf('  function shouldSkipQueuedVolcCue(');
+  const end = source.indexOf('  function recoverVolcQueueAfterError(', start);
+  const context = {state:{settings:{voiceSyncMode:'smart',offsetMs:0}},VOICE_MAX_LAG_SECONDS:1.5,VOICE_NATURAL_MAX_LAG_SECONDS:6,VOICE_SMART_MAX_LAG_SECONDS:3,VOICE_SMART_LAG_THRESHOLD_SECONDS:0.8,VOICE_SMART_MAX_PLAYBACK_RATE:1.18,clamp:(v,min,max)=>Math.min(max,Math.max(min,Number.isFinite(v)?v:min))};
+  vm.createContext(context);
+  vm.runInContext(source.slice(start,end),context);
+  const item={start:10,end:30};
+  assert.equal(context.estimateVoiceLag({currentTime:20},item,{currentTime:10,duration:20}),0);
+  assert.equal(context.estimateVoiceLag({currentTime:23},item,{currentTime:10,duration:20}),3);
+  assert.equal(context.estimateVoiceLag({currentTime:23},item,{currentTime:0,duration:NaN}),null);
+  assert.equal(context.shouldSkipQueuedVolcCue({end:10},{currentTime:14}),true);
+  context.state.settings.voiceSyncMode='natural';
+  assert.equal(context.shouldSkipQueuedVolcCue({end:10},{currentTime:14}),false);
+  assert.equal(context.shouldSkipQueuedVolcCue({end:10},{currentTime:17}),true);
+  assert.equal(context.getVolcPlaybackRate(item,{currentTime:20,playbackRate:1.5}),1.5);
+  const audio={currentTime:1,duration:20};
+  assert.equal(context.alignVoiceToVideo({currentTime:25},item,audio),true);
+  assert.equal(audio.currentTime,15);
+});
+
+test('seeked on a paused video does not resume remote audio', () => {
+  const start = source.indexOf('  function handleVideoPlay()');
+  const end = source.indexOf('  function handleVideoSeeking()', start);
+  let plays = 0;
+  const context = {getVideoEl:()=>({paused:true,seeking:false}),state:{settings:{voiceEnabled:true},remoteAudio:{paused:true,play(){plays++;return Promise.resolve();}}},isRemoteVoiceEngine:()=>true,window:{}};
+  vm.createContext(context);
+  vm.runInContext(source.slice(start,end),context);
+  context.handleVideoPlay();
+  assert.equal(plays,0);
 });
 
 test('progressive publication remaps existing remote voice indexes', () => {
@@ -130,7 +185,7 @@ test('a paused video does not start a newly generated voice', async () => {
   let plays = 0;
   const video = {paused:false,currentTime:1};
   const state = {settings:{voiceEnabled:true},remoteVoiceQueue:[{text:'one',start:0,end:2}],remoteAudio:null,remoteVoiceStarting:false,remoteVoiceToken:1};
-  const context = {state,getVideoEl:()=>video,isRemoteVoiceEngine:()=>true,shouldSkipQueuedVolcCue:()=>false,refreshVoiceProgressStatus(){},getVolcAudioUrl:()=>new Promise(resolve=>{release=resolve;}),getVolcPlaybackRate:()=>1,Audio:function(){this.play=()=>{plays++;return Promise.resolve();};this.addEventListener=()=>{};}};
+  const context = {state,getVideoEl:()=>video,isRemoteVoiceEngine:()=>true,shouldSkipQueuedVolcCue:()=>false,refreshVoiceProgressStatus(){},getVolcAudioUrl:()=>new Promise(resolve=>{release=resolve;}),getVolcPlaybackRate:()=>1,VOICE_MAX_LAG_SECONDS:1.5,Audio:function(){this.play=()=>{plays++;return Promise.resolve();};this.addEventListener=()=>{};}};
   vm.createContext(context);
   vm.runInContext(source.slice(start,end),context);
   const pending = context.playNextVolcCue();
@@ -139,6 +194,19 @@ test('a paused video does not start a newly generated voice', async () => {
   await pending;
   assert.equal(plays,0);
   assert.ok(state.remoteAudio);
+});
+
+test('a late cue seeks audio to the current position before playing', async () => {
+  const start = source.indexOf('  async function playNextVolcCue()');
+  const end = source.indexOf('  function prefetchVolcCues(', start);
+  const calls = [];
+  const video = {paused:false,seeking:false,currentTime:15};
+  const state = {settings:{voiceEnabled:true,offsetMs:0},remoteVoiceQueue:[{text:'one',start:0,end:20}],remoteAudio:null,remoteVoiceStarting:false,remoteVoiceToken:1};
+  const context = {state,getVideoEl:()=>video,isRemoteVoiceEngine:()=>true,shouldSkipQueuedVolcCue:()=>false,refreshVoiceProgressStatus(){},getVolcAudioUrl:async()=> 'blob:new',getVolcPlaybackRate:()=>1,VOICE_MAX_LAG_SECONDS:1.5,waitForAudioMetadata:async()=>true,alignVoiceToVideo:()=>{calls.push('align');return true;},Audio:function(){this.play=()=>{calls.push('play');return Promise.resolve();};this.addEventListener=()=>{};}};
+  vm.createContext(context);
+  vm.runInContext(source.slice(start,end),context);
+  await context.playNextVolcCue();
+  assert.deepEqual(calls,['align','play']);
 });
 
 test('a seek during retry delay prevents another remote request', async () => {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube 英文视频简体中文字幕与 AI 配音
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.8.5
+// @version      0.8.6
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube and optionally provides Chinese AI dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -51,6 +51,8 @@
   const CHECK_INTERVAL_MS = 120;
   const ROUTE_INTERVAL_MS = 800;
   const VOICE_MAX_LAG_SECONDS = 1.5;
+  const VOICE_NATURAL_MAX_LAG_SECONDS = 6;
+  const VOICE_SMART_MAX_LAG_SECONDS = 3;
   const VOICE_SMART_LAG_THRESHOLD_SECONDS = 0.8;
   const VOICE_SMART_MAX_PLAYBACK_RATE = 1.18;
   const VOICE_SENTENCE_MAX_GAP_SECONDS = 1.2;
@@ -2423,23 +2425,36 @@
     const translator = await getLocalTranslator(sourceLanguage);
     const sourceCues = mergeSentenceCues(rawSourceCues);
     const translated = new Array(sourceCues.length);
-    const currentTime = getVideoEl()?.currentTime || 0;
-    const nearest = sourceCues.findIndex(cue => cue.end >= currentTime);
-    const first = nearest < 0 ? 0 : nearest;
-    const order = [...sourceCues.keys()].slice(first).concat([...sourceCues.keys()].slice(0, first));
-    for (let completed = 0; completed < order.length; completed += 1) {
+    const done = new Array(sourceCues.length).fill(false);
+    for (let completed = 0; completed < sourceCues.length; completed += 1) {
       if (token !== state.loadToken) return [];
       if (completed % 8 === 0) showStatus(`正在本地翻译字幕：${completed + 1}/${sourceCues.length}`, 120000);
-      const index = order[completed];
+      const currentTime = getVideoEl()?.currentTime || 0;
+      const nearest = sourceCues.findIndex(cue => cue.end >= currentTime);
+      let index = done.findIndex((value, position) => !value && position >= Math.max(0, nearest));
+      if (index < 0) index = done.indexOf(false);
       const cue = sourceCues[index];
       const text = cleanCaptionText(await translator.translate(cue.text));
       if (token !== state.loadToken) return [];
       if (text) translated[index] = limitLines({ ...cue, text, sourceText: cue.text });
-      if (onProgress && (completed < order.length - first || first === 0)) {
-        onProgress(translated.filter(Boolean), completed + 1 === order.length);
-      }
+      done[index] = true;
+      if (onProgress) onProgress(translated.filter(Boolean), completed + 1 === sourceCues.length, buildPartialVoiceCues(translated, done));
     }
     return translated.filter(Boolean);
+  }
+
+  function buildPartialVoiceCues(translated, done) {
+    const voices = [];
+    let index = 0;
+    while (index < translated.length) {
+      if (!translated[index]) { index += 1; continue; }
+      const group = [];
+      while (index < translated.length && translated[index]) group.push(translated[index++]);
+      const merged = mergeVoiceCues(group);
+      if (index < translated.length && !done[index]) merged.pop();
+      voices.push(...merged);
+    }
+    return voices;
   }
 
   async function waitForCaptionSource(videoId, attempts = 20, token = state.loadToken) {
@@ -2575,8 +2590,8 @@
       sourceRaw = await fetchTranscriptCuesFromPanel(source.sourceTrack, source.sourceLanguage);
     }
     if (token !== state.loadToken) return;
-    const translated = await translateCuesLocally(sourceRaw, source.sourceLanguage, token, (cues, complete) => {
-      publishTranslatedCues(videoId, cues, sourceRaw, token, complete);
+    const translated = await translateCuesLocally(sourceRaw, source.sourceLanguage, token, (cues, complete, voiceCues) => {
+      publishTranslatedCues(videoId, cues, sourceRaw, token, complete, voiceCues);
     });
     if (token !== state.loadToken) return;
     if (!translated.length) throw new Error('字幕接口返回了空字幕。');
@@ -2586,14 +2601,14 @@
     showStatus(`本地中文字幕已加载：${translated.length} 句`);
   }
 
-  function publishTranslatedCues(videoId, cues, sourceRaw, token, complete) {
+  function publishTranslatedCues(videoId, cues, sourceRaw, token, complete, partialVoiceCues = null) {
     if (token !== state.loadToken || videoId !== state.videoId || !cues.length) return;
     const previous = state.voiceCues;
     const remote = isRemoteVoiceEngine();
     const previousSpoken = (remote ? previous : state.cues)[state.spokenCueIndex];
     const previousSuppressed = (remote ? previous : state.cues)[state.seekVoiceSuppressUntil];
-    const nextVoiceCues = mergeVoiceCues(cues);
-    if (!complete) nextVoiceCues.pop();
+    const nextVoiceCues = partialVoiceCues || mergeVoiceCues(cues);
+    if (!complete && !partialVoiceCues) nextVoiceCues.pop();
     const indexFor = (cue, list) => {
       if (!cue) return -1;
       const exact = list.findIndex(item => Math.abs(item.start - cue.start) < 0.001);
@@ -2698,11 +2713,13 @@
     if (state.videoHooked) {
       state.videoHooked.removeEventListener('pause', handleVideoPause);
       state.videoHooked.removeEventListener('seeking', handleVideoSeeking);
+      state.videoHooked.removeEventListener('seeked', handleVideoSeeked);
       state.videoHooked.removeEventListener('play', handleVideoPlay);
     }
     state.videoHooked = video;
     video.addEventListener('pause', handleVideoPause);
     video.addEventListener('seeking', handleVideoSeeking);
+    video.addEventListener('seeked', handleVideoSeeked);
     video.addEventListener('play', handleVideoPlay);
     applyVoiceSettings();
   }
@@ -2716,6 +2733,9 @@
   }
 
   function handleVideoPlay() {
+    const video = getVideoEl();
+    if (!video || video.paused || video.seeking) return;
+    if (state.remoteVoiceStarting) return;
     if (state.settings.voiceEnabled && state.remoteAudio?.paused && isRemoteVoiceEngine()) {
       state.remoteAudio.play().catch(() => {});
     } else if (state.settings.voiceEnabled && isRemoteVoiceEngine()) {
@@ -2731,6 +2751,13 @@
     if (isRemoteVoiceEngine()) {
       const targetVoiceIndex = findVoiceCueIndex(video.currentTime);
       if (state.remoteAudio && targetVoiceIndex >= 0 && state.remoteVoiceCurrent?.index === targetVoiceIndex) {
+        const lag = estimateVoiceLag(video, state.remoteVoiceCurrent, state.remoteAudio);
+        if (lag === null || (Math.abs(lag) > VOICE_MAX_LAG_SECONDS && !alignVoiceToVideo(video, state.remoteVoiceCurrent, state.remoteAudio))) {
+          cancelSpeech();
+          state.seekVoiceSuppressUntil = -1;
+          state.spokenCueIndex = -1;
+          return;
+        }
         state.remoteVoiceQueue.length = 0;
         state.spokenCueIndex = targetVoiceIndex;
         state.seekVoiceSuppressUntil = -1;
@@ -2748,8 +2775,13 @@
     }
   }
 
+  function handleVideoSeeked() {
+    renderCurrentCue();
+    if (isRemoteVoiceEngine()) handleVideoPlay();
+  }
+
   function syncVoice(cue, index, video) {
-    if (!state.settings.voiceEnabled || !cue || index < 0 || video.paused) return;
+    if (!state.settings.voiceEnabled || !cue || index < 0 || video.paused || video.seeking) return;
     if (isRemoteVoiceEngine()) {
       const voiceIndex = findVoiceCueIndex(video.currentTime);
       const voiceCue = voiceIndex >= 0 ? state.voiceCues[voiceIndex] : null;
@@ -3347,17 +3379,54 @@
   }
 
   function shouldSkipQueuedVolcCue(item, video) {
-    if (state.settings.voiceSyncMode !== 'sync') return false;
-    return Boolean(video && video.currentTime - Number(item.end || 0) > VOICE_MAX_LAG_SECONDS);
+    const mode = state.settings.voiceSyncMode;
+    const maxLag = mode === 'sync' ? VOICE_MAX_LAG_SECONDS : mode === 'smart' ? VOICE_SMART_MAX_LAG_SECONDS : VOICE_NATURAL_MAX_LAG_SECONDS;
+    const adjusted = video ? video.currentTime + (Number(state.settings.offsetMs) || 0) / 1000 : 0;
+    return Boolean(video && adjusted - Number(item.end || 0) > maxLag);
   }
 
-  function getVolcPlaybackRate(item, video) {
-    if (state.settings.voiceSyncMode !== 'smart' || !item || !video) return 1;
-    const lag = Math.max(0, video.currentTime - Number(item.start || 0));
-    if (lag <= VOICE_SMART_LAG_THRESHOLD_SECONDS) return 1;
-    if (lag <= 2.5) return 1.06;
-    if (lag <= 5) return 1.12;
-    return VOICE_SMART_MAX_PLAYBACK_RATE;
+  function estimateVoiceLag(video, item, audio) {
+    if (!video || !item || !audio || !Number.isFinite(audio.duration) || audio.duration <= 0 || !Number.isFinite(audio.currentTime)) return null;
+    const duration = Math.max(0, Number(item.end) - Number(item.start));
+    if (!duration) return null;
+    const progress = clamp(Number(audio.currentTime) / audio.duration, 0, 1);
+    const voiceTime = Number(item.start) + progress * duration;
+    return video.currentTime + (Number(state.settings.offsetMs) || 0) / 1000 - voiceTime;
+  }
+
+  function alignVoiceToVideo(video, item, audio) {
+    if (!Number.isFinite(audio.duration) || audio.duration <= 0 || item.end <= item.start) return false;
+    const adjusted = video.currentTime + (Number(state.settings.offsetMs) || 0) / 1000;
+    const progress = clamp((adjusted - item.start) / (item.end - item.start), 0, 1);
+    try {
+      audio.currentTime = Math.min(progress * audio.duration, Math.max(0, audio.duration - 0.05));
+      return true;
+    } catch { return false; }
+  }
+
+  function waitForAudioMetadata(audio) {
+    if (Number.isFinite(audio.duration) && audio.duration > 0) return Promise.resolve(true);
+    return new Promise(resolve => {
+      let timer;
+      const finish = () => {
+        clearTimeout(timer);
+        audio.removeEventListener('loadedmetadata', finish);
+        audio.removeEventListener('error', finish);
+        resolve(Number.isFinite(audio.duration) && audio.duration > 0);
+      };
+      audio.addEventListener('loadedmetadata', finish);
+      audio.addEventListener('error', finish);
+      timer = setTimeout(finish, 1500);
+    });
+  }
+
+  function getVolcPlaybackRate(item, video, audio = null) {
+    const base = clamp(Number(video?.playbackRate) || 1, 0.5, 2);
+    if (state.settings.voiceSyncMode !== 'smart' || !item || !video) return base;
+    const estimated = audio ? estimateVoiceLag(video, item, audio) : video.currentTime + (Number(state.settings.offsetMs) || 0) / 1000 - Number(item.start || 0);
+    if (estimated === null || estimated <= VOICE_SMART_LAG_THRESHOLD_SECONDS) return base;
+    const factor = estimated <= 2.5 ? 1.06 : estimated <= 5 ? 1.12 : VOICE_SMART_MAX_PLAYBACK_RATE;
+    return clamp(base * factor, 0.5, 2);
   }
 
   function recoverVolcQueueAfterError(audio, token) {
@@ -3372,7 +3441,7 @@
 
   async function playNextVolcCue() {
     const video = getVideoEl();
-    if (!state.settings.voiceEnabled || !isRemoteVoiceEngine() || !video || video.paused) return;
+    if (!state.settings.voiceEnabled || !isRemoteVoiceEngine() || !video || video.paused || video.seeking) return;
     if (state.remoteAudio || state.remoteVoiceStarting) return;
     let item = null;
     while (state.remoteVoiceQueue.length && !item) {
@@ -3401,6 +3470,12 @@
       audio.preservesPitch = true;
       state.remoteAudio = audio;
       state.remoteVoiceCurrent = item;
+      const adjusted = video.currentTime + (Number(state.settings.offsetMs) || 0) / 1000;
+      if (adjusted - Number(item.start || 0) > VOICE_MAX_LAG_SECONDS && adjusted < Number(item.end || 0)) {
+        const ready = await waitForAudioMetadata(audio);
+        if (token !== state.remoteVoiceToken) return;
+        if (ready) alignVoiceToVideo(video, item, audio);
+      }
       if (audio.playbackRate > 1) updateVoiceProgressStatus(`智能追赶 ${audio.playbackRate.toFixed(2)}x`, 1800);
       refreshVoiceProgressStatus();
       audio.addEventListener('ended', () => {
@@ -3411,7 +3486,7 @@
         playNextVolcCue();
       }, { once: true });
       audio.addEventListener('error', () => recoverVolcQueueAfterError(audio, token), { once: true });
-      if (!video.paused) await audio.play();
+      if (!video.paused && !video.seeking) await audio.play();
     } catch (error) {
       if (token === state.remoteVoiceToken) {
         if (error.fatalVoice) {
@@ -3479,10 +3554,12 @@
       return;
     }
     const video = getVideoEl();
-    const firstWaiting = state.remoteVoiceCurrent || state.remoteVoiceQueue[0];
-    const lag = firstWaiting && video ? Math.max(0, video.currentTime - Number(firstWaiting.start || 0)) : 0;
-    if (lag >= 0.1) {
-      label.textContent = `落后 ${lag.toFixed(1)} 秒`;
+    const current = state.remoteVoiceCurrent;
+    const audio = state.remoteAudio;
+    const lag = estimateVoiceLag(video, current, audio);
+    if (audio && current && video && !audio.paused) audio.playbackRate = getVolcPlaybackRate(current, video, audio);
+    if (lag !== null && lag >= 0.8) {
+      label.textContent = `约落后 ${lag.toFixed(1)} 秒`;
     } else if (state.remoteVoiceQueue.length) {
       label.textContent = `排队 ${state.remoteVoiceQueue.length} 句`;
     } else if (state.remoteAudio && !state.remoteAudio.paused) {
