@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube 英文视频简体中文字幕与 AI 配音
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.8.2
+// @version      0.8.3
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube and optionally provides Chinese AI dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -39,6 +39,8 @@
   const TENCENT_SECRET_ID_STORAGE_KEY = `${SCRIPT_ID}:tencent-secret-id`;
   const TENCENT_SECRET_KEY_STORAGE_KEY = `${SCRIPT_ID}:tencent-secret-key`;
   const VOLC_TTS_URL = 'https://openspeech.bytedance.com/api/v3/tts/unidirectional';
+  const VOLC_PODCAST_URL = 'https://openspeech.bytedance.com/api/v3/podcast/sse';
+  const VOLC_PODCAST_RESOURCE_ID = 'volc.service_type.10050';
   const VOLC_RESOURCE_ID = 'seed-tts-2.0';
   const TENCENT_TTS_URL = 'https://tts.tencentcloudapi.com';
   const TENCENT_TTS_HOST = 'tts.tencentcloudapi.com';
@@ -260,6 +262,7 @@
     volcAuthMode: 'apiKey',
     voiceName: 'Google 普通话（中国大陆）',
     volcVoice: 'zh_male_m191_uranus_bigtts',
+    podcastVoice: 'zh_male_dayixiansheng_v2_saturn_bigtts',
     volcFavorites: [],
     volcMaleQuickVoice: '',
     volcFemaleQuickVoice: '',
@@ -1121,19 +1124,24 @@
   }
 
   function isRemoteVoiceEngine() {
-    return state.settings.voiceEngine === 'volc' || state.settings.voiceEngine === 'tencent' || state.settings.voiceEngine === 'tencentDirect';
+    return ['volc', 'podcast', 'tencent', 'tencentDirect'].includes(state.settings.voiceEngine);
   }
 
   function syncVoiceEngineRows() {
     const panel = document.getElementById(CONTROL_ID);
     if (!panel) return;
     const isVolc = state.settings.voiceEngine === 'volc';
+    const isPodcast = state.settings.voiceEngine === 'podcast';
     const isTencent = state.settings.voiceEngine === 'tencent';
     const isTencentDirect = state.settings.voiceEngine === 'tencentDirect';
     const isRemote = isRemoteVoiceEngine();
     for (const row of panel.querySelectorAll('[data-role="volcRow"]')) {
       const authVisible = !row.dataset.authMode || row.dataset.authMode === state.settings.volcAuthMode;
-      row.classList.toggle(`${SCRIPT_ID}-volc-hidden`, !isVolc || !authVisible);
+      const sharedKey = row.dataset.authMode === 'apiKey';
+      row.classList.toggle(`${SCRIPT_ID}-volc-hidden`, !(isPodcast ? sharedKey : isVolc && authVisible));
+    }
+    for (const row of panel.querySelectorAll('[data-role="podcastRow"]')) {
+      row.classList.toggle(`${SCRIPT_ID}-volc-hidden`, !isPodcast);
     }
     for (const row of panel.querySelectorAll('[data-role="tencentRow"]')) {
       row.classList.toggle(`${SCRIPT_ID}-volc-hidden`, !isTencent && !isTencentDirect);
@@ -1523,6 +1531,7 @@
     const voiceEngine = createDarkSelect('voiceEngine', [
       { value: 'browser', label: '浏览器本地语音' },
       { value: 'volc', label: '火山自然语音' },
+      { value: 'podcast', label: '豆包语音播客' },
       { value: 'tencent', label: '腾讯 TextToVoice（代理）' },
       { value: 'tencentDirect', label: '腾讯 TextToVoice（直连）' }
     ], state.settings.voiceEngine, value => updateSetting('voiceEngine', value), '选择配音引擎');
@@ -1533,6 +1542,12 @@
     ], state.settings.volcAuthMode, value => updateSetting('volcAuthMode', value), '选择火山鉴权方式');
 
     const voicePicker = createVoicePicker();
+    const podcastVoice = createDarkSelect('podcastVoice', [
+      { value: 'zh_male_dayixiansheng_v2_saturn_bigtts', label: '大壹先生 · 男声' },
+      { value: 'zh_female_mizaitongxue_v2_saturn_bigtts', label: '咪仔同学 · 女声' },
+      { value: 'zh_male_liufei_v2_saturn_bigtts', label: '刘飞 · 男声' },
+      { value: 'zh_male_xiaolei_v2_saturn_bigtts', label: '潇磊 · 男声' }
+    ], state.settings.podcastVoice, value => updateSetting('podcastVoice', value), '选择播客音色');
     if (window.speechSynthesis) {
       window.speechSynthesis.addEventListener?.('voiceschanged', () => populateVoiceOptions(voicePicker));
     }
@@ -1710,6 +1725,7 @@
       browserVoiceRow,
       makeVolcRow('鉴权方式', volcAuthMode),
       makeAuthRow('新版 Key', apiKeyWrap, 'apiKey'),
+      (() => { const row = makeRow('播客音色', podcastVoice); row.dataset.role = 'podcastRow'; return row; })(),
       makeAuthRow('APP ID', appId, 'legacy'),
       makeAuthRow('Access Token', accessTokenWrap, 'legacy'),
       makeAuthRow('说明', legacyNote, 'legacy'),
@@ -1770,7 +1786,7 @@
   }
 
   function updateSetting(key, value) {
-    if (key === 'voiceEngine' || key === 'volcAuthMode' || key === 'voiceName' || key === 'volcVoice' || key === 'tencentProxyUrl' || key === 'tencentRegion' || key === 'tencentVoicePackage' || key === 'tencentVoiceType' || key === 'tencentSampleRate' || key === 'voiceRate' || key === 'voiceSyncMode' || key === 'terminologyMap') {
+    if (key === 'voiceEngine' || key === 'volcAuthMode' || key === 'voiceName' || key === 'volcVoice' || key === 'podcastVoice' || key === 'tencentProxyUrl' || key === 'tencentRegion' || key === 'tencentVoicePackage' || key === 'tencentVoiceType' || key === 'tencentSampleRate' || key === 'voiceRate' || key === 'voiceSyncMode' || key === 'terminologyMap') {
       cancelSpeech();
       state.spokenCueIndex = -1;
     }
@@ -1819,6 +1835,7 @@
       if (input.dataset.role === 'translationEngine') setDarkSelectValue(input, state.settings.translationEngine);
       if (input.dataset.role === 'voiceEngine') setDarkSelectValue(input, state.settings.voiceEngine);
       if (input.dataset.role === 'volcAuthMode') setDarkSelectValue(input, state.settings.volcAuthMode);
+      if (input.dataset.role === 'podcastVoice') setDarkSelectValue(input, state.settings.podcastVoice);
       if (input.dataset.role === 'volcVoice') {
         input.value = state.settings.volcVoice;
         const picker = input.closest(`.${SCRIPT_ID}-voice-picker`);
@@ -2853,6 +2870,7 @@
   }
 
   function getRemoteAudioCacheKey(text) {
+    if (state.settings.voiceEngine === 'podcast') return `podcast|${state.settings.podcastVoice}|${state.settings.voiceRate}|${text}`;
     if (state.settings.voiceEngine === 'tencent') {
       return `tencent|${state.settings.tencentProxyUrl}|${state.settings.tencentVoiceType}|${state.settings.tencentSampleRate}|${state.settings.voiceRate}|${text}`;
     }
@@ -3102,9 +3120,59 @@
   }
 
   function requestRemoteAudio(text) {
+    if (state.settings.voiceEngine === 'podcast') return requestPodcastAudio(text);
     if (state.settings.voiceEngine === 'tencent') return requestTencentProxyAudio(text);
     if (state.settings.voiceEngine === 'tencentDirect') return requestTencentDirectAudio(text);
     return requestVolcAudio(text);
+  }
+
+  function requestPodcastAudio(text) {
+    const apiKey = getVolcApiKey();
+    if (!apiKey) return Promise.reject(new Error('请填写并保存火山新版 API Key'));
+    if (typeof GM_xmlhttpRequest !== 'function') return Promise.reject(new Error('当前脚本未获得跨域请求权限'));
+    if (Array.from(text).length > 300) return Promise.reject(new Error('播客单句不能超过 300 字符'));
+    const payload = {
+      action: 3,
+      use_head_music: false,
+      use_tail_music: false,
+      audio_config: { format: 'mp3', sample_rate: 24000, speech_rate: Math.round((clamp(Number(state.settings.voiceRate), 0.7, 1.6) - 1) * 100) },
+      nlp_texts: [{ speaker: state.settings.podcastVoice, text }]
+    };
+    return new Promise((resolve, reject) => GM_xmlhttpRequest({
+      method: 'POST', url: VOLC_PODCAST_URL,
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream', 'X-Api-Key': apiKey, 'X-Api-Resource-Id': VOLC_PODCAST_RESOURCE_ID, 'X-Api-Request-Id': makeRequestId() },
+      data: JSON.stringify(payload), responseType: 'text', timeout: 60000,
+      onload: response => {
+        if (response.status < 200 || response.status >= 300) {
+          reject(makeVolcRequestError(`豆包播客请求失败：HTTP ${response.status}`, response.status >= 500 && response.status <= 599));
+          return;
+        }
+        try { resolve(parsePodcastAudioStream(response.responseText || response.response || '')); }
+        catch (error) { reject(error); }
+      },
+      ontimeout: () => reject(makeVolcRequestError('豆包播客请求超时', true)),
+      onerror: () => reject(makeVolcRequestError('豆包播客网络请求失败', true))
+    }));
+  }
+
+  function parsePodcastAudioStream(raw) {
+    const chunks = [];
+    let completed = false;
+    let roundCompleted = false;
+    for (const event of String(raw).split(/\r?\n\r?\n/)) {
+      const lines = event.split(/\r?\n/);
+      const eventType = lines.find(line => line.startsWith('event:'))?.slice(6).trim();
+      const data = lines.filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
+      if (!data) continue;
+      const frame = JSON.parse(data);
+      if (frame.code && frame.code !== 20000000) throw new Error(`豆包播客合成失败：${frame.message || frame.code}`);
+      if (frame.payload?.is_error || frame.is_error) throw new Error('豆包播客音频生成中断');
+      if (eventType === '361' && frame.data) chunks.push(base64ToBytes(frame.data));
+      if (eventType === '362') roundCompleted = true;
+      if (eventType === '152' || eventType === '363') completed = true;
+    }
+    if (!completed || !roundCompleted || !chunks.length) throw new Error('豆包播客未返回完整音频');
+    return URL.createObjectURL(new Blob(chunks, { type: 'audio/mpeg' }));
   }
 
   function parseVolcAudioStream(raw) {
@@ -3188,6 +3256,7 @@
   }
 
   function getRemoteVoiceProviderLabel() {
+    if (state.settings.voiceEngine === 'podcast') return '豆包语音播客';
     if (state.settings.voiceEngine === 'tencent' || state.settings.voiceEngine === 'tencentDirect') return '腾讯 TextToVoice 语音';
     return '火山自然语音';
   }
@@ -3298,6 +3367,8 @@
       hasCredentials = Boolean(String(state.settings.tencentProxyUrl || '').trim());
     } else if (state.settings.voiceEngine === 'tencentDirect') {
       hasCredentials = Object.values(getTencentCredentials()).every(Boolean);
+    } else if (state.settings.voiceEngine === 'podcast') {
+      hasCredentials = Boolean(getVolcApiKey());
     } else if (state.settings.volcAuthMode === 'legacy') {
       hasCredentials = Object.values(getVolcLegacyCredentials()).every(Boolean);
     } else {
