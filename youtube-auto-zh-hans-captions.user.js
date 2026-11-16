@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube 英文视频简体中文字幕与 AI 配音
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.8.6
+// @version      0.8.7
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube and optionally provides Chinese AI dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -2285,6 +2285,15 @@
       }
 
       const gap = cue.start - current.end;
+      if (gap < 0) {
+        const previousText = current.text.replace(/\s+/g, ' ').trim();
+        const nextText = cue.text.replace(/\s+/g, ' ').trim();
+        if (nextText === previousText || nextText.startsWith(`${previousText} `) || (nextText.startsWith(previousText) && /[\u3400-\u9fff]$/.test(previousText))) {
+          if (nextText.length > previousText.length) current.text = cue.text;
+          current.end = Math.max(current.end, cue.end);
+          continue;
+        }
+      }
       const shouldSplit = /[。！？.!?]\s*$/.test(current.text) ||
         gap > 0.8 ||
         countTextUnits(current.text) >= 34 ||
@@ -2477,11 +2486,7 @@
   }
 
   function getCacheKey(videoId, source) {
-    return `${CACHE_PREFIX}${videoId}:${getSourceCacheFingerprint(source)}:${TARGET_LANG}:v6`;
-  }
-
-  function getLegacyTranslatedCacheKey(videoId) {
-    return `${CACHE_PREFIX}${videoId}:translated-en:${TARGET_LANG}:v3`;
+    return `${CACHE_PREFIX}${videoId}:${getSourceCacheFingerprint(source)}:${TARGET_LANG}:v7`;
   }
 
   function readCachedCues(key) {
@@ -2521,13 +2526,6 @@
       if (cached) {
         applyCues(videoId, cached, token, '已从缓存加载字幕');
         return;
-      }
-      if (source.translationMode === 'local') {
-        const legacyCached = readCachedCues(getLegacyTranslatedCacheKey(videoId));
-        if (legacyCached) {
-          applyCues(videoId, legacyCached, token, '已读取旧版中文字幕缓存');
-          return;
-        }
       }
     }
 
