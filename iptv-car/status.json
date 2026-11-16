@@ -1,5 +1,5 @@
 {
-  "updated_at_utc": "2026-11-16T06:34:58+00:00",
+  "updated_at_utc": "2026-11-16T22:07:53+00:00",
   "channel_count": 31,
   "stream_count": 38,
   "priority_channels": {
@@ -135,15 +135,15 @@
   "verification": {
     "verified_entries": 4,
     "unverified_fallback_entries": 34,
-    "rejected_candidates": 175,
-    "candidate_urls": 179,
+    "rejected_candidates": 170,
+    "candidate_urls": 174,
     "rejected_reasons": {
-      "fetch_error": 99,
-      "slow": 42,
-      "segment_failed": 26,
-      "not_live": 3,
+      "fetch_error": 89,
+      "segment_failed": 37,
+      "slow": 37,
       "http_403": 2,
       "http_500": 2,
+      "not_live": 2,
       "high_latency": 1
     },
     "min_speed_kib_s": 280,
@@ -158,7 +158,7 @@
     },
     {
       "source": "Lightconer",
-      "downloaded": 126,
+      "downloaded": 121,
       "status": "ok"
     },
     {
