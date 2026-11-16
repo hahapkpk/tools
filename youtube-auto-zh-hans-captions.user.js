@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube 英文视频简体中文字幕与 AI 配音
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.8.3
+// @version      0.8.4
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube and optionally provides Chinese AI dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -2404,6 +2404,7 @@
 
   async function prepareLocalTranslationForCurrentVideo() {
     const videoId = getVideoId();
+    const token = state.loadToken;
     const source = selectBestCaptionSource(getPlayerResponse(videoId));
     if (!source) throw new Error('字幕轨道尚未就绪，请稍后再点击准备本地翻译。');
     if (source.translationMode === 'none') {
@@ -2412,26 +2413,30 @@
     }
     if (source.translationMode !== 'local') throw new Error('请先将字幕翻译切换为 Chrome 本地翻译。');
     await getLocalTranslator(source.sourceLanguage, true, true);
+    if (token !== state.loadToken || videoId !== getVideoId()) return;
     showStatus('本地翻译已准备，正在生成中文字幕...');
     reloadCurrentVideo(true);
   }
 
-  async function translateCuesLocally(rawSourceCues, sourceLanguage) {
+  async function translateCuesLocally(rawSourceCues, sourceLanguage, token = state.loadToken) {
     if (!rawSourceCues.length) return [];
     const translator = await getLocalTranslator(sourceLanguage);
     const sourceCues = mergeSentenceCues(rawSourceCues);
     const translated = [];
     for (let index = 0; index < sourceCues.length; index += 1) {
+      if (token !== state.loadToken) return [];
       if (index % 8 === 0) showStatus(`正在本地翻译字幕：${index + 1}/${sourceCues.length}`, 120000);
       const cue = sourceCues[index];
       const text = cleanCaptionText(await translator.translate(cue.text));
+      if (token !== state.loadToken) return [];
       if (text) translated.push(limitLines({ ...cue, text, sourceText: cue.text }));
     }
     return translated;
   }
 
-  async function waitForCaptionSource(videoId, attempts = 20) {
+  async function waitForCaptionSource(videoId, attempts = 20, token = state.loadToken) {
     for (let attempt = 0; attempt < attempts; attempt += 1) {
+      if (token !== state.loadToken) return null;
       const source = selectBestCaptionSource(getPlayerResponse(videoId));
       if (source?.targetTrack?.baseUrl) return source;
       if (attempt === 0) showStatus('字幕轨道仍在加载，正在等待...', 7000);
@@ -2483,7 +2488,8 @@
 
   async function loadCaptions(videoId, token, force = false) {
     if (!videoId) return;
-    const source = await waitForCaptionSource(videoId);
+    const source = await waitForCaptionSource(videoId, 20, token);
+    if (token !== state.loadToken) return;
     if (!source?.targetTrack?.baseUrl) throw new Error('没有找到可翻译的字幕轨道。');
 
     const cacheKey = getCacheKey(videoId, source);
@@ -2513,12 +2519,14 @@
     try {
       targetJson = await fetchCaptionJsonWithFallback(videoId, source.targetTrack, { translate: isYouTubeTranslation });
     } catch (error) {
+      if (token !== state.loadToken) return;
       if (isYouTubeTranslation && error.rateLimited) {
         await switchToLocalTranslationAfterYouTubeRateLimit(videoId, source, token, force);
         return;
       }
       throw error;
     }
+    if (token !== state.loadToken) return;
     const targetRaw = normalizeRawCues(targetJson);
     let sourceRaw = [];
     if (source.sourceTrack?.baseUrl) {
@@ -2547,16 +2555,20 @@
       }
     }
     await getLocalTranslator(source.sourceLanguage, true);
+    if (token !== state.loadToken) return;
     showStatus('正在读取原始字幕，准备本地翻译...', 120000);
     let sourceRaw;
     try {
       const sourceJson = await fetchCaptionJsonWithFallback(videoId, source.sourceTrack, { translate: false });
       sourceRaw = normalizeRawCues(sourceJson);
     } catch (error) {
+      if (token !== state.loadToken) return;
       if (!error.rateLimited) throw error;
       sourceRaw = await fetchTranscriptCuesFromPanel(source.sourceTrack, source.sourceLanguage);
     }
-    const translated = await translateCuesLocally(sourceRaw, source.sourceLanguage);
+    if (token !== state.loadToken) return;
+    const translated = await translateCuesLocally(sourceRaw, source.sourceLanguage, token);
+    if (token !== state.loadToken) return;
     if (!translated.length) throw new Error('字幕接口返回了空字幕。');
     const data = { cues: translated, rawTargetCues: translated, rawSourceCues: sourceRaw, sourceKind: source.kind };
     writeCachedCues(cacheKey, data);
@@ -2684,7 +2696,7 @@
       // Remote voice: use voiceCues array for index comparison
       const activeVoiceIndex = Number.isInteger(state.remoteVoiceCurrent?.index)
         ? state.remoteVoiceCurrent.index
-        : findVoiceCueIndex(state.spokenCueIndex >= 0 ? state.cues[state.spokenCueIndex]?.start : -1);
+        : state.spokenCueIndex;
       cancelSpeech();
       const targetVoiceIndex = findVoiceCueIndex(video.currentTime);
       state.seekVoiceSuppressUntil = targetVoiceIndex >= 0 && targetVoiceIndex === activeVoiceIndex ? targetVoiceIndex : -1;
@@ -3273,7 +3285,7 @@
     if (!text || text.length < 2) return;
     state.remoteVoiceQueue.push({ text, index, start: cue.start, end: cue.end });
     refreshVoiceProgressStatus();
-    prefetchVolcCues(index + 1, 4);
+    prefetchVolcCues(index + 1, state.settings.voiceEngine === 'podcast' ? 1 : 4);
     playNextVolcCue();
   }
 
