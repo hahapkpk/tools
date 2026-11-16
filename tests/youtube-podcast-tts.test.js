@@ -26,3 +26,16 @@ test('podcast parser rejects incomplete and failed sessions', () => {
   assert.throws(() => context.parsePodcastAudioStream('event: 361\ndata: {"code":0,"data":"AQID"}\n\n'), /完整音频/);
   assert.throws(() => context.parsePodcastAudioStream('event: 362\ndata: {"code":0,"payload":{"is_error":true}}\n\n'), /中断/);
 });
+
+test('podcast errors distinguish credentials, quota and retryable limits', () => {
+  const first = source.indexOf('  function classifyPodcastHttpError(');
+  const last = source.indexOf('  function parsePodcastAudioStream(', first);
+  const sandbox = { makeVolcRequestError: (message, retryable = false) => Object.assign(new Error(message), { volcRetryable: retryable }) };
+  vm.createContext(sandbox);
+  vm.runInContext(source.slice(first, last), sandbox);
+  assert.equal(sandbox.classifyPodcastHttpError(401).fatalVoice, true);
+  assert.equal(sandbox.classifyPodcastHttpError(402).fatalVoice, true);
+  assert.equal(sandbox.classifyPodcastHttpError(429).volcRetryable, true);
+  assert.equal(sandbox.classifyPodcastHttpError(503).volcRetryable, true);
+  assert.equal(sandbox.classifyPodcastHttpError(400).volcRetryable, false);
+});

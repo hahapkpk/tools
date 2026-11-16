@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube 英文视频简体中文字幕与 AI 配音
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.8.4
+// @version      0.8.5
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube and optionally provides Chinese AI dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -1749,8 +1749,7 @@
     const syncSection = makeSettingsSection('同步与术语', [
       makeRow('配音语速', voiceRate),
       makeRemoteVoiceRow('配音同步', voiceSyncMode),
-      makeRemoteVoiceRow('专有名词修正表', terminologyMap),
-      makeRemoteVoiceRow('配音状态', voiceProgressWrap)
+      makeRemoteVoiceRow('专有名词修正表', terminologyMap)
     ]);
 
     const header = document.createElement('div');
@@ -1772,6 +1771,7 @@
       makeRow('中文配音', voiceEnabled),
       makeRow('配音引擎', voiceEngine),
       makeRow('原声音量', originalVolumeWrap),
+      makeRemoteVoiceRow('配音状态', voiceProgressWrap),
       subtitleSection,
       voiceServiceSection,
       syncSection,
@@ -2037,7 +2037,7 @@
       throw classifyCaptionError(response.status, isTranslated);
     }
     const text = await response.text();
-    if (!text.trim()) throw new Error('YouTube 当前返回空字幕内容。');
+    if (!text.trim()) throw new Error('YouTube 返回空字幕。请尝试打开原生字幕或查看文字记录后重新加载。');
     try {
       return JSON.parse(text);
     } catch {
@@ -2131,7 +2131,7 @@
 
   function classifyCaptionError(status, isTranslated = false) {
     if (status === 401 || status === 403) return new Error('字幕接口被权限或地区限制拦截。');
-    if (status === 404) return new Error('当前视频没有可用字幕轨道。');
+    if (status === 404) return new Error('字幕地址已失效，请重新加载或在 YouTube 查看文字记录。');
     if (status === 429) {
       const error = new Error(isTranslated ? 'YouTube 自动翻译字幕已被限流，请切换到 Chrome 本地翻译。' : 'YouTube 原始字幕请求暂时被限流，请稍后重试。');
       error.rateLimited = true;
@@ -2418,20 +2418,28 @@
     reloadCurrentVideo(true);
   }
 
-  async function translateCuesLocally(rawSourceCues, sourceLanguage, token = state.loadToken) {
+  async function translateCuesLocally(rawSourceCues, sourceLanguage, token = state.loadToken, onProgress = null) {
     if (!rawSourceCues.length) return [];
     const translator = await getLocalTranslator(sourceLanguage);
     const sourceCues = mergeSentenceCues(rawSourceCues);
-    const translated = [];
-    for (let index = 0; index < sourceCues.length; index += 1) {
+    const translated = new Array(sourceCues.length);
+    const currentTime = getVideoEl()?.currentTime || 0;
+    const nearest = sourceCues.findIndex(cue => cue.end >= currentTime);
+    const first = nearest < 0 ? 0 : nearest;
+    const order = [...sourceCues.keys()].slice(first).concat([...sourceCues.keys()].slice(0, first));
+    for (let completed = 0; completed < order.length; completed += 1) {
       if (token !== state.loadToken) return [];
-      if (index % 8 === 0) showStatus(`正在本地翻译字幕：${index + 1}/${sourceCues.length}`, 120000);
+      if (completed % 8 === 0) showStatus(`正在本地翻译字幕：${completed + 1}/${sourceCues.length}`, 120000);
+      const index = order[completed];
       const cue = sourceCues[index];
       const text = cleanCaptionText(await translator.translate(cue.text));
       if (token !== state.loadToken) return [];
-      if (text) translated.push(limitLines({ ...cue, text, sourceText: cue.text }));
+      if (text) translated[index] = limitLines({ ...cue, text, sourceText: cue.text });
+      if (onProgress && (completed < order.length - first || first === 0)) {
+        onProgress(translated.filter(Boolean), completed + 1 === order.length);
+      }
     }
-    return translated;
+    return translated.filter(Boolean);
   }
 
   async function waitForCaptionSource(videoId, attempts = 20, token = state.loadToken) {
@@ -2567,12 +2575,40 @@
       sourceRaw = await fetchTranscriptCuesFromPanel(source.sourceTrack, source.sourceLanguage);
     }
     if (token !== state.loadToken) return;
-    const translated = await translateCuesLocally(sourceRaw, source.sourceLanguage, token);
+    const translated = await translateCuesLocally(sourceRaw, source.sourceLanguage, token, (cues, complete) => {
+      publishTranslatedCues(videoId, cues, sourceRaw, token, complete);
+    });
     if (token !== state.loadToken) return;
     if (!translated.length) throw new Error('字幕接口返回了空字幕。');
     const data = { cues: translated, rawTargetCues: translated, rawSourceCues: sourceRaw, sourceKind: source.kind };
     writeCachedCues(cacheKey, data);
-    applyCues(videoId, data, token, `本地中文字幕已加载：${translated.length} 句`);
+    publishTranslatedCues(videoId, translated, sourceRaw, token, true);
+    showStatus(`本地中文字幕已加载：${translated.length} 句`);
+  }
+
+  function publishTranslatedCues(videoId, cues, sourceRaw, token, complete) {
+    if (token !== state.loadToken || videoId !== state.videoId || !cues.length) return;
+    const previous = state.voiceCues;
+    const remote = isRemoteVoiceEngine();
+    const previousSpoken = (remote ? previous : state.cues)[state.spokenCueIndex];
+    const previousSuppressed = (remote ? previous : state.cues)[state.seekVoiceSuppressUntil];
+    const nextVoiceCues = mergeVoiceCues(cues);
+    if (!complete) nextVoiceCues.pop();
+    const indexFor = (cue, list) => {
+      if (!cue) return -1;
+      const exact = list.findIndex(item => Math.abs(item.start - cue.start) < 0.001);
+      return exact >= 0 ? exact : list.findIndex(item => cue.start >= item.start && cue.start < item.end);
+    };
+    state.cues = cues;
+    state.voiceCues = nextVoiceCues;
+    state.spokenCueIndex = indexFor(previousSpoken, remote ? nextVoiceCues : cues);
+    state.seekVoiceSuppressUntil = indexFor(previousSuppressed, remote ? nextVoiceCues : cues);
+    for (const item of state.remoteVoiceQueue) item.index = indexFor(item, nextVoiceCues);
+    if (state.remoteVoiceCurrent) state.remoteVoiceCurrent.index = indexFor(state.remoteVoiceCurrent, nextVoiceCues);
+    state.rawSourceCues = sourceRaw;
+    state.rawTargetCues = cues;
+    state.cueIndex = -1;
+    if (!state.rafId) startSyncLoop();
   }
 
   async function switchToLocalTranslationAfterYouTubeRateLimit(videoId, source, token, force) {
@@ -2693,24 +2729,22 @@
     const video = getVideoEl();
     if (!video) return;
     if (isRemoteVoiceEngine()) {
-      // Remote voice: use voiceCues array for index comparison
-      const activeVoiceIndex = Number.isInteger(state.remoteVoiceCurrent?.index)
-        ? state.remoteVoiceCurrent.index
-        : state.spokenCueIndex;
-      cancelSpeech();
       const targetVoiceIndex = findVoiceCueIndex(video.currentTime);
-      state.seekVoiceSuppressUntil = targetVoiceIndex >= 0 && targetVoiceIndex === activeVoiceIndex ? targetVoiceIndex : -1;
-      state.spokenCueIndex = state.seekVoiceSuppressUntil;
-    } else {
-      // Browser speech: use cues array indices directly
-      const wasSpeaking = state.spokenCueIndex >= 0;
-      cancelSpeech();
-      if (wasSpeaking) {
-        const newIndex = findCueIndex(video.currentTime);
-        // Only suppress if landing on the same cue after seek
-        state.seekVoiceSuppressUntil = newIndex >= 0 && newIndex === state.spokenCueIndex ? newIndex : -1;
-        state.spokenCueIndex = state.seekVoiceSuppressUntil;
+      if (state.remoteAudio && targetVoiceIndex >= 0 && state.remoteVoiceCurrent?.index === targetVoiceIndex) {
+        state.remoteVoiceQueue.length = 0;
+        state.spokenCueIndex = targetVoiceIndex;
+        state.seekVoiceSuppressUntil = -1;
+        return;
       }
+      cancelSpeech();
+      state.seekVoiceSuppressUntil = -1;
+      state.spokenCueIndex = -1;
+    } else {
+      const newIndex = findCueIndex(video.currentTime);
+      if (newIndex >= 0 && newIndex === state.spokenCueIndex && window.speechSynthesis?.speaking) return;
+      cancelSpeech();
+      state.seekVoiceSuppressUntil = -1;
+      state.spokenCueIndex = -1;
     }
   }
 
@@ -3122,11 +3156,14 @@
   }
 
   async function requestRemoteAudioWithRetry(text, reportStatus = true) {
+    const token = state.remoteVoiceToken;
     try {
       return await requestRemoteAudio(text);
     } catch (error) {
       if (!isRetryableVolcError(error)) throw error;
       if (reportStatus) updateVoiceProgressStatus('语音请求失败，正在重试...', 1800);
+      await sleep(700);
+      if (token !== state.remoteVoiceToken) throw new Error('配音请求已取消');
       return requestRemoteAudio(text);
     }
   }
@@ -3156,7 +3193,7 @@
       data: JSON.stringify(payload), responseType: 'text', timeout: 60000,
       onload: response => {
         if (response.status < 200 || response.status >= 300) {
-          reject(makeVolcRequestError(`豆包播客请求失败：HTTP ${response.status}`, response.status >= 500 && response.status <= 599));
+          reject(classifyPodcastHttpError(response.status));
           return;
         }
         try { resolve(parsePodcastAudioStream(response.responseText || response.response || '')); }
@@ -3165,6 +3202,21 @@
       ontimeout: () => reject(makeVolcRequestError('豆包播客请求超时', true)),
       onerror: () => reject(makeVolcRequestError('豆包播客网络请求失败', true))
     }));
+  }
+
+  function classifyPodcastHttpError(status) {
+    if (status === 401 || status === 403) {
+      const error = makeVolcRequestError('豆包鉴权失败，请检查 API Key 和播客服务权限。');
+      error.fatalVoice = true;
+      return error;
+    }
+    if (status === 402) {
+      const error = makeVolcRequestError('豆包账户额度或余额不足，请在火山控制台检查用量。');
+      error.fatalVoice = true;
+      return error;
+    }
+    if (status === 429) return makeVolcRequestError('豆包请求过于频繁，请稍后重试。', true);
+    return makeVolcRequestError(`豆包播客请求失败：HTTP ${status}`, status >= 500 && status <= 599);
   }
 
   function parsePodcastAudioStream(raw) {
@@ -3177,7 +3229,12 @@
       const data = lines.filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
       if (!data) continue;
       const frame = JSON.parse(data);
-      if (frame.code && frame.code !== 20000000) throw new Error(`豆包播客合成失败：${frame.message || frame.code}`);
+      if (frame.code && frame.code !== 20000000) {
+        const message = String(frame.message || frame.code);
+        const error = new Error(`豆包播客合成失败：${message}`);
+        error.fatalVoice = /quota|balance|insufficient|额度|余额|鉴权|permission|unauthorized/i.test(message);
+        throw error;
+      }
       if (frame.payload?.is_error || frame.is_error) throw new Error('豆包播客音频生成中断');
       if (eventType === '361' && frame.data) chunks.push(base64ToBytes(frame.data));
       if (eventType === '362') roundCompleted = true;
@@ -3357,6 +3414,11 @@
       if (!video.paused) await audio.play();
     } catch (error) {
       if (token === state.remoteVoiceToken) {
+        if (error.fatalVoice) {
+          updateSetting('voiceEnabled', false);
+          showStatus(error.message || '配音已暂停，请检查服务设置。', 8000);
+          return;
+        }
         if (audio) {
           recoverVolcQueueAfterError(audio, token);
           return;
@@ -3409,20 +3471,22 @@
     state.voiceProgressNotice = '';
     state.voiceProgressNoticeUntil = 0;
     if (!state.settings.voiceEnabled || !isRemoteVoiceEngine()) {
-      label.textContent = '同步正常';
+      label.textContent = '配音已关闭';
       return;
     }
     if (state.remoteVoiceStarting) {
-      label.textContent = '等待配音';
+      label.textContent = '生成中';
       return;
     }
     const video = getVideoEl();
-    const firstWaiting = state.remoteVoiceQueue[0] || state.remoteVoiceCurrent;
+    const firstWaiting = state.remoteVoiceCurrent || state.remoteVoiceQueue[0];
     const lag = firstWaiting && video ? Math.max(0, video.currentTime - Number(firstWaiting.start || 0)) : 0;
     if (lag >= 0.1) {
       label.textContent = `落后 ${lag.toFixed(1)} 秒`;
     } else if (state.remoteVoiceQueue.length) {
       label.textContent = `排队 ${state.remoteVoiceQueue.length} 句`;
+    } else if (state.remoteAudio && !state.remoteAudio.paused) {
+      label.textContent = '播放中';
     } else {
       label.textContent = '同步正常';
     }
