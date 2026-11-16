@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube 英文视频简体中文字幕与 AI 配音
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.8.0
+// @version      0.8.1
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube and optionally provides Chinese AI dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -1663,7 +1663,6 @@
     const browserVoiceRow = makeRow('语音人物', voicePicker);
     browserVoiceRow.dataset.role = 'browserVoiceRow';
     const subtitleSection = makeSettingsSection('字幕显示', [
-      localTranslationRow,
       makeRow('字幕字号', fontSize),
       makeRow('字幕位置', position),
       makeRow('字幕延迟', offset),
@@ -1705,6 +1704,7 @@
       makeRow('启用', enabled),
       makeRow('模式', mode),
       makeRow('字幕翻译', translationEngine),
+      localTranslationRow,
       makeRow('中文配音', voiceEnabled),
       makeRow('配音引擎', voiceEngine),
       makeRow('原声音量', originalVolumeWrap),
@@ -2311,7 +2311,7 @@
     return source?.text || '';
   }
 
-  async function getLocalTranslator(sourceLanguage, createIfMissing = false) {
+  async function getLocalTranslator(sourceLanguage, createIfMissing = false, fromUserGesture = false) {
     const source = normalizeTranslatorLanguage(sourceLanguage);
     const key = `${source}:zh`;
     if (state.localTranslators.has(key)) return state.localTranslators.get(key);
@@ -2319,9 +2319,12 @@
     if (!createIfMissing) throw new Error('请先点击“准备本地翻译”，下载或启用本地翻译模型。');
 
     const options = { sourceLanguage: source, targetLanguage: 'zh' };
-    const availability = await Translator.availability(options);
-    if (availability === 'unavailable') throw new Error(`Chrome 暂不支持 ${source} 到中文的本地翻译。`);
-    showStatus(availability === 'available' ? '正在启动本地翻译...' : '正在下载本地翻译模型...', 120000);
+    if (!fromUserGesture) {
+      const availability = await Translator.availability(options);
+      if (availability === 'unavailable') throw new Error(`Chrome 暂不支持 ${source} 到中文的本地翻译。`);
+      if (availability !== 'available') throw new Error('请打开字幕设置，点击“准备本地翻译”下载翻译模型。');
+    }
+    showStatus(fromUserGesture ? '正在准备本地翻译模型...' : '正在启动本地翻译...', 120000);
     const translator = await Translator.create({
       ...options,
       monitor(monitor) {
@@ -2336,14 +2339,14 @@
 
   async function prepareLocalTranslationForCurrentVideo() {
     const videoId = getVideoId();
-    const source = await waitForCaptionSource(videoId);
-    if (!source) throw new Error('当前视频没有可用的字幕轨道。');
+    const source = selectBestCaptionSource(getPlayerResponse(videoId));
+    if (!source) throw new Error('字幕轨道尚未就绪，请稍后再点击准备本地翻译。');
     if (source.translationMode === 'none') {
       showStatus('当前视频已有中文字幕，无需本地翻译。');
       return;
     }
     if (source.translationMode !== 'local') throw new Error('请先将字幕翻译切换为 Chrome 本地翻译。');
-    await getLocalTranslator(source.sourceLanguage, true);
+    await getLocalTranslator(source.sourceLanguage, true, true);
     showStatus('本地翻译已准备，正在生成中文字幕...');
     reloadCurrentVideo(true);
   }
