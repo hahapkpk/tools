@@ -18,6 +18,7 @@ test('switching video stops translation before the next sentence', async () => {
     getLocalTranslator: async () => ({ translate: () => { calls++; return new Promise(resolve => { release = resolve; signalStarted(); }); } }),
     mergeSentenceCues: cues => cues,
     cleanCaptionText: text => text,
+    simplifyChinese: text => text,
     limitLines: cue => cue,
     getVideoEl: () => ({ currentTime: 0 }),
     showStatus() {}
@@ -68,7 +69,7 @@ test('translation starts at the current position and publishes before finishing'
   const context = {
     state: { loadToken: 1 }, getVideoEl: () => ({ currentTime: 12 }),
     getLocalTranslator: async () => ({ translate: async text => { order.push(text); return `中${text}`; } }),
-    mergeSentenceCues: cues => cues, mergeVoiceCues: cues => cues.slice(), cleanCaptionText: text => text, limitLines: cue => cue, showStatus() {}
+    mergeSentenceCues: cues => cues, mergeVoiceCues: cues => cues.slice(), cleanCaptionText: text => text, simplifyChinese: text => text, limitLines: cue => cue, showStatus() {}
   };
   vm.createContext(context);
   vm.runInContext(source.slice(start, end), context);
@@ -83,7 +84,7 @@ test('translation changes priority when playback seeks to an untranslated cue', 
   const end = source.indexOf('  async function waitForCaptionSource(', start);
   let time = 0;
   const order = [];
-  const context = {state:{loadToken:1},getVideoEl:()=>({currentTime:time}),getLocalTranslator:async()=>({translate:async text=>{order.push(text);if(text==='a') time=16;return text;}}),mergeSentenceCues:cues=>cues,mergeVoiceCues:cues=>cues.slice(),cleanCaptionText:text=>text,limitLines:cue=>cue,showStatus(){}};
+  const context = {state:{loadToken:1},getVideoEl:()=>({currentTime:time}),getLocalTranslator:async()=>({translate:async text=>{order.push(text);if(text==='a') time=16;return text;}}),mergeSentenceCues:cues=>cues,mergeVoiceCues:cues=>cues.slice(),cleanCaptionText:text=>text,simplifyChinese:text=>text,limitLines:cue=>cue,showStatus(){}};
   vm.createContext(context);
   vm.runInContext(source.slice(start,end),context);
   await context.translateCuesLocally([{start:0,end:5,text:'a'},{start:6,end:10,text:'b'},{start:16,end:20,text:'c'}],'en',1,()=>{});

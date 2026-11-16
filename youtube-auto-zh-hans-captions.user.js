@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube 英文视频简体中文字幕与 AI 配音
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.8.7
+// @version      0.8.8
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube and optionally provides Chinese AI dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -9,6 +9,7 @@
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/youtube-auto-zh-hans-captions.user.js
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/youtube-auto-zh-hans-captions.user.js
 // @run-at       document-start
+// @require      https://cdn.jsdelivr.net/npm/opencc-js@1.0.5/dist/umd/t2cn.js
 // @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
@@ -61,6 +62,8 @@
   const TARGET_LANG = 'zh-Hans';
   const SOURCE_LANG_RE = /^en(?:-|$)/i;
   const CHINESE_LANG_RE = /^(?:zh|zh-Hans|zh-CN)(?:-|$)/i;
+  const SIMPLIFIED_CHINESE_LANG_RE = /^zh-(?:Hans|CN|SG)(?:-|$)/i;
+  const simplifyChinese = typeof OpenCC !== 'undefined' ? OpenCC.Converter({ from: 't', to: 'cn' }) : text => text;
   const AUTO_MALE_VOICE = '__auto_male_zh__';
   const VOLC_VOICE_GROUPS = [
     {
@@ -1981,7 +1984,8 @@
 
   function selectBestCaptionSource(playerResponse) {
     const tracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
-    const directChinese = tracks.find(track => CHINESE_LANG_RE.test(track.languageCode || '') && track.baseUrl);
+    const directChinese = tracks.find(track => SIMPLIFIED_CHINESE_LANG_RE.test(track.languageCode || '') && track.baseUrl) ||
+      tracks.find(track => CHINESE_LANG_RE.test(track.languageCode || '') && track.baseUrl);
     if (directChinese) {
       return { kind: 'youtube-native-zh', targetTrack: directChinese, sourceTrack: null, translationMode: 'none', sourceLanguage: 'zh' };
     }
@@ -2443,7 +2447,7 @@
       let index = done.findIndex((value, position) => !value && position >= Math.max(0, nearest));
       if (index < 0) index = done.indexOf(false);
       const cue = sourceCues[index];
-      const text = cleanCaptionText(await translator.translate(cue.text));
+      const text = cleanCaptionText(simplifyChinese(await translator.translate(cue.text)));
       if (token !== state.loadToken) return [];
       if (text) translated[index] = limitLines({ ...cue, text, sourceText: cue.text });
       done[index] = true;
@@ -2548,7 +2552,7 @@
       throw error;
     }
     if (token !== state.loadToken) return;
-    const targetRaw = normalizeRawCues(targetJson);
+    const targetRaw = normalizeRawCues(targetJson).map(cue => ({ ...cue, text: simplifyChinese(cue.text) }));
     let sourceRaw = [];
     if (source.sourceTrack?.baseUrl) {
       try {
@@ -2642,7 +2646,7 @@
 
   function applyCues(videoId, data, token, statusText) {
     if (token !== state.loadToken || videoId !== state.videoId) return;
-    state.cues = data.cues || [];
+    state.cues = (data.cues || []).map(cue => ({ ...cue, text: simplifyChinese(cue.text) }));
     state.voiceCues = mergeVoiceCues(state.cues);
     state.rawTargetCues = data.rawTargetCues || [];
     state.rawSourceCues = data.rawSourceCues || [];
