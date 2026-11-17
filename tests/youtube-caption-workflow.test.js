@@ -186,7 +186,7 @@ test('a paused video does not start a newly generated voice', async () => {
   let plays = 0;
   const video = {paused:false,currentTime:1};
   const state = {settings:{voiceEnabled:true},remoteVoiceQueue:[{text:'one',start:0,end:2}],remoteAudio:null,remoteVoiceStarting:false,remoteVoiceToken:1};
-  const context = {state,getVideoEl:()=>video,isRemoteVoiceEngine:()=>true,shouldSkipQueuedVolcCue:()=>false,refreshVoiceProgressStatus(){},getVolcAudioUrl:()=>new Promise(resolve=>{release=resolve;}),getVolcPlaybackRate:()=>1,VOICE_MAX_LAG_SECONDS:1.5,Audio:function(){this.play=()=>{plays++;return Promise.resolve();};this.addEventListener=()=>{};}};
+  const context = {state,getVideoEl:()=>video,isRemoteVoiceEngine:()=>true,shouldSkipQueuedVolcCue:()=>false,refreshVoiceProgressStatus(){},syncNarrationVolume(){},getVolcAudioUrl:()=>new Promise(resolve=>{release=resolve;}),getVolcPlaybackRate:()=>1,VOICE_MAX_LAG_SECONDS:1.5,Audio:function(){this.play=()=>{plays++;return Promise.resolve();};this.addEventListener=()=>{};}};
   vm.createContext(context);
   vm.runInContext(source.slice(start,end),context);
   const pending = context.playNextVolcCue();
@@ -203,7 +203,7 @@ test('a late cue seeks audio to the current position before playing', async () =
   const calls = [];
   const video = {paused:false,seeking:false,currentTime:15};
   const state = {settings:{voiceEnabled:true,offsetMs:0},remoteVoiceQueue:[{text:'one',start:0,end:20}],remoteAudio:null,remoteVoiceStarting:false,remoteVoiceToken:1};
-  const context = {state,getVideoEl:()=>video,isRemoteVoiceEngine:()=>true,shouldSkipQueuedVolcCue:()=>false,refreshVoiceProgressStatus(){},getVolcAudioUrl:async()=> 'blob:new',getVolcPlaybackRate:()=>1,VOICE_MAX_LAG_SECONDS:1.5,waitForAudioMetadata:async()=>true,alignVoiceToVideo:()=>{calls.push('align');return true;},Audio:function(){this.play=()=>{calls.push('play');return Promise.resolve();};this.addEventListener=()=>{};}};
+  const context = {state,getVideoEl:()=>video,isRemoteVoiceEngine:()=>true,shouldSkipQueuedVolcCue:()=>false,refreshVoiceProgressStatus(){},syncNarrationVolume(){},getVolcAudioUrl:async()=> 'blob:new',getVolcPlaybackRate:()=>1,VOICE_MAX_LAG_SECONDS:1.5,waitForAudioMetadata:async()=>true,alignVoiceToVideo:()=>{calls.push('align');return true;},Audio:function(){this.play=()=>{calls.push('play');return Promise.resolve();};this.addEventListener=()=>{};}};
   vm.createContext(context);
   vm.runInContext(source.slice(start,end),context);
   await context.playNextVolcCue();

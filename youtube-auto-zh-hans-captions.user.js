@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube 英文视频简体中文字幕与 AI 配音
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.8.8
+// @version      0.8.9
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube and optionally provides Chinese AI dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -279,7 +279,7 @@
     voiceRate: 1.08,
     voiceSyncMode: 'natural',
     terminologyMap: '',
-    originalVolume: 0.25
+    originalVolume: 0
   };
 
   const state = {
@@ -298,6 +298,9 @@
     spokenCueIndex: -1,
     seekVoiceSuppressUntil: -1,
     originalVolumeBeforeVoice: null,
+    narrationVolume: null,
+    lastVideoVolume: null,
+    expectedVideoVolume: null,
     videoHooked: null,
     remoteAudio: null,
     remoteVoiceToken: 0,
@@ -1868,17 +1871,52 @@
     const video = getVideoEl();
     if (!video) return;
     if (state.settings.voiceEnabled) {
-      if (state.originalVolumeBeforeVoice === null) state.originalVolumeBeforeVoice = video.volume;
-      video.volume = clamp(Number(state.settings.originalVolume), 0, 1);
+      if (state.originalVolumeBeforeVoice === null) {
+        state.originalVolumeBeforeVoice = video.volume;
+        state.narrationVolume = video.volume;
+      }
+      setOriginalVideoVolume(video, clamp(Number(state.settings.originalVolume), 0, 1));
       hookVideoEvents(video);
+      syncNarrationVolume(video);
     } else {
       cancelSpeech();
       state.spokenCueIndex = -1;
       if (state.originalVolumeBeforeVoice !== null) {
-        video.volume = clamp(state.originalVolumeBeforeVoice, 0, 1);
+        setOriginalVideoVolume(video, clamp(state.originalVolumeBeforeVoice, 0, 1));
         state.originalVolumeBeforeVoice = null;
       }
+      state.narrationVolume = null;
     }
+  }
+
+  function setOriginalVideoVolume(video, value) {
+    if (Math.abs(video.volume - value) < 0.001) return;
+    state.expectedVideoVolume = value;
+    state.lastVideoVolume = value;
+    video.volume = value;
+  }
+
+  function syncNarrationVolume(video = getVideoEl()) {
+    if (!state.remoteAudio || !video) return;
+    state.remoteAudio.volume = clamp(state.narrationVolume ?? video.volume, 0, 1);
+    state.remoteAudio.muted = video.muted;
+  }
+
+  function handleVideoVolumeChange(event) {
+    const video = event.currentTarget;
+    const volume = video.volume;
+    const changed = state.lastVideoVolume === null || Math.abs(volume - state.lastVideoVolume) > 0.001;
+    const scripted = state.expectedVideoVolume !== null && Math.abs(volume - state.expectedVideoVolume) < 0.001;
+    state.expectedVideoVolume = null;
+    state.lastVideoVolume = volume;
+    if (state.settings.voiceEnabled && changed && !scripted) {
+      state.narrationVolume = volume;
+      state.originalVolumeBeforeVoice = volume;
+      state.settings.originalVolume = volume;
+      saveSettings();
+      syncControlValues();
+    }
+    syncNarrationVolume(video);
   }
 
   function clamp(value, min, max) {
@@ -2717,12 +2755,20 @@
       state.videoHooked.removeEventListener('seeking', handleVideoSeeking);
       state.videoHooked.removeEventListener('seeked', handleVideoSeeked);
       state.videoHooked.removeEventListener('play', handleVideoPlay);
+      state.videoHooked.removeEventListener('volumechange', handleVideoVolumeChange);
+      if (state.originalVolumeBeforeVoice !== null) {
+        setOriginalVideoVolume(state.videoHooked, clamp(state.originalVolumeBeforeVoice, 0, 1));
+        state.originalVolumeBeforeVoice = null;
+      }
     }
     state.videoHooked = video;
+    state.lastVideoVolume = video.volume;
+    state.expectedVideoVolume = null;
     video.addEventListener('pause', handleVideoPause);
     video.addEventListener('seeking', handleVideoSeeking);
     video.addEventListener('seeked', handleVideoSeeked);
     video.addEventListener('play', handleVideoPlay);
+    video.addEventListener('volumechange', handleVideoVolumeChange);
     applyVoiceSettings();
   }
 
@@ -2860,6 +2906,7 @@
       }
       const audio = new Audio(url);
       state.remoteAudio = audio;
+      syncNarrationVolume();
       audio.addEventListener('ended', () => {
         URL.revokeObjectURL(url);
         if (token !== state.remoteVoiceToken) return;
@@ -2886,7 +2933,8 @@
     utterance.lang = 'zh-CN';
     utterance.rate = clamp(Number(rate), 0.7, 1.6);
     utterance.pitch = 1;
-    utterance.volume = 1;
+    const video = getVideoEl();
+    utterance.volume = video?.muted ? 0 : clamp(state.narrationVolume ?? video?.volume ?? 1, 0, 1);
     const voice = selectChineseVoice();
     if (voice) utterance.voice = voice;
     window.speechSynthesis.speak(utterance);
@@ -3340,6 +3388,7 @@
       if (token !== state.remoteVoiceToken) return;
       const audio = new Audio(url);
       state.remoteAudio = audio;
+      syncNarrationVolume();
       if (showPlayingStatus) showStatus(`正在播放${getRemoteVoiceProviderLabel()}测试`);
       audio.addEventListener('ended', () => {
         if (token !== state.remoteVoiceToken) return;
@@ -3471,6 +3520,7 @@
       audio.playbackRate = getVolcPlaybackRate(item, video);
       audio.preservesPitch = true;
       state.remoteAudio = audio;
+      syncNarrationVolume(video);
       state.remoteVoiceCurrent = item;
       const adjusted = video.currentTime + (Number(state.settings.offsetMs) || 0) / 1000;
       if (adjusted - Number(item.start || 0) > VOICE_MAX_LAG_SECONDS && adjusted < Number(item.end || 0)) {
@@ -3606,11 +3656,6 @@
     state.cueIndex = -1;
     state.spokenCueIndex = -1;
     state.seekVoiceSuppressUntil = -1;
-    if (state.originalVolumeBeforeVoice !== null) {
-      const video = getVideoEl();
-      if (video) video.volume = clamp(state.originalVolumeBeforeVoice, 0, 1);
-      state.originalVolumeBeforeVoice = null;
-    }
     cancelSpeech();
     state.loadToken += 1;
     setCaption(null);
@@ -3750,9 +3795,13 @@
     if (videoId !== state.videoId || routeKey !== state.lastUrl) {
       state.lastUrl = routeKey;
       reloadCurrentVideo(false);
+      const video = getVideoEl();
+      if (video && state.videoHooked !== video) hookVideoEvents(video);
       scheduleRouteCheck(1200);
       return;
     }
+    const video = getVideoEl();
+    if (video && state.videoHooked !== video) hookVideoEvents(video);
     if (!state.rafId && state.cues.length) startSyncLoop();
   }
 
