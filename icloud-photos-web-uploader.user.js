@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.21.0
+// @version      1.21.1
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader.user.js
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader.user.js
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click native download, Ctrl+C / OneUp PNG image copy, and native high-resolution OneUp zoom with double-click / smooth mouse-wheel zoom / drag-pan.
@@ -1061,18 +1061,17 @@
 
   function transferFilesToInput(input, files, win) {
     if (!input || !files.length) return false;
-    const WindowDataTransfer = win && win.DataTransfer;
-    if (typeof WindowDataTransfer !== 'function') return false;
+    const transfer = createDataTransfer(files, win);
+    if (!transfer) return false;
     try {
-      const transfer = new WindowDataTransfer();
-      files.forEach(function (file) {
-        transfer.items.add(file);
-      });
+      const pending = Array.from(transfer.files);
+      if (pending.length !== files.length) return false;
       input.files = transfer.files;
       // Assigning input.files is a silent no-op when the browser rejects it, so
-      // read the result back instead of claiming a success we cannot observe.
-      const attached = input.files ? input.files.length : 0;
-      if (attached !== files.length) return false;
+      // verify the files themselves: the control can still hold an older batch.
+      const attached = input.files;
+      if (!attached || attached.length !== pending.length ||
+          pending.some(function (file, index) { return attached[index] !== file; })) return false;
       const EventCtor = (win && win.Event) || root.Event;
       const inputEvent = typeof EventCtor === 'function'
         ? new EventCtor('input', { bubbles: true, composed: true })
@@ -1171,6 +1170,15 @@
   // Returns the number of images actually handed to iCloud (0 on failure) so the
   // caller reports what happened instead of what was attempted.
   async function uploadViaICloudPage(files, doc, win, status, options) {
+    const route = options && typeof options.routeKey === 'string'
+      ? options.routeKey : getDocumentRouteKey(doc);
+    function routeChanged() {
+      if (route === getDocumentRouteKey(doc)) return false;
+      status('图库视图已切换，本批未发送。请在当前视图重新选择图片。', true);
+      return true;
+    }
+
+    if (routeChanged()) return 0;
     let images = filterImageFiles(files);
     if (!images.length) {
       status('这里只能上传图片文件。', true);
@@ -1186,6 +1194,11 @@
       status('没有图片可以上传：全部转换失败。', true);
       return 0;
     }
+    if (routeChanged()) return 0;
+    const beforeDispatch = options && options.beforeDispatch;
+    if (typeof beforeDispatch === 'function') await beforeDispatch();
+    if (routeChanged()) return 0;
+
     let input = findICloudFileInput(doc);
     if (!input) {
       const knownInputs = new Set(queryAllDeep(doc, 'input[type="file"]'));
@@ -1195,8 +1208,7 @@
         ? await waitForICloudFileInput(doc, 3000, undefined, knownInputs)
         : null;
     }
-    const beforeDispatch = options && options.beforeDispatch;
-    if (typeof beforeDispatch === 'function') await beforeDispatch();
+    if (routeChanged()) return 0;
     if (!input) {
       status('找不到 iCloud 上传控件，正在尝试拖拽上传通道...');
       if (dropFilesOnICloudPage(images, doc, win)) {
@@ -1209,7 +1221,7 @@
     const inputWindow = input.ownerDocument && input.ownerDocument.defaultView || win;
     const transferred = transferFilesToInput(input, images, inputWindow);
     if (!transferred) {
-      status('浏览器阻止了自动交接。请使用“选择图片”按钮手动选择。', true);
+      status('未能将图片交给 iCloud。请使用 iCloud 原生工具栏的“上传”按钮。', true);
       return 0;
     }
     status('已发送到 iCloud 上传队列：' + images.length + ' 张图片。');
@@ -1583,7 +1595,7 @@
         return;
       }
 
-      status('等待服务器确认…');
+      status('等待图库同步…');
       const expiresAt = Date.now() + 30000;
       let delay = 2000;
 
@@ -1591,7 +1603,7 @@
         if (!isRefreshCurrent(generation)) return;
         const remaining = expiresAt - Date.now();
         if (remaining <= 0) {
-          status('等待确认超时，尝试软刷新…');
+          status('等待图库同步超时，尝试软刷新…');
           void doReload();
           return;
         }
@@ -1621,7 +1633,7 @@
         if (activeSyncTask === task) activeSyncTask = null;
         if (!isRefreshCurrent(generation)) return;
         if (token && token !== baseToken) {
-          status('服务器已确认，正在刷新…');
+          status('检测到图库同步更新，正在刷新…');
           void doReload();
           return;
         }
@@ -1632,7 +1644,7 @@
       scheduleNextPoll();
     }
 
-    async function sendBatch(files) {
+    async function sendBatch(files, routeKey) {
       const images = filterImageFiles(files);
       if (!images.length) {
         status('只能上传图片', true);
@@ -1647,6 +1659,7 @@
       let baseToken = null;
       try {
         uploadedCount = await uploadViaICloudPage(images, doc, win, status, {
+          routeKey,
           beforeDispatch: async function () {
             baseToken = await captureBaselineToken();
           },
@@ -1659,18 +1672,19 @@
         panel.classList.remove('is-busy');
       }
       if (uploadedCount > 0) {
-        status('已发送 ' + uploadedCount + ' 张，等待服务器确认…');
+        status('已提交 ' + uploadedCount + ' 张给 iCloud，等待图库同步…');
         refreshDemand.recordSuccess(baseToken);
       }
     }
 
     function send(files) {
       const queuedFiles = snapshotFiles(files);
+      const routeKey = getDocumentRouteKey(doc);
       refreshDemand.enqueue();
       clearPendingReload();
       sendQueue = sendQueue.then(
-        function () { return sendBatch(queuedFiles); },
-        function () { return sendBatch(queuedFiles); }
+        function () { return sendBatch(queuedFiles, routeKey); },
+        function () { return sendBatch(queuedFiles, routeKey); }
       ).catch(function (error) {
         const detail = error && error.message ? error.message : String(error);
         status('上传处理失败：' + detail, true);
@@ -1894,6 +1908,7 @@
     const doc = (image && image.ownerDocument) || (win && win.document);
     const width = Number(image && image.naturalWidth) || 0;
     const height = Number(image && image.naturalHeight) || 0;
+    if (!width || !height) throw new Error('无法读取图片数据。');
     let canvas = null;
     try {
       canvas = doc && typeof doc.createElement === 'function' ? doc.createElement('canvas') : null;
@@ -1901,7 +1916,7 @@
       canvas.width = width;
       canvas.height = height;
       const context = typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null;
-      if (!context || !width || !height) throw new Error('无法读取图片数据。');
+      if (!context) throw new Error('无法读取图片数据。');
       context.drawImage(image, 0, 0, width, height);
       const blob = await canvasToBlob(canvas, 'image/png');
       if (String(blob && blob.type || '').toLowerCase() !== 'image/png') {
@@ -1919,8 +1934,14 @@
 
   const COPY_FETCH_TIMEOUT_MS = 10000;
 
-  async function fetchCopyablePhotoImageBlob(image, win) {
-    const source = getCopyablePhotoImageSource(image);
+  function renderUnchangedPhoto(image, win, source) {
+    if (getCopyablePhotoImageSource(image) !== source) {
+      throw new Error('照片已切换，请重新拷贝。');
+    }
+    return renderPhotoImageToBlob(image, win);
+  }
+
+  async function fetchCopyablePhotoImageBlob(image, win, source) {
     const fetchFn = win && win.fetch;
     if (source && typeof fetchFn === 'function') {
       try {
@@ -1946,7 +1967,7 @@
         // Revoked object URLs or a stalled fetch fall back to decoded pixels.
       }
     }
-    return renderPhotoImageToBlob(image, win);
+    return renderUnchangedPhoto(image, win, source);
   }
 
   async function copyPhotoImageToClipboard(image, win, preparedBlob) {
@@ -1955,15 +1976,16 @@
     if (!clipboard || typeof clipboard.write !== 'function' || typeof ClipboardItemCtor !== 'function') {
       return false;
     }
+    const source = getCopyablePhotoImageSource(image);
     const blobPromise = preparedBlob
       ? Promise.resolve(preparedBlob)
-      : fetchCopyablePhotoImageBlob(image, win);
+      : fetchCopyablePhotoImageBlob(image, win, source);
     // No await before write: Safari requires the original click/keydown activation.
     const pngPromise = blobPromise.then(function (blob) {
       const type = String(blob && blob.type || '').toLowerCase();
       if (type === 'image/png') return blob;
       if (!/^image\//.test(type)) throw new Error('图片数据格式无效。');
-      return renderPhotoImageToBlob(image, win);
+      return renderUnchangedPhoto(image, win, source);
     });
     // A constructor/write failure can occur before the browser consumes the data.
     // Observe its rejection too, so a later fetch failure cannot go unhandled.

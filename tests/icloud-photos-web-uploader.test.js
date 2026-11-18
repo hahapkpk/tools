@@ -213,6 +213,90 @@ test('input.files 赋值生效时 transferFilesToInput 返回 true 并派发事�
   assert.deepEqual(dispatched, ['input', 'change']);
 });
 
+test('input.files 保留相同数量的旧文件时不会派发上传事件', () => {
+  const stale = fakeFile('same.jpg', 'image/jpeg');
+  const fresh = fakeFile('same.jpg', 'image/jpeg');
+  const win = {
+    DataTransfer: function () {
+      this.files = [];
+      this.items = { add: (file) => this.files.push(file) };
+    },
+  };
+  const input = {
+    get files() { return [stale]; },
+    set files(_) {},
+    dispatchEvent() { assert.fail('不能转交旧文件'); },
+  };
+  assert.equal(api.transferFilesToInput(input, [fresh], win), false);
+});
+
+function setupUploadHandoff() {
+  const events = [];
+  const messages = [];
+  const win = {
+    location: { href: 'https://www.icloud.com/applications/photos#library' },
+    DataTransfer: function () {
+      this.files = [];
+      this.items = { add: (file) => this.files.push(file) };
+    },
+  };
+  const makeInput = () => ({
+    isConnected: true,
+    multiple: true,
+    files: [],
+    getAttribute: (name) => name === 'accept' ? 'image/*' : null,
+    dispatchEvent(event) { events.push({ input: this, type: event.type }); },
+  });
+  let current = makeInput();
+  const doc = {
+    defaultView: win,
+    querySelectorAll: (selector) => selector === 'input[type="file"]' ? [current] : [],
+  };
+  const file = fakeFile('image.jpg', 'image/jpeg');
+  function upload(beforeDispatch, routeKey) {
+    return api.uploadViaICloudPage(
+      [file], doc, win, (message, error) => messages.push({ message, error }), { beforeDispatch, routeKey }
+    );
+  }
+  return {
+    events, messages, win, doc, file, upload,
+    replaceInput() {
+      current.isConnected = false;
+      current = makeInput();
+      return current;
+    },
+  };
+}
+
+test('读取同步状态期间控件被替换时只向新控件交接', async () => {
+  const env = setupUploadHandoff();
+  const oldInput = api.findICloudFileInput(env.doc);
+  let replacement;
+  assert.equal(await env.upload(async () => { replacement = env.replaceInput(); }), 1);
+  assert.deepEqual(oldInput.files, []);
+  assert.deepEqual(replacement.files, [env.file]);
+  assert.deepEqual(env.events.map(({ input, type }) => [input, type]), [
+    [replacement, 'input'], [replacement, 'change'],
+  ]);
+});
+
+test('异步上传准备期间切换图库路由会中止本批交接', async () => {
+  const env = setupUploadHandoff();
+  assert.equal(await env.upload(async () => { env.win.location.href += '-changed'; }), 0);
+  assert.deepEqual(env.events, []);
+  assert.equal(env.messages.at(-1).error, true);
+  assert.match(env.messages.at(-1).message, /本批未发送/);
+});
+
+test('排队期间离开原图库路由时不会开始上传准备', async () => {
+  const env = setupUploadHandoff();
+  const routeKey = env.win.location.href;
+  env.win.location.href += '-changed';
+  assert.equal(await env.upload(() => assert.fail('路由变化后不能开始准备'), routeKey), 0);
+  assert.deepEqual(env.events, []);
+  assert.match(env.messages.at(-1).message, /本批未发送/);
+});
+
 test('粘贴提取会过滤非图片项并命名图片', () => {
   const items = [
     { kind: 'string', getAsFile: () => null },
@@ -1249,10 +1333,11 @@ test('繁体中文照片菜单可由下载项定位', () => {
   assert.deepEqual(api.findPhotoContextMenus(doc), [menu]);
 });
 
-test('拷贝图片以当前渲染源读取二进制并写入系统剪贴板', async () => {
+test('拷贝图片在用户手势内开始写入，读取当前渲染源并提交 PNG', async () => {
   let request = null;
-  let clipboardItem = null;
-  const blob = { type: 'image/jpeg' };
+  let written = null;
+  const blob = { type: 'image/png' };
+  let userGestureActive = true;
   const image = {
     currentSrc: 'https://photos.example/full.jpg',
     src: 'https://photos.example/thumb.jpg',
@@ -1267,15 +1352,21 @@ test('拷贝图片以当前渲染源读取二进制并写入系统剪贴板', as
     },
     navigator: {
       clipboard: {
-        write: async (items) => { clipboardItem = items[0]; },
+        write: async (items) => {
+          assert.equal(userGestureActive, true);
+          assert.deepEqual(Object.keys(items[0].items), ['image/png']);
+          written = await items[0].items['image/png'];
+        },
       },
     },
   };
 
-  assert.equal(await api.copyPhotoImageToClipboard(image, win), true);
+  const copy = api.copyPhotoImageToClipboard(image, win);
+  userGestureActive = false;
+  assert.equal(await copy, true);
   assert.equal(request.url, 'https://photos.example/full.jpg');
   assert.equal(request.options.credentials, 'include');
-  assert.equal(clipboardItem.items['image/jpeg'], blob);
+  assert.equal(written, blob);
 
   const preparedBlob = { type: 'image/png' };
   const preparedWin = {
@@ -1283,16 +1374,16 @@ test('拷贝图片以当前渲染源读取二进制并写入系统剪贴板', as
     ClipboardItem: function ClipboardItem(items) { this.items = items; },
     navigator: {
       clipboard: {
-        write: async (items) => { clipboardItem = items[0]; },
+        write: async (items) => { written = await items[0].items['image/png']; },
       },
     },
   };
   assert.equal(await api.copyPhotoImageToClipboard(image, preparedWin, preparedBlob), true);
-  assert.equal(clipboardItem.items['image/png'], preparedBlob);
+  assert.equal(written, preparedBlob);
 });
 
-test('照片对象地址被回收后改用 canvas 重绘读取二进制', async () => {
-  let clipboardItem = null;
+async function assertCanvasClipboardFallback(fetch) {
+  let written = null;
   const drawCalls = [];
   const canvasBlob = { type: 'image/png', size: 4096 };
   const image = {
@@ -1322,15 +1413,13 @@ test('照片对象地址被回收后改用 canvas 重绘读取二进制', async 
     },
   };
   const win = {
-    fetch: async () => {
-      throw new TypeError('Failed to fetch');
-    },
+    fetch,
     ClipboardItem: function ClipboardItem(items) {
       this.items = items;
     },
     navigator: {
       clipboard: {
-        write: async (items) => { clipboardItem = items[0]; },
+        write: async (items) => { written = await items[0].items['image/png']; },
       },
     },
   };
@@ -1341,7 +1430,15 @@ test('照片对象地址被回收后改用 canvas 重绘读取二进制', async 
   assert.equal(drawCalls[0].w, 480);
   assert.equal(drawCalls[0].h, 360);
   assert.equal(drawCalls[1].type, 'image/png');
-  assert.equal(clipboardItem.items['image/png'], canvasBlob);
+  assert.equal(written, canvasBlob);
+}
+
+test('照片对象地址被回收后改用 canvas 重绘读取二进制', async () => {
+  await assertCanvasClipboardFallback(async () => { throw new TypeError('Failed to fetch'); });
+});
+
+test('JPEG 来源重绘为 PNG 后才写入剪贴板', async () => {
+  await assertCanvasClipboardFallback(async () => ({ ok: true, blob: async () => ({ type: 'image/jpeg' }) }));
 });
 
 test('对象地址回收且画布无法重绘时报告读取失败', async () => {
@@ -1364,12 +1461,34 @@ test('对象地址回收且画布无法重绘时报告读取失败', async () =>
     },
     navigator: {
       clipboard: {
-        write: async () => {},
+        write: async ([item]) => { await item.items['image/png']; },
       },
     },
   };
 
   await assert.rejects(api.copyPhotoImageToClipboard(image, win), /无法读取图片数据/);
+});
+
+test('等待图片数据时切换照片不会把新照片误写入剪贴板', async () => {
+  const image = {
+    currentSrc: 'blob:https://www.icloud.com/first',
+    naturalWidth: 480,
+    naturalHeight: 360,
+    ownerDocument: {
+      createElement() { assert.fail('不能重绘切换后的照片'); },
+    },
+  };
+  const win = {
+    fetch: async () => {
+      image.currentSrc = 'blob:https://www.icloud.com/second';
+      return { ok: false };
+    },
+    ClipboardItem: function (items) { this.items = items; },
+    navigator: {
+      clipboard: { write: async ([item]) => { await item.items['image/png']; } },
+    },
+  };
+  await assert.rejects(api.copyPhotoImageToClipboard(image, win), /照片已切换/);
 });
 
 function fakeKeydownEvent(overrides) {
@@ -1457,7 +1576,7 @@ function setupKeyboardCopyEnv() {
     navigator: {
       clipboard: {
         write: async (items) => {
-          written = items[0];
+          written = await items[0].items['image/png'];
         },
       },
     },
@@ -1479,7 +1598,7 @@ test('快捷键 Ctrl+C 拷贝鼠标下的照片并写入剪贴板', async () => 
   assert.equal(event.defaultPrevented, true);
 
   await flushKeyboardCopy();
-  assert.equal(env.getWritten().items['image/png'], env.canvasBlob);
+  assert.equal(env.getWritten(), env.canvasBlob);
   const last = env.messages[env.messages.length - 1];
   assert.equal(last.message, '图像已拷贝到剪贴板');
 });
@@ -1493,7 +1612,7 @@ test('快捷键 Alt+C 同样触发照片拷贝', async () => {
   assert.equal(event.defaultPrevented, true);
 
   await flushKeyboardCopy();
-  assert.equal(env.getWritten().items['image/png'], env.canvasBlob);
+  assert.equal(env.getWritten(), env.canvasBlob);
 });
 
 test('快捷键在输入框内或有文本选择时不拦截', async () => {
@@ -1567,8 +1686,9 @@ test('面板拖拽会阻止 drop 冒泡，避免 iCloud 重复入队', () => {
   );
 });
 
-test('版本号已升级到 1.17.0', () => {
-  assert.match(source, /\/\/ @version\s+1\.17\.0/);
+test('油猴元数据块包含可更新的三段式版本号', () => {
+  const metadata = source.split('// ==/UserScript==', 1)[0];
+  assert.match(metadata, /^\/\/ @version[ \t]+\d+\.\d+\.\d+\s*$/m);
 });
 
 test('resolveOneUpImage 靠尺寸识别大图，不吃网格缩略图，也不吃轮播里预加载的邻图', () => {
@@ -1608,12 +1728,13 @@ test('resolveOneUpImage 靠尺寸识别大图，不吃网格缩略图，也不�
 
 test('大图按钮是图标按钮，随大图出现与移除', () => {
   const created = [];
+  const documentListeners = {};
   let viewerPresent = true;
   const viewerImg = {
     naturalWidth: 2048,
     naturalHeight: 1536,
     closest: () => null,
-    getBoundingClientRect: () => ({ left: 400, top: 100, width: 1200, height: 800 }),
+    getBoundingClientRect: () => ({ left: 400, top: 100, width: 1200, height: 800, right: 1600, bottom: 900 }),
   };
   const makeButton = () => ({
     style: { cssText: '' },
@@ -1631,6 +1752,9 @@ test('大图按钮是图标按钮，随大图出现与移除', () => {
     addEventListener(type, fn) {
       this.listeners[type] = fn;
     },
+    removeEventListener(type) {
+      delete this.listeners[type];
+    },
     remove() {
       this.removed = true;
     },
@@ -1640,9 +1764,11 @@ test('大图按钮是图标按钮，随大图出现与移除', () => {
     documentElement: { clientWidth: 1600, clientHeight: 900 },
     body: {
       appendChild(node) {
+        node.parentNode = this;
         created.push(node);
       },
     },
+    addEventListener(type, fn) { documentListeners[type] = fn; },
     createElement: () => makeButton(),
     querySelectorAll(selector) {
       if (selector !== 'img') return [];
@@ -1650,7 +1776,8 @@ test('大图按钮是图标按钮，随大图出现与移除', () => {
     },
   };
   const listeners = {};
-  const timers = [];
+  const timers = new Map();
+  let nextTimer = 0;
   const win = {
     innerWidth: 1600,
     innerHeight: 900,
@@ -1660,9 +1787,10 @@ test('大图按钮是图标按钮，随大图出现与移除', () => {
     },
     removeEventListener() {},
     setTimeout(fn) {
-      timers.push(fn);
-      return timers.length;
+      timers.set(++nextTimer, fn);
+      return nextTimer;
     },
+    clearTimeout(id) { timers.delete(id); },
   };
 
   api.installOneUpCopyButton(doc, win);
@@ -1678,10 +1806,16 @@ test('大图按钮是图标按钮，随大图出现与移除', () => {
   assert.equal(btn.style.left, '20px', '未保存过位置时应落在默认左下角');
   assert.equal(btn.style.top, '840px');
 
+  doc.hidden = true;
+  documentListeners.visibilitychange();
+  assert.equal(timers.size, 0, '后台页面暂停轮询');
   viewerPresent = false;
-  timers[timers.length - 1]();
+  doc.hidden = false;
+  documentListeners.visibilitychange();
   assert.equal(created.length, 1, '不能重复注入按钮');
   assert.equal(btn.removed, true, '大图关闭后按钮应被移除');
+  assert.equal(btn.listeners.mousedown, undefined, '移除按钮时解除拖动监听');
+  assert.equal(timers.size, 1, '回到前台后恢复轮询');
 });
 
 test('拖动大图按钮会记住位置，并且拖动结束那一下不触发拷贝', () => {
@@ -1766,7 +1900,7 @@ test('弹层基准高度能区分“我们已加高”和“iCloud 重写了高�
   assert.equal(api.resolveCopyMenuBaseHeight({}), null);
 });
 
-test('下载原片行插进可交互的菜单列表，而不是 pointer-events:none 的 popover 外层', async () => {
+test('原生照片菜单的行和高度保持原样', () => {
   const makeNode = (tag) => {
     const node = {
       tagName: String(tag).toUpperCase(),
@@ -1831,21 +1965,15 @@ test('下载原片行插进可交互的菜单列表，而不是 pointer-events:n
     return null;
   };
 
-  const added = api.addGridDownloadMenuItem(doc, {}, popover);
+  const deleteRow = makeNode('div');
+  deleteRow.setAttribute('role', 'menuitem');
+  deleteRow.textContent = '删除';
+  list.appendChild(deleteRow);
 
-  assert.equal(added, true);
-  const row = list.children.find((child) => child.getAttribute('data-icloud-download-photo') !== null);
-  assert.ok(row, '应插入“下载原片”行到可交互的菜单列表里');
-  assert.equal(row.parentNode, list);
-  assert.equal(list.children.indexOf(row), 0, '应排在 iCloud 自己的下载行之前');
-  assert.equal(row.textContent, '下载原片');
-  assert.match(row.style.cssText, /pointer-events:auto/);
-  assert.ok(
-    list.children.every((child) => child.getAttribute('data-icloud-copy-photo') === null),
-    '不再注入“拷贝图像”行'
-  );
-  assert.equal(popover.style.height, '277.905px');
-  assert.equal(content.style.height, '277.905px');
+  assert.equal(api.addGridDownloadMenuItem(doc, {}, popover), true);
+  assert.deepEqual(list.children, [downloadRow, deleteRow]);
+  assert.equal(popover.style.height, '247.905px');
+  assert.equal(content.style.height, '247.905px');
 });
 
 test('findNativeDownloadItem 只认 iCloud 自己的下载行', () => {
@@ -1864,7 +1992,7 @@ test('findNativeDownloadItem 只认 iCloud 自己的下载行', () => {
   assert.equal(api.findNativeDownloadItem(null), null);
 });
 
-test('菜单被复用时不会重复插入“下载原片”，也不重复加高弹层', async () => {
+test('清除旧菜单项和旧高度时保留 iCloud 重写的高度', () => {
   const makeNode = (tag) => {
     const node = {
       tagName: String(tag).toUpperCase(),
@@ -1875,6 +2003,7 @@ test('菜单被复用时不会重复插入“下载原片”，也不重复加�
       parentNode: null,
       setAttribute(name, value) { this.attrs[name] = value; },
       getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; },
+      removeAttribute(name) { delete this.attrs[name]; },
       addEventListener() {},
       getBoundingClientRect() { return { width: 169, height: 30, top: 0, left: 0, right: 169, bottom: 30 }; },
       insertBefore(child, ref) { const i = ref ? this.children.indexOf(ref) : 0; this.children.splice(i < 0 ? 0 : i, 0, child); child.parentNode = this; return child; },
@@ -1891,11 +2020,8 @@ test('菜单被复用时不会重复插入“下载原片”，也不重复加�
         if (selector === '[role="menuitem"]') {
           return this.children.filter((c) => c.getAttribute('role') === 'menuitem');
         }
-        if (selector[0] === '[' && selector[selector.length - 1] === ']') {
-          const marker = selector.slice(1, -1);
-          return this.children.filter((c) => c.getAttribute(marker) !== null);
-        }
-        return [];
+        const markers = selector.split(', ').map((s) => s.slice(1, -1));
+        return this.children.filter((c) => markers.some((marker) => c.getAttribute(marker) !== null));
       },
     };
     return node;
@@ -1905,20 +2031,22 @@ test('菜单被复用时不会重复插入“下载原片”，也不重复加�
   const nativeRow = makeNode('div');
   nativeRow.setAttribute('role', 'menuitem');
   nativeRow.textContent = '下载';
-  const staleCopyRow = makeNode('div');
-  staleCopyRow.setAttribute('role', 'menuitem');
-  staleCopyRow.setAttribute('data-icloud-copy-photo', '');
-  staleCopyRow.textContent = '拷贝图像';
-  staleCopyRow.remove = function () {
-    const i = list.children.indexOf(this);
-    if (i >= 0) list.children.splice(i, 1);
-  };
-  list.appendChild(staleCopyRow);
+  for (const marker of ['data-icloud-copy-photo', 'data-icloud-download-photo']) {
+    const staleRow = makeNode('div');
+    staleRow.setAttribute('role', 'menuitem');
+    staleRow.setAttribute(marker, '');
+    staleRow.remove = () => list.children.splice(list.children.indexOf(staleRow), 1);
+    list.appendChild(staleRow);
+  }
   list.appendChild(nativeRow);
   const content = makeNode('div');
-  content.style.height = '247.905px';
+  content.style.height = '180px';
   const popover = makeNode('ui-popover');
-  popover.style.height = '247.905px';
+  popover.style.height = '277.905px';
+  for (const element of [popover, content]) {
+    element.setAttribute('data-icloud-copy-menu-base-height', '247.905');
+    element.setAttribute('data-icloud-copy-menu-applied-height', '30');
+  }
   popover.closest = (s) => (s === 'ui-popover' ? popover : null);
   popover.querySelector = (selector) => {
     if (selector === 'ui-menu-scroll-container[role="menu"]') return list;
@@ -1926,20 +2054,14 @@ test('菜单被复用时不会重复插入“下载原片”，也不重复加�
     return null;
   };
 
-  api.addGridDownloadMenuItem(doc, {}, popover);
-  api.addGridDownloadMenuItem(doc, {}, popover);
-
-  assert.equal(
-    list.children.filter((c) => c.getAttribute('data-icloud-download-photo') !== null).length,
-    1,
-    '不能重复插入'
-  );
-  assert.equal(
-    list.children.filter((c) => c.getAttribute('data-icloud-copy-photo') !== null).length,
-    0,
-    '旧版本残留的“拷贝图像”行应被移除'
-  );
-  assert.equal(popover.style.height, '277.905px', '重复调用不应继续加高');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    assert.equal(api.addGridDownloadMenuItem(doc, {}, popover), true);
+    assert.deepEqual(list.children, [nativeRow]);
+    assert.equal(popover.style.height, '247.905px');
+    assert.equal(content.style.height, '180px');
+    assert.deepEqual(popover.attrs, {});
+    assert.deepEqual(content.attrs, {});
+  }
 });
 
 

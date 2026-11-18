@@ -10,6 +10,14 @@ Tampermonkey 脚本，为 iCloud 网页版照片添加快速上传、自动转�
 https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader.user.js
 ```
 
+## 1.21.1 修复说明
+
+- 上传时核对实际交给 iCloud 的文件，避免把控件里残留的旧文件当成新批次。
+- 等待同步状态后重新选择上传控件；如果期间切换了图库视图，本批取消，不会误传到新视图。
+- 状态提示区分「已提交给 iCloud」与图库同步更新，不把同步变化当成单张图片上传成功的确认。
+- 复制图片仍使用 PNG；若回退到画布前照片已被切换，会提示重试，不会复制错图。
+- 右键下载继续使用 iCloud 的原生「下载」项，不额外插入菜单项。
+
 ## 1.14.2 修复说明
 
 - 已按真实 iCloud Photos 页面菜单结构复现并修复繁体中文识别。
