@@ -5,6 +5,86 @@ const path = require('node:path');
 const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '..', 'youtube-auto-zh-hans-captions.user.js'), 'utf8');
 
+test('caption fallback ignores other languages, auto-generated tracks and empty responses', async () => {
+  const start = source.indexOf('  async function fetchCaptionJsonWithFallback(');
+  const end = source.indexOf('  async function primeNativeCaptionRequest(', start);
+  const origin = 'https://www.youtube.com';
+  const base = origin + '/api/timedtext?v=one&lang=en';
+  const attempts = [];
+  const context = {
+    URL, location: {origin}, getVideoId: () => 'one',
+    performance: {getEntriesByType: () => [
+      {name: base + '&fmt=json3'},
+      {name: base + '&kind=asr'},
+      {name: origin + '/api/timedtext?v=one&lang=de'}
+    ]},
+    makeCaptionUrl: () => base,
+    normalizeRawCues: payload => payload.events,
+    fetchCaptionJson: async url => {
+      attempts.push(url);
+      return { events: url === base ? ['correct captions'] : [] };
+    }
+  };
+  vm.createContext(context);
+  vm.runInContext(source.slice(start, end), context);
+  const result = await context.fetchCaptionJsonWithFallback('one', {baseUrl: base, languageCode:'en'});
+  assert.deepEqual(result.events, ['correct captions']);
+  assert.deepEqual(attempts, [base + '&fmt=json3', base]);
+});
+
+test('leaving a watch route cleans up playback, while changing the same video URL does not restart it', () => {
+  const start = source.indexOf('  function checkRoute()');
+  const end = source.indexOf('  function scheduleRouteCheck(', start);
+  const calls = [];
+  const video = {};
+  const location = { href: 'https://www.youtube.com/watch?v=one&t=10' };
+  const state = {videoId: 'one', videoHooked: video, rafId: 1};
+  const context = {
+    state, URL, location, getVideoEl: () => video, ensureOverlay() {},
+    resetVideoState: id => { state.videoId = id; calls.push('reset'); },
+    hookVideoEvents: target => { if (target === null) calls.push('detach'); },
+    reloadCurrentVideo: () => calls.push('reload'), scheduleRouteCheck() {}
+  };
+  vm.createContext(context);
+  const extractStart = source.indexOf('  function getVideoId()');
+  const extractEnd = source.indexOf('  function getPlayerRoot(', extractStart);
+  vm.runInContext(source.slice(extractStart, extractEnd) + source.slice(start, end), context);
+  context.checkRoute();
+  assert.deepEqual(calls, []);
+  location.href = 'https://www.youtube.com/results?v=one';
+  context.checkRoute();
+  context.checkRoute();
+  assert.deepEqual(calls, ['reset', 'detach']);
+});
+
+test('skipping a late audio response keeps the next synthesis protected against overlapping requests', async () => {
+  const start = source.indexOf('  async function playNextVolcCue()');
+  const end = source.indexOf('  function prefetchVolcCues(', start);
+  const video = {paused:false, currentTime:0};
+  const state = {
+    settings: {voiceEnabled:true, offsetMs:0},
+    remoteVoiceQueue: [{text:'old', end:1}, {text:'next', start:4, end:8}, {text:'later', end:12}],
+    remoteAudio:null, remoteVoiceToken:1, remoteVoiceStarting:false
+  };
+  const requests = [];
+  const context = {
+    state, getVideoEl:()=>video, isRemoteVoiceEngine:()=>true, refreshVoiceProgressStatus(){},
+    shouldSkipQueuedVolcCue: item => video.currentTime > item.end,
+    getVolcAudioUrl: text => new Promise(resolve => requests.push({text,resolve}))
+  };
+  vm.createContext(context);
+  vm.runInContext(source.slice(start, end), context);
+  const pending = context.playNextVolcCue();
+  video.currentTime = 4;
+  requests[0].resolve('blob:old');
+  await pending;
+  assert.equal(state.remoteVoiceStarting, true);
+  await context.playNextVolcCue();
+  assert.deepEqual(requests.map(request => request.text), ['old', 'next']);
+  state.remoteVoiceToken++;
+  requests[1].resolve('blob:next');
+});
+
 test('switching video stops translation before the next sentence', async () => {
   const start = source.indexOf('  async function translateCuesLocally(');
   const end = source.indexOf('  async function waitForCaptionSource(', start);

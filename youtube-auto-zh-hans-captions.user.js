@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube 英文视频简体中文字幕与 AI 配音
 // @namespace    https://github.com/hahapkpk/tools
-// @version      0.8.9
+// @version      0.8.10
 // @description  Shows clean Simplified Chinese or bilingual subtitles on YouTube and optionally provides Chinese AI dubbing.
 // @match        https://www.youtube.com/watch*
 // @match        https://www.youtube.com/shorts/*
@@ -289,7 +289,6 @@
     rawTargetCues: [],
     rawSourceCues: [],
     cueIndex: -1,
-    lastUrl: '',
     loadToken: 0,
     pendingStatus: '',
     rafId: 0,
@@ -736,7 +735,7 @@
         color: #3ea6ff;
       }
     `;
-    document.head.appendChild(style);
+    (document.head || document.documentElement).appendChild(style);
   }
 
   function getVideoId() {
@@ -744,7 +743,7 @@
     if (url.pathname.startsWith('/shorts/') || url.pathname.startsWith('/embed/')) {
       return url.pathname.split('/').filter(Boolean)[1] || '';
     }
-    return url.searchParams.get('v') || '';
+    return url.pathname === '/watch' ? url.searchParams.get('v') || '' : '';
   }
 
   function getPlayerRoot() {
@@ -757,10 +756,11 @@
 
   function getVideoEl() {
     const now = Date.now();
-    if (state._cachedVideoEl && now - state._cachedVideoElAt < 2000) return state._cachedVideoEl;
+    if (state._cachedVideoEl?.isConnected && now - state._cachedVideoElAt < 2000) return state._cachedVideoEl;
     const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
     if (video) { state._cachedVideoEl = video; state._cachedVideoElAt = now; }
-    return video || state._cachedVideoEl;
+    if (!video) invalidateVideoCache();
+    return video;
   }
 
   function invalidateVideoCache() {
@@ -1815,7 +1815,7 @@
       overlay.style.setProperty(`--${SCRIPT_ID}-font-size`, String(state.settings.fontSize));
       overlay.style.setProperty(`--${SCRIPT_ID}-bottom`, String(state.settings.position));
     }
-    document.documentElement.classList.toggle(`${SCRIPT_ID}-hide-native`, Boolean(state.settings.hideNative));
+    document.documentElement.classList.toggle(`${SCRIPT_ID}-hide-native`, Boolean(state.settings.enabled && state.settings.hideNative && state.cues.length));
   }
 
   function syncControlValues() {
@@ -1867,26 +1867,30 @@
     syncVolcFavoriteControls();
   }
 
-  function applyVoiceSettings() {
-    const video = getVideoEl();
-    if (!video) return;
-    if (state.settings.voiceEnabled) {
+  function applyVoiceSettings(video = getVideoEl()) {
+    if (video && getVideoId() && state.settings.enabled && state.settings.voiceEnabled) {
+      if (state.videoHooked !== video) {
+        hookVideoEvents(video);
+        return;
+      }
       if (state.originalVolumeBeforeVoice === null) {
         state.originalVolumeBeforeVoice = video.volume;
         state.narrationVolume = video.volume;
       }
       setOriginalVideoVolume(video, clamp(Number(state.settings.originalVolume), 0, 1));
-      hookVideoEvents(video);
       syncNarrationVolume(video);
     } else {
       cancelSpeech();
       state.spokenCueIndex = -1;
-      if (state.originalVolumeBeforeVoice !== null) {
-        setOriginalVideoVolume(video, clamp(state.originalVolumeBeforeVoice, 0, 1));
-        state.originalVolumeBeforeVoice = null;
-      }
+      restoreOriginalVideoVolume();
       state.narrationVolume = null;
     }
+  }
+
+  function restoreOriginalVideoVolume() {
+    const volume = state.originalVolumeBeforeVoice;
+    state.originalVolumeBeforeVoice = null;
+    if (state.videoHooked && volume !== null) setOriginalVideoVolume(state.videoHooked, volume);
   }
 
   function setOriginalVideoVolume(video, value) {
@@ -1909,7 +1913,7 @@
     const scripted = state.expectedVideoVolume !== null && Math.abs(volume - state.expectedVideoVolume) < 0.001;
     state.expectedVideoVolume = null;
     state.lastVideoVolume = volume;
-    if (state.settings.voiceEnabled && changed && !scripted) {
+    if (state.settings.enabled && state.settings.voiceEnabled && state.originalVolumeBeforeVoice !== null && changed && !scripted) {
       state.narrationVolume = volume;
       state.originalVolumeBeforeVoice = volume;
       state.settings.originalVolume = volume;
@@ -2093,10 +2097,13 @@
     const tried = new Set();
     let lastError = null;
     const tryUrl = async url => {
-      if (!url || tried.has(url)) return null;
+      if (!url || tried.has(url) || getVideoId() !== videoId) return null;
       tried.add(url);
       try {
-        return await fetchCaptionJson(url);
+        const payload = await fetchCaptionJson(url);
+        if (normalizeRawCues(payload).length) return payload;
+        lastError = new Error('字幕接口没有返回可用内容。');
+        return null;
       } catch (error) {
         if (error.rateLimited) throw error;
         lastError = error;
@@ -2104,7 +2111,7 @@
       }
     };
 
-    for (const url of findPerformanceCaptionUrls(videoId, options.translate)) {
+    for (const url of findPerformanceCaptionUrls(videoId, track, options.translate)) {
       const json = await tryUrl(url);
       if (json) return json;
     }
@@ -2112,8 +2119,8 @@
     const json = await tryUrl(makeCaptionUrl(track, options));
     if (json) return json;
 
-    await primeNativeCaptionRequest(track, options.translate);
-    for (const url of findPerformanceCaptionUrls(videoId, options.translate)) {
+    if (getVideoId() === videoId) await primeNativeCaptionRequest(track, options.translate);
+    for (const url of findPerformanceCaptionUrls(videoId, track, options.translate)) {
       const jsonFromNativeUrl = await tryUrl(url);
       if (jsonFromNativeUrl) return jsonFromNativeUrl;
     }
@@ -2121,7 +2128,12 @@
     throw lastError || new Error('字幕接口没有返回可用内容。');
   }
 
-  function findPerformanceCaptionUrls(videoId, translate) {
+  function findPerformanceCaptionUrls(videoId, track, translate) {
+    const selectedParams = new URL(track.baseUrl, location.origin).searchParams;
+    const language = (track.languageCode || selectedParams.get('lang') || '').toLowerCase();
+    if (!language) return [];
+    const kind = track.kind || selectedParams.get('kind') || '';
+    const trackName = selectedParams.get('name') || '';
     return performance.getEntriesByType('resource')
       .map(entry => entry.name)
       .filter(name => {
@@ -2129,6 +2141,9 @@
         try {
           const url = new URL(name);
           if (url.searchParams.get('v') !== videoId) return false;
+          if ((url.searchParams.get('lang') || '').toLowerCase() !== language) return false;
+          if ((url.searchParams.get('kind') || '') !== kind) return false;
+          if ((url.searchParams.get('name') || '') !== trackName) return false;
           const tlang = url.searchParams.get('tlang');
           return translate ? tlang === TARGET_LANG : !tlang;
         } catch {
@@ -2749,19 +2764,20 @@
   }
 
   function hookVideoEvents(video) {
-    if (!video || state.videoHooked === video) return;
+    if (state.videoHooked === video) return;
     if (state.videoHooked) {
       state.videoHooked.removeEventListener('pause', handleVideoPause);
       state.videoHooked.removeEventListener('seeking', handleVideoSeeking);
       state.videoHooked.removeEventListener('seeked', handleVideoSeeked);
       state.videoHooked.removeEventListener('play', handleVideoPlay);
       state.videoHooked.removeEventListener('volumechange', handleVideoVolumeChange);
-      if (state.originalVolumeBeforeVoice !== null) {
-        setOriginalVideoVolume(state.videoHooked, clamp(state.originalVolumeBeforeVoice, 0, 1));
-        state.originalVolumeBeforeVoice = null;
-      }
+      restoreOriginalVideoVolume();
+      cancelSpeech();
+      state.spokenCueIndex = -1;
+      state.seekVoiceSuppressUntil = -1;
     }
     state.videoHooked = video;
+    if (!video) return;
     state.lastVideoVolume = video.volume;
     state.expectedVideoVolume = null;
     video.addEventListener('pause', handleVideoPause);
@@ -2769,7 +2785,7 @@
     video.addEventListener('seeked', handleVideoSeeked);
     video.addEventListener('play', handleVideoPlay);
     video.addEventListener('volumechange', handleVideoVolumeChange);
-    applyVoiceSettings();
+    applyVoiceSettings(video);
   }
 
   function handleVideoPause() {
@@ -2782,7 +2798,7 @@
 
   function handleVideoPlay() {
     const video = getVideoEl();
-    if (!video || video.paused || video.seeking) return;
+    if (!state.settings.enabled || !video || video.paused || video.seeking) return;
     if (state.remoteVoiceStarting) return;
     if (state.settings.voiceEnabled && state.remoteAudio?.paused && isRemoteVoiceEngine()) {
       state.remoteAudio.play().catch(() => {});
@@ -3480,19 +3496,19 @@
     return clamp(base * factor, 0.5, 2);
   }
 
-  function recoverVolcQueueAfterError(audio, token) {
+  function recoverVolcQueueAfterError(audio, token, advance = true) {
     if (token !== state.remoteVoiceToken || state.remoteAudio !== audio) return;
     audio.pause();
     state.remoteAudio = null;
     state.remoteVoiceCurrent = null;
     state.remoteVoiceStarting = false;
     updateVoiceProgressStatus('播放异常，继续配音', 2500);
-    playNextVolcCue();
+    if (advance) playNextVolcCue();
   }
 
   async function playNextVolcCue() {
     const video = getVideoEl();
-    if (!state.settings.voiceEnabled || !isRemoteVoiceEngine() || !video || video.paused || video.seeking) return;
+    if (state.settings.enabled === false || !state.settings.voiceEnabled || !isRemoteVoiceEngine() || !video || video.paused || video.seeking) return;
     if (state.remoteAudio || state.remoteVoiceStarting) return;
     let item = null;
     while (state.remoteVoiceQueue.length && !item) {
@@ -3508,12 +3524,12 @@
     state.remoteVoiceStarting = true;
     refreshVoiceProgressStatus();
     let audio = null;
+    let advance = false;
     try {
       const url = await getVolcAudioUrl(item.text);
       if (token !== state.remoteVoiceToken) return;
       if (shouldSkipQueuedVolcCue(item, video)) {
-        state.remoteVoiceStarting = false;
-        playNextVolcCue();
+        advance = true;
         return;
       }
       audio = new Audio(url);
@@ -3531,23 +3547,25 @@
       if (audio.playbackRate > 1) updateVoiceProgressStatus(`智能追赶 ${audio.playbackRate.toFixed(2)}x`, 1800);
       refreshVoiceProgressStatus();
       audio.addEventListener('ended', () => {
-        if (token !== state.remoteVoiceToken) return;
+        if (token !== state.remoteVoiceToken || state.remoteAudio !== audio) return;
         state.remoteAudio = null;
         state.remoteVoiceCurrent = null;
+        state.remoteVoiceStarting = false;
         refreshVoiceProgressStatus();
         playNextVolcCue();
       }, { once: true });
       audio.addEventListener('error', () => recoverVolcQueueAfterError(audio, token), { once: true });
       if (!video.paused && !video.seeking) await audio.play();
     } catch (error) {
-      if (token === state.remoteVoiceToken) {
+      if (token === state.remoteVoiceToken && (!audio || state.remoteAudio === audio)) {
         if (error.fatalVoice) {
           updateSetting('voiceEnabled', false);
           showStatus(error.message || '配音已暂停，请检查服务设置。', 8000);
           return;
         }
         if (audio) {
-          recoverVolcQueueAfterError(audio, token);
+          recoverVolcQueueAfterError(audio, token, false);
+          advance = true;
           return;
         }
         state.remoteAudio = null;
@@ -3555,10 +3573,13 @@
         state.remoteVoiceStarting = false;
         updateVoiceProgressStatus('本句跳过，继续配音', 2500);
         showStatus(error.message || '火山语音播放失败', 5000);
-        playNextVolcCue();
+        advance = true;
       }
     } finally {
-      if (token === state.remoteVoiceToken) state.remoteVoiceStarting = false;
+      if (token === state.remoteVoiceToken && (!audio || state.remoteAudio === audio || advance)) {
+        state.remoteVoiceStarting = false;
+        if (advance) playNextVolcCue();
+      }
     }
   }
 
@@ -3643,9 +3664,7 @@
     refreshVoiceProgressStatus();
   }
 
-  function reloadCurrentVideo(force = false) {
-    const videoId = getVideoId();
-    if (!videoId) return;
+  function resetVideoState(videoId) {
     stopSyncLoop();
     invalidateVideoCache();
     state.videoId = videoId;
@@ -3659,7 +3678,12 @@
     cancelSpeech();
     state.loadToken += 1;
     setCaption(null);
-    state._lastRouteKey = '';
+  }
+
+  function reloadCurrentVideo(force = false) {
+    const videoId = getVideoId();
+    if (!videoId) return;
+    resetVideoState(videoId);
     const token = state.loadToken;
     loadCaptions(videoId, token, force).catch(error => {
       if (token !== state.loadToken) return;
@@ -3788,20 +3812,21 @@
   }
 
   function checkRoute() {
-    ensureOverlay();
     const videoId = getVideoId();
-    if (!videoId) return;
-    const routeKey = `${location.pathname}${location.search}::${videoId}`;
-    if (videoId !== state.videoId || routeKey !== state.lastUrl) {
-      state.lastUrl = routeKey;
-      reloadCurrentVideo(false);
-      const video = getVideoEl();
-      if (video && state.videoHooked !== video) hookVideoEvents(video);
-      scheduleRouteCheck(1200);
+    if (!videoId) {
+      if (state.videoId) {
+        resetVideoState('');
+        hookVideoEvents(null);
+      }
       return;
     }
+    ensureOverlay();
+    if (videoId !== state.videoId) {
+      reloadCurrentVideo(false);
+      scheduleRouteCheck(1200);
+    }
     const video = getVideoEl();
-    if (video && state.videoHooked !== video) hookVideoEvents(video);
+    if (state.videoHooked !== video) hookVideoEvents(video);
     if (!state.rafId && state.cues.length) startSyncLoop();
   }
 
@@ -3825,6 +3850,10 @@
   }
 
   function init() {
+    if (!document.documentElement) {
+      document.addEventListener('DOMContentLoaded', init, { once: true });
+      return;
+    }
     if (document.documentElement.dataset[SCRIPT_DATA_KEY]) return;
     document.documentElement.dataset[SCRIPT_DATA_KEY] = '1';
     injectStyle();
