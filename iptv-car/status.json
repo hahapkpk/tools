@@ -1,5 +1,5 @@
 {
-  "updated_at_utc": "2026-11-19T07:29:47+00:00",
+  "updated_at_utc": "2026-11-19T20:41:18+00:00",
   "channel_count": 28,
   "stream_count": 35,
   "priority_channels": {
@@ -135,16 +135,16 @@
   "verification": {
     "verified_entries": 4,
     "unverified_fallback_entries": 31,
-    "rejected_candidates": 155,
-    "candidate_urls": 159,
+    "rejected_candidates": 154,
+    "candidate_urls": 158,
     "rejected_reasons": {
-      "fetch_error": 77,
-      "slow": 48,
-      "segment_failed": 23,
-      "high_latency": 2,
+      "fetch_error": 87,
+      "slow": 47,
+      "segment_failed": 14,
       "http_403": 2,
       "http_500": 2,
-      "not_live": 1
+      "not_live": 1,
+      "high_latency": 1
     },
     "min_speed_kib_s": 280,
     "max_start_latency_s": 4,
@@ -153,12 +153,12 @@
   "sources": [
     {
       "source": "OrangeWay520",
-      "downloaded": 432,
+      "downloaded": 434,
       "status": "ok"
     },
     {
       "source": "Lightconer",
-      "downloaded": 118,
+      "downloaded": 117,
       "status": "ok"
     },
     {
