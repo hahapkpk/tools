@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         湖北继续教育 · 一键续学
 // @namespace    local.hubeizj.resume-queue
-// @version      1.0.1
-// @description  整理当前课程列表的待学课程，通过平台原有的按钮开始或继续学习。
+// @version      1.1.0
+// @description  整理待学课程，通过平台原有按钮续学，并在播放页显示当前课件剩余时长和播放状态。
 // @match        https://hubeizj.chinamde.cn/me/courses*
+// @match        https://hubeizj.chinamde.cn/play*
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/hubeizj-resume-queue.user.js
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/hubeizj-resume-queue.user.js
 // @run-at       document-idle
@@ -20,7 +21,13 @@
   const visible = (element) => Boolean(element?.isConnected && element.getClientRects().length &&
     !element.closest('[hidden], [inert], [aria-hidden="true"]') &&
     getComputedStyle(element).visibility === 'visible');
-  const lists = () => Array.from(document.querySelectorAll(select('MyCourses_course_list'))).filter(visible);
+  const onRoute = (path) => location.pathname === path || location.pathname === `${path}/`;
+  const onNavigation = (update) => {
+    window.navigation?.addEventListener('currententrychange', update);
+    window.addEventListener('popstate', update);
+  };
+  const lists = () => onRoute('/me/courses')
+    ? Array.from(document.querySelectorAll(select('MyCourses_course_list'))).filter(visible) : [];
 
   function readEntry(card) {
     const button = card.querySelector(select('Course_continue'));
@@ -126,5 +133,65 @@
   let timer = null;
   observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true,
     attributeFilter: ['class', 'style', 'disabled', 'aria-disabled', 'aria-hidden', 'hidden', 'inert', 'title'] });
+  onNavigation(refresh);
   refresh();
+
+  const player = document.createElement('aside');
+  player.id = 'hubeizj-player-status';
+  player.hidden = true;
+  const playerRoot = player.attachShadow({ mode: 'open' });
+  playerRoot.innerHTML = `
+    <style>
+      :host{position:fixed;right:16px;bottom:16px;z-index:1000;width:min(280px,calc(100vw - 32px));font:14px/1.5 system-ui,sans-serif;color:#172c43}
+      :host([hidden]){display:none}
+      details{background:#fff;border:1px solid #a9c5db;border-radius:10px;box-shadow:0 4px 20px #17334930;padding:9px 12px}
+      summary{cursor:pointer;font-weight:650}p{margin:6px 0}a{color:#15527f}
+    </style>
+    <details open>
+      <summary>课件播放状态</summary>
+      <p data-remaining></p>
+      <p role="status"></p>
+      <a href="/me/courses/">返回我的课程</a>
+    </details>`;
+  document.body.append(player);
+  const remaining = playerRoot.querySelector('[data-remaining]');
+  const playback = playerRoot.querySelector('[role="status"]');
+  const mediaEvents = ['loadstart', 'emptied', 'loadedmetadata', 'durationchange', 'timeupdate', 'seeking',
+    'seeked', 'pause', 'playing', 'waiting', 'ended', 'error'];
+  let media = null;
+  let buffering = false;
+  const updateText = (node, value) => { if (node.textContent !== value) node.textContent = value; };
+
+  function showPlayback(event) {
+    if (!media) return;
+    if (event?.type === 'waiting') buffering = true;
+    else if (['playing', 'pause', 'ended', 'loadstart', 'emptied', 'error'].includes(event?.type)) buffering = false;
+
+    const { duration, currentTime, ended, paused, error } = media;
+    const seconds = Number.isFinite(duration) && duration > 0 && Number.isFinite(currentTime)
+      ? Math.ceil(Math.max(0, duration - currentTime)) : null;
+    const clock = seconds === null ? '未知' : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+    updateText(remaining, `本课件剩余（按 1×）：${clock}`);
+    updateText(playback, error ? '播放出错，请查看平台提示。'
+      : ended ? '本课件已播完，学习进度以平台为准。'
+      : paused ? '已暂停，请查看播放器或平台提示。'
+      : buffering ? '正在缓冲…' : '播放中');
+  }
+
+  function bindPlayer() {
+    const next = onRoute('/play') ? document.querySelector('#mse video') : null;
+    if (next === media) return;
+    if (media) for (const type of mediaEvents) media.removeEventListener(type, showPlayback);
+    media = next;
+    buffering = false;
+    player.hidden = !media;
+    if (!media) return;
+    for (const type of mediaEvents) media.addEventListener(type, showPlayback);
+    showPlayback();
+  }
+
+  const playerObserver = new MutationObserver(() => bindPlayer());
+  playerObserver.observe(document.body, { childList: true, subtree: true });
+  onNavigation(bindPlayer);
+  bindPlayer();
 })();
