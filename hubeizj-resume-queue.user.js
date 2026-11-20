@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         湖北继续教育 · 一键续学
 // @namespace    local.hubeizj.resume-queue
-// @version      1.1.0
-// @description  整理待学课程，通过平台原有按钮续学，并在播放页显示当前课件剩余时长和播放状态。
+// @version      1.2.0
+// @description  整理待学课程、显示课件播放状态，可在课程列表确认完课后打开下一门。
 // @match        https://hubeizj.chinamde.cn/me/courses*
 // @match        https://hubeizj.chinamde.cn/play*
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/hubeizj-resume-queue.user.js
@@ -29,11 +29,9 @@
   const lists = () => onRoute('/me/courses')
     ? Array.from(document.querySelectorAll(select('MyCourses_course_list'))).filter(visible) : [];
 
-  function readEntry(card) {
+  function readCard(card) {
     const button = card.querySelector(select('Course_continue'));
     const action = text(button);
-    if (!['继续学习', '开始学习'].includes(action) || !visible(button) ||
-        button.closest(':disabled, [aria-disabled="true"]') || getComputedStyle(button).pointerEvents === 'none') return null;
     const heading = card.querySelector(select('Course_courser_title'));
     const label = heading?.querySelector(':scope > span:last-child') ?? heading;
     const title = label?.getAttribute('title')?.trim() || text(label) || text(heading);
@@ -42,17 +40,19 @@
       (node) => text(node).match(/进度\s*[：:]?\s*(\d+(?:\.\d+)?)\s*[%％]/) ?? text(node).match(/^(\d+(?:\.\d+)?)\s*[%％]$/))
       .find(Boolean);
     const percent = progress ? Number(progress[1]) : null;
-    if (percent !== null && percent >= 100) return null;
     return { card, button, title, action, percent };
   }
 
   function scan() {
     const list = lists()[0];
-    const entries = list ? Array.from(list.querySelectorAll(select('Course_course_item')))
-      .filter(visible).map(readEntry).filter(Boolean) : [];
+    const cards = list ? Array.from(list.querySelectorAll(select('Course_course_item')))
+      .filter(visible).map(readCard).filter(Boolean) : [];
+    const entries = cards.filter(({ action, button, percent }) =>
+      ['继续学习', '开始学习'].includes(action) && (percent === null || percent < 100) && visible(button) &&
+      !button.closest(':disabled, [aria-disabled="true"]') && getComputedStyle(button).pointerEvents !== 'none');
     entries.sort((a, b) => Number(b.action === '继续学习') - Number(a.action === '继续学习') ||
       (b.percent ?? -1) - (a.percent ?? -1));
-    return { list, entries };
+    return { list, cards, entries };
   }
 
   const host = document.createElement('aside');
@@ -80,6 +80,7 @@
       <div class="body">
         <p class="scope">只列当前显示的课程，不修改学习进度。</p>
         <button type="button" data-resume disabled>一键续学</button>
+        <p><label><input type="checkbox" data-auto-next> 返回列表后，已完课则打开下一门</label></p>
         <ul aria-label="待学课程"></ul>
         <p role="status" aria-live="polite"></p>
       </div>
@@ -88,26 +89,46 @@
   const resume = root.querySelector('[data-resume]');
   const queue = root.querySelector('ul');
   const status = root.querySelector('[role="status"]');
+  const autoNext = root.querySelector('[data-auto-next]');
+  const autoKey = 'hubeizj.resume-queue.auto-next';
+  let pending = null;
+  try { pending = JSON.parse(sessionStorage.getItem(autoKey)); } catch { /* Storage unavailable. */ }
+  if (!pending || pending.until <= Date.now() || typeof pending.title !== 'string') pending = null;
+  autoNext.checked = Boolean(pending);
   let previous = null;
 
+  function remember(next) {
+    pending = next;
+    try {
+      if (pending) sessionStorage.setItem(autoKey, JSON.stringify(pending));
+      else sessionStorage.removeItem(autoKey);
+    } catch { /* The option still works within the current document. */ }
+  }
+
   function openEntry(entry) {
-    const refreshed = entry && scan().entries.find((current) => current.button === entry.button);
+    const { cards, entries } = scan();
+    const refreshed = entry && entries.find((current) => current.button === entry.button);
     if (!refreshed) {
       refresh();
       status.textContent = '课程入口已变动，请重新选择。';
       return;
     }
     status.textContent = `正在打开：${refreshed.title}。若未跳转，请点击平台原按钮。`;
-    // Keep this synchronous so the site can use the user's click to open its player.
+    const identifiable = refreshed.percent !== null && cards.filter((card) => card.title === refreshed.title).length === 1;
+    remember(autoNext.checked && identifiable ? { title: refreshed.title, until: Date.now() + 6 * 60 * 60 * 1000 } : null);
+    // For a manual click, retain the browser's user activation for native popups.
     refreshed.button.click();
   }
 
   function refresh() {
-    const { list, entries } = scan();
+    const { list, cards, entries } = scan();
     host.hidden = !list;
     resume.disabled = !entries.length;
     if (previous && previous.length === entries.length && entries.every((entry, i) =>
-      ['button', 'title', 'action', 'percent'].every((key) => entry[key] === previous[i][key]))) return;
+      ['button', 'title', 'action', 'percent'].every((key) => entry[key] === previous[i][key]))) {
+      maybeAdvance(cards, entries);
+      return;
+    }
     previous = entries;
     const rows = entries.map((entry) => {
       const row = document.createElement('li');
@@ -123,8 +144,26 @@
     });
     queue.replaceChildren(...rows);
     status.textContent = entries.length ? `当前列表有 ${entries.length} 门可开始或续学。` : '当前列表没有待学课程。';
+    maybeAdvance(cards, entries);
   }
 
+  function maybeAdvance(cards, entries) {
+    if (!autoNext.checked || !pending || document.hidden) return;
+    if (pending.until <= Date.now()) {
+      remember(null);
+      autoNext.checked = false;
+      return;
+    }
+    if (Array.from(document.querySelectorAll('dialog[open], [aria-modal="true"]')).some(visible)) return;
+    const matches = cards.filter(({ title }) => title === pending.title);
+    if (matches.length !== 1 || matches[0].percent !== 100) return;
+    remember(null); // Consume the confirmation before invoking the native action.
+    if (entries.length) openEntry(entries[0]);
+  }
+
+  autoNext.addEventListener('change', () => { if (!autoNext.checked) remember(null); });
+  document.addEventListener('visibilitychange', refresh);
+  window.addEventListener('pageshow', refresh);
   resume.addEventListener('click', () => openEntry(scan().entries[0]));
   const observer = new MutationObserver((records) => {
     if (timer !== null || records.every((record) => record.target === host)) return;
@@ -132,7 +171,7 @@
   });
   let timer = null;
   observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true,
-    attributeFilter: ['class', 'style', 'disabled', 'aria-disabled', 'aria-hidden', 'hidden', 'inert', 'title'] });
+    attributeFilter: ['class', 'style', 'disabled', 'aria-disabled', 'aria-hidden', 'hidden', 'inert', 'title', 'open', 'aria-modal'] });
   onNavigation(refresh);
   refresh();
 
