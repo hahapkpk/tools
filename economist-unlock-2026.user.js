@@ -1,43 +1,44 @@
 // ==UserScript==
-// @name         Economist — 付费墙 → archive.today 存档 (v4)
+// @name         Economist — 付费墙自动跳存档全文 (v5)
 // @namespace    https://github.com/hahapkpk/tools
-// @version      4.0.0
-// @description  经济学人付费墙/配额用尽时，一键跳转到 archive.today 读存档全文（含图片）。不改动原页面任何 DOM。用你自己的浏览器 IP 过存档站验证。
+// @version      5.0.0
+// @description  打开被付费墙限制的经济学人文章后，自动跳转到 archive.today 存档全文（含图片）。可配置延迟/关闭自动跳。不改动原页面 DOM。
 // @author       Seagull
 // @match        *://*.economist.com/*
-// @grant        none
+// @grant        GM_setValue
+// @grant        GM_getValue
 // @run-at       document_idle
 // @license      MIT
 // ==/UserScript==
 
 /*
- * v4 设计（2026-11-21 真实 Chrome 实测）：
- *  - 经济学人 2024 后改为服务端按权限下发正文：匿名/配额用尽时 body 只给 1-2 段，
- *    JWT(fcx_access_state) 服务端签名，客户端伪造无效，删 DOM 变不出未下发的正文。
- *  - 实测可行路径：archive.today 存档。用真实浏览器 IP 打开
- *    archive.today/newest/<url> 时 captcha=false，返回完整存档（含图片）。
- *    例：china/2026/05/04/... 一文在经济学人只给 2 段，存档有 8539 字符全文 + 5 图。
- *  - Freedium 对很新的文章返回 500 render error，故不作主路径。
- *  - 本脚本不碰正文 DOM，只在检测到付费墙时显示一个悬浮按钮；点它跳存档。
- *  - 存档站域名轮换，从存档返回时不重复提示。
+ * v5 = v4 + 自动跳转（用户要"打开页面自动显示全文"）。
+ * 实测（2026-11-21，真实 Chrome + 用户 IP）：
+ *  - 被墙文章 SSR bodyLen<=2 / walled=true；免费账号配额用尽即此状态。
+ *  - archive.today/newest/<url> 会由浏览器自动跟随重定向到带日期戳的存档
+ *    (archive.ph/<14位日期>/<url>)，该页含完整正文+图片，用户 IP 过 CAPTCHA。
+ *  - 直接 fetch newest 中转页只有 11KB JS 壳；带日期戳的 URL 才是 785KB 全文。
+ *    因此用 location.replace 让浏览器跟随重定向最稳，不做纯 fetch 注入。
+ *  - 存档页在 archive.* 域名，不会再次触发本脚本（@match 仅 economist.com）。
+ *
+ * 行为：检测到被墙 → 显示倒计时提示 → 到点自动跳存档 → 可点"留在本页"取消。
+ * 配置：脚本顶部 CONFIG.delay 改延迟秒数；设为 -1 关闭自动跳（退回手动按钮）。
+ * 防打扰：同一次会话里用户点过"留在本页"的文章不再自动跳。
  */
 
 (function () {
   'use strict';
 
-  var ARCHIVE_HOSTS = [
-    'archive.today',
-    'archive.ph',
-    'archive.md',
-    'archive.li',
-    'archive.is'
-  ];
-  var BTN_ID = '__econ_archive_btn__';
-  var NOTE_ID = '__econ_archive_note__';
+  var CONFIG = {
+    delay: 3,          // 自动跳转倒计时（秒）。-1 = 关闭自动跳，只显示手动按钮
+    hosts: ['archive.today', 'archive.ph', 'archive.md', 'archive.li', 'archive.is']
+  };
 
-  function log() { try { console.log('[EconArchive]', ...arguments); } catch (e) {} }
+  var BTN_ID = '__econ_auto_archive__';
+  var STAY_KEY = 'econ_stay_';
 
-  // 从 SSR 判断文章是否被墙：body 段数 <= 2 或 walled=true
+  function log() { try { console.log('[EconAutoArchive]', ...arguments); } catch (e) {} }
+
   function isWalled() {
     var n = document.getElementById('__NEXT_DATA__');
     if (!n) return false;
@@ -48,61 +49,101 @@
     } catch (e) { return false; }
   }
 
-  function cleanUrl() {
-    return location.href.split('?')[0].split('#')[0];
+  function cleanUrl() { return location.href.split('?')[0].split('#')[0]; }
+
+  function articleKey() {
+    try { return STAY_KEY + location.pathname; } catch (e) { return STAY_KEY + cleanUrl(); }
   }
 
-  function openArchive(idx) {
-    var host = ARCHIVE_HOSTS[idx % ARCHIVE_HOSTS.length];
-    var target = 'https://' + host + '/newest/' + cleanUrl();
-    log('opening', target);
-    window.open(target, '_blank', 'noopener');
-    var note = document.getElementById(NOTE_ID);
-    if (note) note.textContent = '已打开存档（' + host + '）；若失败点按钮换域名重试';
+  function stayed() {
+    try { return GM_getValue(articleKey(), false) === true; } catch (e) {
+      try { return sessionStorage.getItem(articleKey()) === '1'; } catch (e2) { return false; }
+    }
   }
 
-  function addButton() {
+  function markStay() {
+    try { GM_setValue(articleKey(), true); } catch (e) {
+      try { sessionStorage.setItem(articleKey(), '1'); } catch (e2) {}
+    }
+  }
+
+  function goArchive() {
+    var target = 'https://' + CONFIG.hosts[0] + '/newest/' + cleanUrl();
+    log('auto redirect ->', target);
+    location.replace(target);
+  }
+
+  function showOverlay() {
     if (document.getElementById(BTN_ID)) return;
+    var box = document.createElement('div');
+    box.id = BTN_ID;
+    box.style.cssText =
+      'position:fixed;bottom:20px;right:20px;z-index:2147483647;' +
+      'font:13px/1.5 system-ui,sans-serif;background:#111;color:#fff;' +
+      'padding:14px 16px;border-radius:8px;box-shadow:0 4px 18px rgba(0,0,0,.4);' +
+      'max-width:300px;';
 
-    var btn = document.createElement('div');
-    btn.id = BTN_ID;
-    btn.style.cssText =
-      'position:fixed;bottom:80px;right:16px;z-index:2147483647;display:flex;flex-direction:column;gap:6px;';
+    var title = document.createElement('div');
+    title.textContent = '此文被付费墙限制';
+    title.style.cssText = 'font-weight:700;margin-bottom:6px;';
 
-    var b = document.createElement('button');
-    b.textContent = '读存档全文';
-    b.title = '跳转到 archive.today 存档版（含图片）';
-    b.style.cssText =
-      'background:#e3120b;color:#fff;border:0;border-radius:6px;padding:11px 16px;' +
-      'font:600 14px system-ui,sans-serif;cursor:pointer;box-shadow:0 3px 12px rgba(0,0,0,.35);';
-    var hostIdx = { i: 0 };
-    b.addEventListener('click', function () {
-      openArchive(hostIdx.i++);
-    });
+    var msg = document.createElement('div');
+    msg.style.cssText = 'font-size:12px;opacity:.85;margin-bottom:10px;';
 
-    var note = document.createElement('div');
-    note.id = NOTE_ID;
-    note.style.cssText =
-      'background:#111;color:#fff;font:11px/1.4 system-ui;padding:6px 9px;border-radius:5px;' +
-      'max-width:200px;opacity:.9;';
-    note.textContent = '此文被付费墙限制，点上方按钮读存档全文';
+    var row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;';
 
-    btn.appendChild(note);
-    btn.appendChild(b);
-    document.body.appendChild(btn);
-    log('button shown, walled article');
+    var now = document.createElement('button');
+    now.textContent = '立即读存档';
+    now.style.cssText =
+      'background:#e3120b;color:#fff;border:0;border-radius:5px;padding:7px 11px;' +
+      'font:600 12px system-ui;cursor:pointer;';
+    now.addEventListener('click', function () { goArchive(); });
+
+    var stay = document.createElement('button');
+    stay.textContent = '留在本页';
+    stay.style.cssText =
+      'background:#333;color:#fff;border:0;border-radius:5px;padding:7px 11px;' +
+      'font:600 12px system-ui;cursor:pointer;';
+    stay.addEventListener('click', function () { markStay(); box.remove(); });
+
+    row.appendChild(now);
+    row.appendChild(stay);
+    box.appendChild(title);
+    box.appendChild(msg);
+    box.appendChild(row);
+    document.body.appendChild(box);
+
+    if (CONFIG.delay < 0) {
+      msg.textContent = '点「立即读存档」看完整全文（含图片）';
+      return;
+    }
+
+    var left = CONFIG.delay;
+    msg.textContent = left + ' 秒后自动跳转存档全文…';
+    var timer = setInterval(function () {
+      left--;
+      if (!document.getElementById(BTN_ID)) { clearInterval(timer); return; }
+      if (left <= 0) { clearInterval(timer); goArchive(); }
+      else msg.textContent = left + ' 秒后自动跳转存档全文…（点「留在本页」取消）';
+    }, 1000);
   }
 
-  // 等 __NEXT_DATA__ 出现再判断；SPA 客户端导航后重新评估
+  // 等 SSR 数据出现再判断；SPA 导航后重新跑
   var checked = false;
   var t = setInterval(function () {
     if (document.getElementById('__NEXT_DATA__')) {
       clearInterval(t);
-      if (isWalled()) addButton();
-      else log('article not walled, no button');
+      if (!checked && isWalled() && !stayed()) {
+        checked = true;
+        log('walled article, scheduling auto-redirect');
+        showOverlay();
+      } else {
+        log('not walled or user chose stay, no redirect');
+      }
     }
   }, 300);
   setTimeout(function () { clearInterval(t); }, 15000);
 
-  log('loaded');
+  log('loaded, delay=', CONFIG.delay);
 })();
