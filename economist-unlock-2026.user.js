@@ -1,34 +1,30 @@
 // ==UserScript==
-// @name         Economist Unlock 2026 — SSR + 内嵌全文兜底版
+// @name         Economist Unlock 2026 — 最小干预版 (v3)
 // @namespace    https://github.com/hahapkpk/tools
-// @version      2.0.0
-// @description  经济学人付费墙解锁：优先从 SSR __NEXT_DATA__ 还原正文；未登录时自动用内嵌全文替换。覆盖文章 Deeper collusion between hostile powers threatens the West。
+// @version      3.0.0
+// @description  经济学人付费墙解锁：登录态下完全不碰页面（原生已显示全文+图片）；仅匿名态才用内嵌全文补全。最大限度保留原版界面。
 // @author       Seagull
 // @match        *://*.economist.com/*
-// @grant        GM_xmlhttpRequest
-// @connect      economist.com
-// @connect      r.jina.ai
-// @connect      archive.today
-// @connect      archive.ph
+// @grant        none
 // @run-at       document_idle
 // @license      MIT
 // ==/UserScript==
 
 /*
- * v2.0 实测背景（2026-11-21）：
- *  - 未登录账号：__NEXT_DATA__.props.pageProps.content.body 只有 1 段（免费预览），
- *    auth.loggedIn=false / isSubscriber=false —— 光删 DOM 拿不到全文。
- *  - 服务端按登录态决定下发段数，Cloudflare 挡直连/UA 伪装；archive.today 是 CAPTCHA。
- *  - 因此本版策略：① 若 SSR body 段数 > 2（已登录订阅）直接用 SSR 全文；
- *    ② 否则用下方内嵌的全文（来自搜索引擎索引，已合并补全）就地替换正文容器。
- *  - 内嵌全文只对 URL 含 deeper-collusion-between-hostile-powers 的文章生效，
- *    其它文章仍走 SSR + Googlebot/Jina/archive 回退。
+ * v3 设计原则（2026-11-21 真实 Chrome 实测）：
+ *  - 登录免费账号后：pageProps.auth.loggedIn=true / isSubscriber=false，
+ *    walled=false，content.body 有 13 个 block（11 PARAGRAPH + INFOBOX + CROSSHEAD），
+ *    页面原生完整渲染全文 + 8 张图片，零付费墙。此时脚本【一个字都不改 DOM】。
+ *  - 匿名态：body 只有 1 段（预览），才启用内嵌全文补全（本文专属）。
+ *  - 不再用纯文本 innerHTML 覆盖 #content —— 那会毁掉原版排版和图片。
+ *  - 拆 killWallLight/killWall，MutationObserver 只做轻量删除。
+ *  - 状态条默认关闭（SHOW_STATUS=false），需要调试改成 true。
  */
 
 (function () {
   'use strict';
 
-  // ===== 内嵌全文（本文，来自搜索引擎索引快照）=====
+  var SHOW_STATUS = false;           // 默认静默；改 true 显示调试状态条
   var EMBED_MATCH = 'deeper-collusion-between-hostile-powers';
   var EMBED_PARAS = [
   "In February 1945 Winston Churchill, Franklin Roosevelt and Joseph Stalin met in Yalta to decide the planet's future. As their armies pressed for victory against Nazi Germany, the leaders of Britain, America and the Soviet Union carved up Europe into what became communist and capitalist blocs. Historians differ as to whether the Allies could have struck a better deal, but no one doubts that the meeting was historic. Unlike this week's photo opportunity in Shenzhen for Donald Trump, Xi Jinping and Vladimir Putin.",
@@ -82,171 +78,96 @@
   "Democracies must recognise the peril in order to confront it."
 ];
 
-  var CFG = {
-    wallSelectors: [
-      '#tp-regwall', '.layout-article-regwall', '.paywall',
-      '.subscription-benefits', '[class*="regwall"]'
-    ],
-    hostSelectors: [
-      '[data-body-id] > div', '#content', 'article .article__body',
-      '.article-body', 'main article', 'main'
-    ],
-    statusId: '__econ_unlock_status__'
-  };
+  var WALL_SELS = ['#tp-regwall', '.layout-article-regwall', '.paywall', '[class*="regwall"]'];
 
-  function log() { try { console.log('[EconomistUnlock]', ...arguments); } catch (e) {} }
+  function log() { if (SHOW_STATUS) { try { console.log('[EconUnlock]', ...arguments); } catch (e) {} } }
   function esc(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;')
       .replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
-  function setStatus(msg, kind) {
-    var el = document.getElementById(CFG.statusId);
+  function status(msg) {
+    if (!SHOW_STATUS) return;
+    var el = document.getElementById('__econ_status__');
     if (!el) {
       el = document.createElement('div');
-      el.id = CFG.statusId;
-      el.style.cssText = 'position:fixed;bottom:16px;left:16px;z-index:2147483647;' +
-        'font:12px/1.5 system-ui,sans-serif;padding:8px 12px;border-radius:6px;' +
-        'background:#111;color:#fff;box-shadow:0 2px 10px rgba(0,0,0,.35);max-width:460px;';
+      el.id = '__econ_status__';
+      el.style.cssText = 'position:fixed;bottom:12px;left:12px;z-index:2147483647;' +
+        'font:12px system-ui;padding:6px 10px;border-radius:5px;background:#14532d;color:#fff;';
       document.body.appendChild(el);
     }
-    el.style.background = kind === 'err' ? '#7a1f1f' : (kind === 'ok' ? '#14532d' : '#111');
-    el.textContent = '[EconomistUnlock] ' + msg;
+    el.textContent = '[EconUnlock] ' + msg;
   }
 
   function killWallLight() {
-    CFG.wallSelectors.forEach(function (sel) {
-      try { document.querySelectorAll(sel).forEach(function (el) { el.remove(); }); } catch (e) {}
+    WALL_SELS.forEach(function (sel) {
+      try { document.querySelectorAll(sel).forEach(function (e) { e.remove(); }); } catch (e) {}
     });
     document.documentElement.style.overflow = 'auto';
     document.body.style.overflow = 'auto';
   }
-  function killWall() {
-    killWallLight();
+
+  function readSSR() {
+    var n = document.getElementById('__NEXT_DATA__');
+    if (!n) return null;
     try {
-      document.querySelectorAll('body *').forEach(function (el) {
-        var st = getComputedStyle(el);
-        if ((st.position === 'fixed' || st.position === 'absolute') &&
-            parseFloat(st.zIndex) > 100 &&
-            (st.backdropFilter !== 'none' || st.filter.indexOf('blur') >= 0)) {
-          el.style.display = 'none';
-        }
-      });
-    } catch (e) {}
+      var pp = JSON.parse(n.textContent).props.pageProps;
+      return { body: (pp.content && pp.content.body) || [], auth: pp.auth || {}, walled: pp.walled };
+    } catch (e) { return null; }
   }
 
   function findHost() {
-    for (var i = 0; i < CFG.hostSelectors.length; i++) {
-      var el = document.querySelector(CFG.hostSelectors[i]);
-      if (el) return el;
+    var sels = ['[data-body-id] > div', '#content', 'article .article__body', '.article-body', 'main article', 'main'];
+    for (var i = 0; i < sels.length; i++) {
+      var e = document.querySelector(sels[i]);
+      if (e) return e;
     }
     return null;
   }
 
-  function injectParagraphs(paras, source) {
+  // 匿名态补全：用内嵌全文，但尽量保留原版样式类，图片用占位说明（内嵌源无图片 URL）
+  function embedFulltext() {
     var host = findHost();
-    if (!host) { setStatus('未找到正文容器，注入失败', 'err'); return false; }
-    killWall();
-    var html = paras.map(function (p) {
-      // 纯文本段落；首段保留 original 的 initial-cap 效果可省略
+    if (!host) { status('未找到正文容器，跳过'); return; }
+    // 只在正文明显被截断（段落 < 5）时才补全，避免重复执行
+    if (host.querySelectorAll('p.article__body-text').length >= 5) {
+      status('正文已完整，无需补全');
+      return;
+    }
+    killWallLight();
+    var html = EMBED_PARAS.map(function (p) {
       return '<p class="article__body-text">' + esc(p) + '</p>';
     }).join('\n');
     host.innerHTML = html;
-    setStatus('已还原 ' + paras.length + ' 段 · 来源: ' + source, 'ok');
-    log('injected', paras.length, 'paras from', source);
-    return true;
+    status('已补全内嵌全文 ' + EMBED_PARAS.length + ' 段（原图需登录查看）');
+    log('embedded', EMBED_PARAS.length, 'paras');
   }
 
-  function parseNextData(html) {
-    try {
-      var m = html.match(/<script[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
-      if (!m) return null;
-      var d = JSON.parse(m[1]);
-      var pp = d && d.props && d.props.pageProps;
-      if (!pp) return null;
-      var content = pp.content || {};
-      var body = Array.isArray(content.body) ? content.body
-        : (Array.isArray(content.text) ? content.text : null);
-      return { body: body, auth: pp.auth || {}, walled: pp.walled };
-    } catch (e) { return null; }
-  }
-
-  function bodyToParas(body) {
-    if (!Array.isArray(body)) return [];
-    var out = [];
-    body.forEach(function (b) {
-      if (!b) return;
-      if (b.type === 'PARAGRAPH' && b.text) out.push(b.text);
-      else if (b.type === 'HEADING' && b.text) out.push(b.text);
-      else if (b.data) out.push(b.data);
-    });
-    return out;
-  }
-
-  function addButton() {
-    if (document.getElementById('__econ_unlock_btn__')) return;
-    var b = document.createElement('button');
-    b.id = '__econ_unlock_btn__';
-    b.textContent = '全文';
-    b.title = '重新执行全文还原';
-    b.style.cssText = 'position:fixed;bottom:70px;right:16px;z-index:2147483647;' +
-      'background:#e3120b;color:#fff;border:0;border-radius:6px;padding:10px 14px;' +
-      'font:600 13px system-ui,sans-serif;cursor:pointer;box-shadow:0 3px 12px rgba(0,0,0,.3);';
-    b.addEventListener('click', function () { boot(true); });
-    document.body.appendChild(b);
-  }
-
-  // 通用文章回退：Googlebot UA -> Jina（仅对非内嵌文章）
-  function fallbackRoutes() {
-    var d = null;
-    var n = document.getElementById('__NEXT_DATA__');
-    if (n) d = parseNextData(n.textContent);
-    if (d && d.body && d.body.length > 2) {
-      injectParagraphs(bodyToParas(d.body), 'SSR（登录态）');
-      return;
-    }
-    GM_xmlhttpRequest({
-      method: 'GET', url: location.href,
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)' },
-      timeout: 20000,
-      onload: function (r) {
-        var dd = parseNextData(r.responseText);
-        if (dd && dd.body && dd.body.length > 2) {
-          injectParagraphs(bodyToParas(dd.body), 'Googlebot UA');
-        } else {
-          setStatus('服务器仅下发预览段；本文无内嵌全文，请登录经济学人账号', 'err');
-        }
-      },
-      onerror: function () { setStatus('回退失败；请登录经济学人账号后刷新', 'err'); }
-    });
-  }
-
-  function boot(force) {
+  function boot() {
+    var ssr = readSSR();
     var isEmbed = location.href.indexOf(EMBED_MATCH) !== -1;
-    var n = document.getElementById('__NEXT_DATA__');
-    var d = n ? parseNextData(n.textContent) : null;
 
-    // 已登录订阅：SSR 全文最权威，优先用
-    if (d && d.body && d.body.length > 2 && (!isEmbed || !force)) {
-      injectParagraphs(bodyToParas(d.body), 'SSR（登录态）');
-      addButton();
+    if (ssr && ssr.body.length > 2) {
+      // 登录态 / SSR 全文已下发：页面原生完整，绝不碰正文 DOM
+      killWallLight();   // 只清可能的残留遮罩（正常为空，无副作用）
+      status('SSR 全文 ' + ssr.body.length + ' block，原生渲染，不干预');
+      log('logged-in / full SSR, no DOM touch, blocks=', ssr.body.length);
       return;
     }
-    // 本文且未登录：直接用内嵌全文（100% 出全文，不依赖网络）
     if (isEmbed) {
-      injectParagraphs(EMBED_PARAS, '内嵌全文快照');
-      addButton();
+      embedFulltext();   // 仅匿名态 + 本文
       return;
     }
-    // 其它文章：走回退
-    fallbackRoutes();
-    addButton();
+    // 其它文章匿名态：只清遮罩，不伪造内容
+    killWallLight();
+    status('非本文且未登录：仅清理遮罩，请登录查看全文');
   }
 
-  var bootTimer = setInterval(function () {
-    if (document.getElementById('__NEXT_DATA__')) { clearInterval(bootTimer); boot(false); }
+  var t = setInterval(function () {
+    if (document.getElementById('__NEXT_DATA__')) { clearInterval(t); boot(); }
   }, 200);
-  var wallObserver = new MutationObserver(function () { killWallLight(); });
-  wallObserver.observe(document.documentElement, { childList: true, subtree: true });
-  setTimeout(function () { clearInterval(bootTimer); addButton(); }, 15000);
+  setTimeout(function () { clearInterval(t); killWallLight(); }, 15000);
+
+  // 轻量墙清理：SPA 导航后若再出现遮罩，只删元素不重排正文
+  new MutationObserver(killWallLight).observe(document.documentElement, { childList: true, subtree: true });
   log('loaded');
 })();
