@@ -1,7 +1,7 @@
 {
-  "updated_at_utc": "2026-11-20T20:25:24+00:00",
-  "channel_count": 28,
-  "stream_count": 34,
+  "updated_at_utc": "2026-11-21T07:13:39+00:00",
+  "channel_count": 26,
+  "stream_count": 32,
   "priority_channels": {
     "CCTV-1": {
       "verified": 0,
@@ -21,11 +21,11 @@
     },
     "CCTV-4": {
       "verified": 0,
-      "unverified_fallback": 1
+      "unverified_fallback": 0
     },
     "CCTV-5": {
       "verified": 0,
-      "unverified_fallback": 1
+      "unverified_fallback": 0
     },
     "CCTV-5+": {
       "verified": 0,
@@ -134,17 +134,18 @@
   },
   "verification": {
     "verified_entries": 4,
-    "unverified_fallback_entries": 30,
-    "rejected_candidates": 153,
-    "candidate_urls": 157,
+    "unverified_fallback_entries": 28,
+    "rejected_candidates": 107,
+    "candidate_urls": 111,
     "rejected_reasons": {
-      "fetch_error": 83,
-      "slow": 53,
+      "fetch_error": 79,
       "segment_failed": 11,
+      "slow": 10,
       "http_403": 2,
       "http_500": 2,
+      "high_latency": 1,
       "not_live": 1,
-      "high_latency": 1
+      "timeout": 1
     },
     "min_speed_kib_s": 280,
     "max_start_latency_s": 4,
@@ -153,12 +154,12 @@
   "sources": [
     {
       "source": "OrangeWay520",
-      "downloaded": 381,
+      "downloaded": 435,
       "status": "ok"
     },
     {
       "source": "Lightconer",
-      "downloaded": 121,
+      "downloaded": 53,
       "status": "ok"
     },
     {
