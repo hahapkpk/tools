@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         X Element Blocker
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.5.3
+// @version      1.5.4
 // @description  在 X.com 上通过点选元素来屏蔽不想要的区域，类似 uBlock 的自定义屏蔽功能
 // @author       hahapkpk
 // @match        https://x.com/*
 // @match        https://twitter.com/*
+// @downloadURL  https://cdn.jsdelivr.net/gh/hahapkpk/tools@main/x-element-blocker.user.js
+// @updateURL    https://cdn.jsdelivr.net/gh/hahapkpk/tools@main/x-element-blocker.user.js
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_registerMenuCommand
@@ -1384,8 +1386,58 @@
   }
 
   // ─── 面板显隐 ────────────────────────────────────────────────────────────────
+  function panelDebugInfo(panel) {
+    const cs = panel ? getComputedStyle(panel) : null;
+    const rect = panel ? panel.getBoundingClientRect() : null;
+    return {
+      version: (typeof GM_info !== 'undefined' && GM_info.script) ? GM_info.script.version : '?',
+      booted: document.documentElement.dataset.xebBooted || '(未初始化)',
+      exists: !!panel,
+      inDom: panel ? document.body.contains(panel) : false,
+      hiddenClass: panel ? panel.classList.contains('xeb-hidden') : null,
+      display: cs ? cs.display : null,
+      visibility: cs ? cs.visibility : null,
+      opacity: cs ? cs.opacity : null,
+      zIndex: cs ? cs.zIndex : null,
+      position: cs ? cs.position : null,
+      rect: rect ? { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) } : null,
+      fab: !!document.getElementById('xeb-toggle-fab'),
+      rules: rules.length
+    };
+  }
+
+  /** Last resort: make sure the panel is actually on screen. */
+  function forceVisible(panel) {
+    panel.style.setProperty('display', 'block', 'important');
+    panel.style.setProperty('visibility', 'visible', 'important');
+    panel.style.setProperty('opacity', '1', 'important');
+    panel.style.setProperty('position', 'fixed', 'important');
+    panel.style.setProperty('z-index', '2147483647', 'important');
+    panel.style.setProperty('transform', 'none', 'important');
+    const r = panel.getBoundingClientRect();
+    const offScreen = !r.width || !r.height || r.top < 0 || r.left < 0
+      || r.right > window.innerWidth + 1 || r.bottom > window.innerHeight + 1;
+    if (offScreen) {
+      panel.style.setProperty('top', '72px', 'important');
+      panel.style.setProperty('left', 'auto', 'important');
+      panel.style.setProperty('right', '16px', 'important');
+      panel.style.setProperty('max-height', 'calc(100vh - 96px)', 'important');
+    }
+  }
+
   function togglePanel(show, opts = {}) {
     panelVisible = show;
+
+    // Self-heal: a panel that failed to build (or was removed) must not make the
+    // menu command silently do nothing.
+    if (!document.getElementById('xeb-panel')) {
+      try { buildPanel(); } catch (e) {
+        console.error('[XEB] buildPanel failed', e);
+        alert('X Element Blocker: 面板创建失败\n' + e.message);
+        return;
+      }
+    }
+
     const panel = document.getElementById('xeb-panel');
     const fab = document.getElementById('xeb-toggle-fab');
     if (!panel) return;
@@ -1400,9 +1452,28 @@
 
     if (panelVisible) {
       panel.classList.remove('xeb-hidden');
-      renderRules();
+      try { renderRules(); } catch (e) { console.error('[XEB] renderRules failed', e); }
+      forceVisible(panel);
+      if (!opts.silent && !opts.noCheck) {
+        const rect = panel.getBoundingClientRect();
+        const cs = getComputedStyle(panel);
+        if (!document.body.contains(panel) || cs.display === 'none'
+            || cs.visibility === 'hidden' || cs.opacity === '0'
+            || rect.width < 40 || rect.height < 40) {
+          const info = panelDebugInfo(panel);
+          console.warn('[XEB] panel not visible', info);
+          alert('X Element Blocker: 面板存在但没显示出来，请把这条信息发给我：\n\n'
+            + JSON.stringify(info, null, 2));
+        }
+      }
     } else {
       panel.classList.add('xeb-hidden');
+      panel.style.removeProperty('display');
+      panel.style.removeProperty('visibility');
+      panel.style.removeProperty('opacity');
+      panel.style.removeProperty('z-index');
+      panel.style.removeProperty('position');
+      panel.style.removeProperty('transform');
       if (pickMode) stopPickMode();
       clearPreview();
     }
@@ -1451,11 +1522,17 @@
 
   // ─── 初始化 ──────────────────────────────────────────────────────────────────
   function init() {
-    buildPanel();
-    applyRules();
-    // Restore the last state instead of forcing it closed. The floating button
-    // stays visible either way, so the panel is always reachable.
-    togglePanel(GM_getValue(PANEL_VISIBLE_KEY, false), { silent: true });
+    document.documentElement.dataset.xebBooted = '1';
+    try {
+      buildPanel();
+      applyRules();
+      // Restore the last state instead of forcing it closed. The floating button
+      // stays visible either way, so the panel is always reachable.
+      togglePanel(GM_getValue(PANEL_VISIBLE_KEY, false), { silent: true });
+    } catch (e) {
+      document.documentElement.dataset.xebBooted = 'error: ' + e.message;
+      console.error('[XEB] init failed', e);
+    }
   }
 
   if (document.readyState === 'loading') {
