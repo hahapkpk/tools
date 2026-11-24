@@ -1,44 +1,126 @@
 // ==UserScript==
 // @name         X Viral Monitor Lite
 // @namespace    local.codex.x-viral-monitor-lite
-// @version      0.1.1
+// @version      0.2.6
 // @description  X timeline velocity badges, bookmark counts, and copy tweet as Markdown. No image viewer.
 // @match        https://x.com/*
 // @match        https://pro.x.com/*
 // @run-at       document-start
 // @grant        unsafeWindow
+// @homepageURL  https://github.com/hahapkpk/tools
+// @supportURL   https://github.com/hahapkpk/tools/issues
+// @downloadURL  https://cdn.jsdelivr.net/gh/hahapkpk/tools@main/x-viral-monitor-lite.user.js
+// @updateURL    https://cdn.jsdelivr.net/gh/hahapkpk/tools@main/x-viral-monitor-lite.user.js
 // @license      MIT
 // ==/UserScript==
+
+/*
+ * PAGE STRUCTURE (reverse-engineered 2026-11 against the XDS / Base UI redesign).
+ * X removed every data-testid from tweet DOM, dropped the <time> element, and
+ * renamed the class system to the Tailwind-v4 XDS tokens. Everything below is
+ * what the redesign actually renders; keep this block in sync when it rots.
+ *
+ *   tweet root      article  (must contain [data-engagement-action="share"];
+ *                             bare `article` also matches sidebar/who-to-follow)
+ *   header row      .x-middot-group  ->  parentElement  (flex row, justify-between)
+ *   display name    .x-middot-group a[href^="/"]  (first, wraps a bold div)
+ *   handle          .x-middot-group a[href^="/"]  (second, text "@name")
+ *   caret           button[aria-label="更多"] / [aria-label="More"]
+ *   tweet text      div.whitespace-pre-wrap.wrap-anywhere[lang]
+ *   date link       a[href*="/status/<id>"]  whose text is a relative time
+ *                   ("8小时", "3天", "2月5日"); NO <time datetime> anymore
+ *   action bar      [role="group"][aria-label="8 回复、12 点赞、9 书签、2465 次观看"]
+ *     reply         [data-engagement-action="reply"]  (an <a href="/compose/post?in_reply_to=ID">)
+ *     repost        [data-engagement-action="retweet"]
+ *     like          [data-engagement-action="like"]
+ *     bookmark      NO data-engagement-action -> button[aria-label="书签"] / "Bookmark" /
+ *                   "已添加书签" / "Remove bookmark"
+ *     share         [data-engagement-action="share"]
+ *   share menu      [role="menu"][data-slot="xds-menu-content"]
+ *     item          [role="menuitem"][data-slot="xds-menu-item"]
+ *                   structure: <span.icon> <svg> </span> <div.label>TEXT</div>
+ *                   (label is the LAST child div, NOT the first span)
+ *
+ * DATA SOURCES
+ *   primary   GraphQL, hooked via unsafeWindow.fetch / XHR.
+ *             NOTE: the endpoint moved from x.com/i/api/graphql/<hash>/<op> to
+ *             api.x.com/graphql/<hash>/<op>. GRAPHQL_RE matches both.
+ *             The tweet object was ALSO restructured (verified 2026-11):
+ *               legacy.created_at        -> details.created_at_ms  (epoch ms)
+ *               legacy.full_text         -> details.full_text
+ *               legacy.favorite_count    -> counts.favorite_count
+ *               legacy.retweet_count     -> counts.retweet_count
+ *               legacy.reply_count       -> counts.reply_count
+ *               legacy.bookmark_count    -> counts.bookmark_count
+ *               legacy.entities.urls     -> url_entities[]
+ *               legacy.extended_entities.media -> media_entities2[]
+ *               core.user_results.result.legacy.{name,screen_name}
+ *                                        -> ...result.core.{name,screen_name}
+ *               note_tweet.note_tweet_results.result.text  (unchanged, long posts)
+ *             legacy.entities is now nearly empty ({lang, conversation_id_str,
+ *             entities}), so never read counters from it on XDS payloads.
+ *   fallback  DOM only. Views/counts come from the action-group aria-label;
+ *             createdAt is parsed from the relative date text (low precision).
+ *             DOM data is merged with fillOnly, so it can never overwrite the
+ *             authoritative GraphQL fields.
+ */
 
 (() => {
   'use strict';
 
   const SCRIPT_ID = 'x-viral-monitor-lite';
   const DEBUG = false;
-  const GRAPHQL_RE = /\/i\/api\/graphql\//;
+  // X moved GraphQL from x.com/i/api/graphql/<hash>/<op> to api.x.com/graphql/<hash>/<op>
+  // (verified 2026-11 against the XDS frontend). Match both, plus the legacy form.
+  const GRAPHQL_RE = /\/(?:i\/api\/)?graphql\//;
   const MSG = `${SCRIPT_ID}:graphql`;
   const pageWindow = typeof unsafeWindow === 'undefined' ? window : unsafeWindow;
   const thresholds = { trending: 1000, viral: 10000 };
   const tweetDataStore = new Map();
   let lastShareContext = null;
   let renderTimer = 0;
-  const debugState = pageWindow.__xvlLiteDebug = pageWindow.__xvlLiteDebug || {
-    version: '0.1.1',
-    renderCount: 0,
-    articlesSeen: 0,
-    badgesRendered: 0,
-    bookmarkCountsRendered: 0,
-    lastError: null,
-  };
+  let netPayloads = 0;
+
+  // Diagnostic breadcrumb so a broken data path is visible instead of silent.
+  function markDiag() {
+    try {
+      document.documentElement.dataset.xvlNet = String(netPayloads);
+      document.documentElement.dataset.xvlTweets = String(tweetDataStore.size);
+    } catch (_) {}
+  }
 
   const log = (...args) => DEBUG && console.log(`[${SCRIPT_ID}]`, ...args);
+
+  // ---- XDS selectors (single source of truth) -------------------------------
+  const SEL = {
+    tweet: 'article',
+    share: '[data-engagement-action="share"]',
+    header: '.x-middot-group',
+    caret: 'button[aria-label="更多"], button[aria-label="More"]',
+    text: '.whitespace-pre-wrap.wrap-anywhere[lang]',
+    group: '[role="group"]',
+    engagement: '[data-engagement-action]',
+    reply: '[data-engagement-action="reply"]',
+    bookmark: [
+      '[data-engagement-action="bookmark"]',
+      'button[aria-label="书签"]', 'button[aria-label="Bookmark"]',
+      'button[aria-label="已添加书签"]', 'button[aria-label="已加入书签"]',
+      'button[aria-label="Remove bookmark"]', 'button[aria-label="Remove Bookmark"]',
+      'button[aria-label^="从书签"]',
+    ].join(', '),
+    menu: '[role="menu"]',
+    menuItem: '[role="menuitem"]',
+    ownBadge: '.xvl-badge, .xvm-badge',
+    ownBookmark: '.xvl-bookmark-count',
+    ownMenuItem: '.xvl-copy-md-item, .xvm-copy-md-item',
+  };
 
   function injectStyles() {
     if (document.getElementById(`${SCRIPT_ID}-style`)) return;
     const style = document.createElement('style');
     style.id = `${SCRIPT_ID}-style`;
     style.textContent = `
-.xvl-badge {
+.${SCRIPT_ID}-badge, .xvl-badge {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -64,6 +146,8 @@
   color: rgb(83, 100, 113);
   font: inherit;
   line-height: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
 .xvl-copy-md-source {
   display: block;
@@ -95,6 +179,7 @@
     document.documentElement.appendChild(style);
   }
 
+  // ---- network hook (page main world via unsafeWindow) -----------------------
   function installNetworkHook() {
     if (pageWindow.__xvlNetworkHookInstalled) return;
     pageWindow.__xvlNetworkHookInstalled = true;
@@ -141,7 +226,9 @@
 
   window.addEventListener('message', (event) => {
     if (event.source !== window || event.data?.type !== MSG) return;
+    netPayloads += 1;
     scanForTweets(event.data.payload);
+    markDiag();
   });
 
   function scanForTweets(root) {
@@ -174,56 +261,123 @@
     if (changed) scheduleRender();
   }
 
-  function mergeTweetData(id, patch) {
+  function mergeTweetData(id, patch, opts = {}) {
     const prev = tweetDataStore.get(id) || {};
-    tweetDataStore.set(id, { ...prev, ...patch, urlMap: { ...(prev.urlMap || {}), ...(patch.urlMap || {}) } });
+    let next;
+    if (opts.fillOnly) {
+      // DOM fallback must never clobber authoritative GraphQL fields: DOM text is
+      // truncated at "显示更多" and its createdAt is relative-time rounded.
+      next = { ...patch };
+      for (const [k, v] of Object.entries(prev)) {
+        const empty = v === undefined || v === null || v === '';
+        if (!empty) next[k] = v;
+      }
+    } else {
+      next = { ...prev, ...patch };
+    }
+    next.urlMap = { ...(prev.urlMap || {}), ...(patch.urlMap || {}) };
+    tweetDataStore.set(id, next);
   }
 
   function extractTweetData(result) {
     const tweet = result?.tweet || result;
-    const legacy = tweet?.legacy;
-    if (!legacy || legacy.promotedMetadata || tweet.promotedMetadata) return null;
+    if (!tweet) return null;
+    const legacy = tweet.legacy || {};
+    const details = tweet.details || {};
+    const counts = tweet.counts || {};
+    const note = tweet.note_tweet?.note_tweet_results?.result;
 
+    if (legacy.promotedMetadata || tweet.promotedMetadata) return null;
+
+    // Retweet wrapper (legacy schema only; the XDS schema inlines the original).
     const rtResult = legacy.retweeted_status_result?.result;
     if (rtResult) return extractTweetData(rtResult);
 
-    const viewCount = Number.parseInt(tweet.views?.count || '0', 10) || 0;
     const user = tweet.core?.user_results?.result || tweet.user_results?.result || {};
     const userLegacy = user.legacy || {};
-    const tweetId = legacy.id_str || tweet.rest_id;
-    const note = tweet.note_tweet?.note_tweet_results?.result;
+    const userCore = user.core || {};
+
+    const tweetId = tweet.rest_id || tweet.id || legacy.id_str;
+    if (!tweetId) return null;
+
+    // created_at: XDS ships epoch milliseconds in details.created_at_ms;
+    // the pre-XDS schema used a "Wed Oct 05 ..." string in legacy.created_at.
+    const createdMs = Number(details.created_at_ms) || 0;
+    const createdAt = createdMs ? new Date(createdMs).toISOString() : (legacy.created_at || '');
+
+    const viewRaw = tweet.views?.count ?? legacy.ext_views?.count ?? '0';
+    const viewCount = Number.parseInt(viewRaw, 10) || 0;
+    const num = (...vals) => {
+      for (const v of vals) if (v !== undefined && v !== null) return Number(v) || 0;
+      return 0;
+    };
+
     const urlMap = {};
-
     const normalizeExpanded = (raw) => raw ? raw.replace(/^https:\/\/twitter\.com\//, 'https://x.com/') : raw;
-    [...(legacy.entities?.urls || []), ...(note?.entity_set?.urls || [])].forEach((u) => {
-      if (u?.url && u.expanded_url) urlMap[u.url] = normalizeExpanded(u.expanded_url);
-    });
+    const pushUrls = (list) => {
+      for (const u of list || []) {
+        if (u?.url && u.expanded_url) urlMap[u.url] = normalizeExpanded(u.expanded_url);
+      }
+    };
+    pushUrls(tweet.url_entities);          // XDS
+    pushUrls(legacy.entities?.urls);       // pre-XDS
+    pushUrls(note?.entity_set?.urls);      // long-post entities
 
-    for (const m of legacy.extended_entities?.media || legacy.entities?.media || []) {
-      if (!m?.url) continue;
+    // Media: XDS keeps them in media_entities2, pre-XDS in entities/extended_entities.
+    const mediaList = [
+      ...(tweet.media_entities2 || []),
+      ...(legacy.extended_entities?.media || []),
+      ...(legacy.entities?.media || []),
+    ];
+    for (const m of mediaList) {
+      if (!m) continue;
+      const shortUrl = m.url || m.expanded_url;
+      if (!shortUrl) continue;
+      const full = m.media_url_https || m.media_url || '';
       if (m.type === 'photo') {
-        urlMap[m.url] = `![](${upgradeMediaUrl(m.media_url_https || m.media_url || '')})`;
+        urlMap[shortUrl] = `![](${upgradeMediaUrl(full)})`;
       } else if (m.type === 'video' || m.type === 'animated_gif') {
         const mp4 = [...(m.video_info?.variants || [])]
           .filter((v) => v.content_type === 'video/mp4')
           .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
-        urlMap[m.url] = `[video](${mp4?.url || m.media_url_https || ''})`;
+        urlMap[shortUrl] = `[video](${mp4?.url || full})`;
       }
     }
 
     return {
       id: tweetId,
-      screenName: userLegacy.screen_name || user.core?.screen_name || '',
-      author: userLegacy.name || user.core?.name || '',
+      screenName: userCore.screen_name || userLegacy.screen_name || '',
+      author: userCore.name || userLegacy.name || '',
       views: viewCount,
-      likes: legacy.favorite_count || 0,
-      retweets: legacy.retweet_count || 0,
-      replies: legacy.reply_count || 0,
-      bookmarks: legacy.bookmark_count || 0,
-      createdAt: legacy.created_at || '',
-      text: note?.text || legacy.full_text || '',
+      likes: num(counts.favorite_count, legacy.favorite_count),
+      retweets: num(counts.retweet_count, legacy.retweet_count),
+      replies: num(counts.reply_count, legacy.reply_count),
+      bookmarks: num(counts.bookmark_count, legacy.bookmark_count),
+      createdAt,
+      text: note?.text || details.full_text || legacy.full_text || '',
       urlMap,
     };
+  }
+
+  // ---- DOM readers ----------------------------------------------------------
+
+  function isTweetArticle(article) {
+    if (article.tagName !== 'ARTICLE') return false;
+    // XDS markers, with the pre-XDS markers kept as a fallback so an A/B revert
+    // to the old frontend does not silently disable the whole script.
+    return !!(
+      article.querySelector(SEL.share)
+      || article.matches('[data-testid="tweet"]')
+      || article.querySelector('[data-testid="User-Name"]')
+      || article.querySelector('button[data-testid="bookmark"], button[data-testid="removeBookmark"]')
+    );
+  }
+
+  function getTweetArticles(root = document) {
+    if (root instanceof Element && root.matches?.('article')) {
+      return isTweetArticle(root) ? [root] : [];
+    }
+    return [...root.querySelectorAll?.('article') || []].filter(isTweetArticle);
   }
 
   function getTweetIdFromArticle(article) {
@@ -233,22 +387,63 @@
     return main?.getAttribute('href')?.match(/\/status\/(\d+)/)?.[1] || null;
   }
 
+  function findHeaderRow(article) {
+    // The redesign puts the name/handle/time inside .x-middot-group, whose parent
+    // is the flex row that also holds the caret. Never walk further up than that.
+    const middot = article.querySelector(SEL.header);
+    if (middot) {
+      let el = middot.parentElement;
+      for (let i = 0; el && el !== article && i < 3; i++) {
+        const cs = getComputedStyle(el);
+        if (cs.display === 'flex' && cs.flexDirection === 'row') return el;
+        el = el.parentElement;
+      }
+    }
+    // Legacy layout fallback (pre-XDS DOM, still served to some accounts).
+    const caret = article.querySelector('[data-testid="caret"]');
+    el = caret?.parentElement || article.querySelector('[data-testid="User-Name"]')?.parentElement;
+    while (el && el !== article) {
+      const cs = getComputedStyle(el);
+      if (cs.display === 'flex' && cs.flexDirection === 'row' && el.querySelector('[data-testid="User-Name"]')) return el;
+      el = el.parentElement;
+    }
+    return null;
+  }
+
+  function findBookmarkButton(article) {
+    // XDS puts data-engagement-action on the WRAPPER div, not the control, so
+    // resolve wrapper -> inner button. [role=group] scoping avoids picking a
+    // bookmark control inside a quoted tweet.
+    const bar = article.querySelector(SEL.group);
+    const scope = bar || article;
+    const wrap = scope.querySelector('[data-engagement-action="bookmark"]');
+    const fromWrap = wrap?.querySelector('button, [role="button"]') || (wrap?.matches?.('button, [role="button"]') ? wrap : null);
+    if (fromWrap) return fromWrap;
+    const labelled = [...(scope.querySelectorAll('button, [role="button"]') || [])]
+      .find((b) => !b.closest('[data-engagement-action]')?.matches('[data-engagement-action="reply"],[data-engagement-action="retweet"],[data-engagement-action="like"],[data-engagement-action="share"]')
+        && /书签|bookmark/i.test(b.getAttribute('aria-label') || ''));
+    if (labelled) return labelled;
+    // Last resort: the only button in the bar that is not inside any known
+    // engagement wrapper and has no aria-haspopup (that would be the caret/3rd-party).
+    return [...(bar?.querySelectorAll('button') || [])].find((b) => {
+      const w = b.closest('[data-engagement-action]');
+      return !w || w.getAttribute('data-engagement-action') === 'bookmark';
+    }) || null;
+  }
+
   function getArticleFallbackData(article, id) {
-    const groupLabel = article.querySelector('[role="group"]')?.getAttribute('aria-label') || '';
+    const groupLabel = article.querySelector(SEL.group)?.getAttribute('aria-label') || '';
     const counts = parseActionGroupLabel(groupLabel);
-    const time = article.querySelector('time[datetime]')?.getAttribute('datetime') || '';
-    const text = article.querySelector('[data-testid="tweetText"]')?.innerText?.trim() || '';
-    const userName = article.querySelector('[data-testid="User-Name"]');
-    const handleText = [...(userName?.querySelectorAll('a[href^="/"]') || [])]
-      .map((a) => a.textContent.trim())
-      .find((s) => /^@/.test(s)) || '';
-    const author = userName?.querySelector('a[href^="/"]')?.innerText?.split('\n')?.[0]?.trim() || '';
-    const href = article.querySelector('a[href*="/status/"]')?.getAttribute('href') || '';
-    const handleFromUrl = href.match(/^\/([^/]+)\/status\//)?.[1] || '';
+    const dateLink = findDateLink(article);
+    const createdAt = dateLink ? relativeTimeToIso(dateLink.textContent) : '';
+    const text = article.querySelector(SEL.text)?.innerText?.trim()
+      || article.querySelector('[data-testid="tweetText"]')?.innerText?.trim() || '';
+    const { author, screenName } = readAuthor(article);
+    const time = article.querySelector('time[datetime]')?.getAttribute('datetime') || createdAt;
 
     return {
       id,
-      screenName: handleText.replace(/^@/, '') || handleFromUrl,
+      screenName,
       author,
       createdAt: time,
       text,
@@ -256,9 +451,71 @@
     };
   }
 
+  function findDateLink(article) {
+    // The permalink date link is an <a href="/user/status/ID"> whose visible text
+    // is a relative time ("8小时", "3天"), a short date ("11月23日", "Mar 5"),
+    // or an exact time for same-year posts ("2024年3月5日", "10:32").
+    const re = /^\s*(?:\d+\s*(?:秒|分钟|小时|天|周|s|m|h|d|w)\S*|[A-Za-z]{3,}\s+\d{1,2}(?:,?\s*\d{4})?|\d{4}年\d{1,2}月\d{1,2}日|\d{1,2}月\d{1,2}日|\d{1,2}:\d{2})\s*$/i;
+    return [...article.querySelectorAll('a[href*="/status/"]')]
+      .find((a) => !/\/(analytics|photo|video)/.test(a.getAttribute('href') || '') && re.test(a.textContent))
+      || null;
+  }
+
+  function relativeTimeToIso(raw) {
+    // Low-precision fallback only. GraphQL created_at is the precise source and
+    // always wins when present.
+    if (!raw) return '';
+    const s = raw.trim();
+    let m = s.match(/^(\d+)\s*(秒|分钟|小时|天|周|seconds?|minutes?|hours?|days?|weeks?|sec|min|s|m|h|d|w)(?![a-z])/i);
+    if (m) {
+      const n = Number(m[1]);
+      const u = m[2].toLowerCase();
+      const ms = /^(秒|s)/.test(u) ? 1000
+        : /^(分钟|min|m)/.test(u) ? 60000
+        : /^(小时|h)/.test(u) ? 3600000
+        : /^(天|d)/.test(u) ? 86400000
+        : 604800000;
+      return new Date(Date.now() - n * ms).toISOString();
+    }
+    // Absolute short date without a year: assume the current year, and if that
+    // lands in the future, it belongs to the previous year.
+    m = s.match(/^(\d{1,2})月(\d{1,2})日$/) || s.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日$/) || s.match(/^([A-Za-z]{3,})\s+(\d{1,2})(?:,?\s*(\d{4}))?$/);
+    if (m) {
+      const now = new Date();
+      let month; let day; let year;
+      if (m[0].includes('年')) {
+        month = Number(m[2]) - 1; day = Number(m[3]); year = Number(m[1]);
+      } else if (m[0].includes('月')) {
+        month = Number(m[1]) - 1; day = Number(m[2]); year = now.getFullYear();
+      } else {
+        month = new Date(`${m[1]} 1 2000`).getMonth(); day = Number(m[2]); year = m[3] ? Number(m[3]) : now.getFullYear();
+      }
+      if (Number.isNaN(month)) return '';
+      let d = new Date(year, month, day);
+      if (!m[3] && !m[0].includes('年') && d.getTime() > now.getTime()) d = new Date(year - 1, month, day);
+      return d.toISOString();
+    }
+    return '';
+  }
+
+  function readAuthor(article) {
+    const header = article.querySelector(SEL.header) || article.querySelector('[data-testid="User-Name"]');
+    const links = [...(header?.querySelectorAll('a[href^="/"]') || [])];
+    const handleLink = links.find((a) => /^@/.test(a.textContent.trim()));
+    const nameLink = links.find((a) => !/^@/.test(a.textContent.trim()) && a.textContent.trim());
+    const href = article.querySelector('a[href*="/status/"]')?.getAttribute('href') || '';
+    return {
+      screenName: handleLink?.textContent.trim().replace(/^@/, '')
+        || nameLink?.getAttribute('href')?.slice(1).split('/')[0]
+        || href.match(/^\/([^/]+)\/status\//)?.[1] || '',
+      author: nameLink?.textContent.trim().split('\n')[0] || '',
+    };
+  }
+
   function parseActionGroupLabel(label) {
     const out = {};
     if (!label) return out;
+    // XDS zh-CN joins counters with the ideographic 、 (U+3001); older builds used ，or , .
     for (const part of label.split(/[，,、]/).map((s) => s.trim())) {
       const value = parseHumanNumber(part);
       if (!Number.isFinite(value)) continue;
@@ -285,6 +542,8 @@
       : 1;
     return Math.round(n * mult);
   }
+
+  // ---- scoring / formatting (unchanged) ------------------------------------
 
   function computeScore(data) {
     const created = new Date(data.createdAt || 0).getTime();
@@ -325,27 +584,17 @@
   }
 
   function renderAll() {
-    try {
-      injectStyles();
-      debugState.renderCount += 1;
-      debugState.articlesSeen = 0;
-      debugState.badgesRendered = 0;
-      debugState.bookmarkCountsRendered = 0;
-      debugState.lastError = null;
-      for (const article of document.querySelectorAll('article[data-testid="tweet"]')) {
-        debugState.articlesSeen += 1;
-        const id = getTweetIdFromArticle(article);
-        if (!id) continue;
-        const fallback = getArticleFallbackData(article, id);
-        mergeTweetData(id, withoutEmpty(fallback));
-        const data = tweetDataStore.get(id);
-        if (renderBadge(article, data)) debugState.badgesRendered += 1;
-        if (renderBookmarkCount(article, data)) debugState.bookmarkCountsRendered += 1;
-      }
-    } catch (error) {
-      debugState.lastError = String(error?.stack || error);
-      console.error(`[${SCRIPT_ID}] render failed`, error);
+    injectStyles();
+    for (const article of getTweetArticles()) {
+      const id = getTweetIdFromArticle(article);
+      if (!id) continue;
+      const fallback = getArticleFallbackData(article, id);
+      mergeTweetData(id, withoutEmpty(fallback), { fillOnly: true });
+      const data = tweetDataStore.get(id);
+      renderBadge(article, data);
+      renderBookmarkCount(article, data);
     }
+    markDiag();
   }
 
   function withoutEmpty(obj) {
@@ -354,18 +603,20 @@
 
   function renderBadge(article, data) {
     const score = computeScore(data);
-    if (!score) return false;
+    if (!score) return;
     const { velocity } = score;
     const tier = velocity >= thresholds.viral ? 'viral' : velocity >= thresholds.trending ? 'trending' : 'normal';
     const prefix = tier === 'viral' ? '🔥' : tier === 'trending' ? '🚀' : '🌱';
     const headerRow = findHeaderRow(article);
-    if (!headerRow) return false;
+    if (!headerRow) return;
+    if (headerRow.querySelector(':scope > .xvm-badge')) return;
 
     let badge = headerRow.querySelector(':scope > .xvl-badge');
     if (!badge) {
       badge = document.createElement('span');
       badge.className = 'xvl-badge';
-      headerRow.appendChild(badge);
+      const caret = headerRow.querySelector(SEL.caret) || article.querySelector(SEL.caret);
+      headerRow.insertBefore(badge, caret?.parentElement || null);
     }
     badge.className = `xvl-badge xvl-badge--${tier}`;
     badge.dataset.prefix = prefix;
@@ -379,106 +630,122 @@
       `流速: ${formatCompact(velocity)}/h`,
       `爆帖指数: ${score.score}/100`,
     ].join('\n');
-    return true;
-  }
-
-  function findHeaderRow(article) {
-    const caret = article.querySelector('[data-testid="caret"]');
-    let el = caret?.parentElement || article.querySelector('[data-testid="User-Name"]')?.parentElement;
-    while (el && el !== article) {
-      const cs = getComputedStyle(el);
-      if (cs.display === 'flex' && cs.flexDirection === 'row' && el.querySelector('[data-testid="User-Name"]')) return el;
-      el = el.parentElement;
-    }
-    return null;
   }
 
   function renderBookmarkCount(article, data) {
     const count = Number(data.bookmarks || 0);
-    const button = article.querySelector('button[data-testid="bookmark"], button[data-testid="removeBookmark"]');
-    if (!button) return false;
+    const button = findBookmarkButton(article);
+    if (!button) return;
+
+    if (button.querySelector('.xvm-bookmark-count')) return;
 
     let node = button.querySelector('.xvl-bookmark-count');
     if (!count) {
       node?.remove();
-      return false;
+      return;
     }
     if (!node) {
       node = document.createElement('span');
       node.className = 'xvl-bookmark-count';
-      const inner = button.querySelector(':scope > div') || button;
-      inner.appendChild(node);
+      // XDS buttons: <button><span.x-engagement-pill><svg/></span></button>.
+      // Append next to the icon inside the pill so it lines up with the like count.
+      const pill = button.querySelector('.x-engagement-pill') || button.querySelector(':scope > div') || button;
+      pill.appendChild(node);
     }
     node.textContent = formatCompact(count);
     node.title = `${count.toLocaleString()} 书签`;
-    return true;
   }
+
+  // ---- interactions ---------------------------------------------------------
 
   document.addEventListener('click', (event) => {
     const shareButton = event.target.closest?.(
-      'button[aria-label*="分享"], button[aria-label*="Share"], button[aria-label*="共有"], button[aria-label*="share"]'
+      `${SEL.share}, button[aria-label*="分享"], button[aria-label*="Share"], button[aria-label*="共有"], button[aria-label*="share"]`
     );
     if (shareButton) {
-      const article = shareButton.closest('article[data-testid="tweet"]');
-      if (article) lastShareContext = { article, id: getTweetIdFromArticle(article) };
+      const article = shareButton.closest('article');
+      if (article && isTweetArticle(article)) {
+        lastShareContext = { article, id: getTweetIdFromArticle(article) };
+        scheduleMenuInject();
+      }
     }
 
-    const bookmark = event.target.closest?.('button[data-testid="bookmark"], button[data-testid="removeBookmark"]');
-    if (bookmark) {
-      const article = bookmark.closest('article[data-testid="tweet"]');
+    const bookmark = event.target.closest?.('button');
+    if (bookmark && isBookmarkControl(bookmark)) {
+      const article = bookmark.closest('article');
       const id = article && getTweetIdFromArticle(article);
       const data = id && tweetDataStore.get(id);
       if (data) {
-        const isRemoving = bookmark.getAttribute('data-testid') === 'removeBookmark';
+        const isRemoving = /已添加书签|已加入书签|remove/i.test(bookmark.getAttribute('aria-label') || '')
+          || bookmark.getAttribute('aria-pressed') === 'true';
         data.bookmarks = Math.max(0, (data.bookmarks || 0) + (isRemoving ? -1 : 1));
         window.setTimeout(scheduleRender, 100);
       }
     }
   }, true);
 
-  function injectCopyMarkdownItem(menuEl) {
-    if (!lastShareContext?.article?.isConnected) return;
-    if (menuEl.querySelector('.xvl-copy-md-item, .xvm-copy-md-item')) return;
-    const items = menuEl.querySelectorAll('[role="menuitem"]');
-    if (!items.length) return;
+  function isBookmarkControl(el) {
+    if (el.matches('button[data-testid="bookmark"], button[data-testid="removeBookmark"]')) return true;
+    if (el.hasAttribute('data-engagement-action')) return false;
+    const label = el.getAttribute('aria-label') || '';
+    return /书签|bookmark/i.test(label);
+  }
 
-    const nativeItems = [...items].filter((item) => !item.matches(
-      '.xvl-copy-md-item, .xvm-copy-md-item, .xvm-starchart-item'
-    ));
-    const template = nativeItems[nativeItems.length - 1] || items[items.length - 1];
-    const clone = template.cloneNode(true);
-    clone.classList.add('xvl-copy-md-item');
-    clone.removeAttribute('data-testid');
-    clone.querySelectorAll('[data-testid]').forEach((el) => el.removeAttribute('data-testid'));
-    clone.querySelectorAll('.xvl-copy-md-source, .xvm-copy-md-source').forEach((el) => el.remove());
+  // ---- share-menu injection ------------------------------------------------
 
-    const label = [...clone.querySelectorAll('span')]
-      .find((span) => span.children.length === 0 && span.textContent.trim());
-    if (label) {
-      label.textContent = '';
-      const title = document.createElement('span');
-      title.textContent = '复制为 Markdown';
-      const source = document.createElement('span');
-      source.className = 'xvl-copy-md-source';
-      source.textContent = 'X Viral Monitor Lite';
-      label.append(title, document.createElement('br'), source);
-    } else {
-      clone.textContent = '复制为 Markdown';
-    }
+  let menuPollTimer = 0;
 
-    const svg = clone.querySelector('svg');
-    if (svg) {
-      const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      icon.setAttribute('viewBox', '0 0 24 24');
-      icon.setAttribute('width', svg.getAttribute('width') || '18');
-      icon.setAttribute('height', svg.getAttribute('height') || '18');
-      icon.setAttribute('aria-hidden', 'true');
-      icon.style.fill = 'currentColor';
-      icon.innerHTML = '<path d="M3 5h18a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm2 3v8h2v-5l2 3 2-3v5h2V8H9.5L8 10.5 6.5 8H5zm11 0v4h-2l3 4 3-4h-2V8h-2z"/>';
-      svg.replaceWith(icon);
-    }
+  /**
+   * Base UI mounts an EMPTY [role=menu] container first and fills the items in a
+   * later commit, so a MutationObserver callback on the container sees zero
+   * menuitems. Poll until the menu is populated (or 2s elapses) before injecting.
+   */
+  function scheduleMenuInject(menuEl) {
+    if (menuPollTimer) return;
+    const started = Date.now();
+    const tick = () => {
+      menuPollTimer = 0;
+      const menus = menuEl && menuEl.isConnected ? [menuEl] : [...document.querySelectorAll(SEL.menu)];
+      for (const menu of menus) {
+        if (!menu.querySelectorAll(SEL.menuItem).length) continue;
+        if (!isShareMenu(menu)) continue;
+        injectCopyMarkdownItem(menu);
+        return;
+      }
+      if (Date.now() - started > 2000) return;
+      menuPollTimer = window.setTimeout(tick, 80);
+    };
+    tick();
+  }
 
-    clone.addEventListener('click', async (event) => {
+  function buildCopyIcon(refSvg) {
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('viewBox', '0 0 24 24');
+    icon.setAttribute('width', refSvg?.getAttribute('width') || '1.75em');
+    icon.setAttribute('height', refSvg?.getAttribute('height') || '1.75em');
+    icon.setAttribute('aria-hidden', 'true');
+    icon.style.fill = 'currentColor';
+    icon.innerHTML = '<path d="M3 5h18a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm2 3v8h2v-5l2 3 2-3v5h2V8H9.5L8 10.5 6.5 8H5zm11 0v4h-2l3 4 3-4h-2V8h-2z"/>';
+    return icon;
+  }
+
+  /**
+   * Put the icon back and clear text another injector may have dumped into the
+   * icon container. XDS items are <span.icon><svg/></span><div.label>TEXT</div>.
+   */
+  function ensureMenuIcon(item) {
+    const iconBox = [...item.children].find((c) => c.tagName === 'SPAN');
+    if (!iconBox) return;
+    [...iconBox.childNodes].forEach((n) => { if (n.nodeType === 3) n.remove(); });
+    const svg = iconBox.querySelector('svg');
+    if (svg) svg.replaceWith(buildCopyIcon(svg));
+    else iconBox.appendChild(buildCopyIcon());
+  }
+
+  function bindCopyHandler(item) {
+    if (item.dataset.xvlBound === '1') return;
+    item.dataset.xvlBound = '1';
+    item.addEventListener('click', async (event) => {
       event.preventDefault();
       event.stopPropagation();
       const markdown = buildTweetMarkdown(lastShareContext);
@@ -486,20 +753,96 @@
       showToast(ok ? '已复制为 Markdown' : '复制失败', ok ? 'success' : 'error');
       closeMenus();
     });
+  }
+
+  function injectCopyMarkdownItem(menuEl) {
+    if (!lastShareContext?.article?.isConnected) return;
+    const items = [...menuEl.querySelectorAll(SEL.menuItem)];
+    if (!items.length) return;
+
+    // Another tool may already have added a (possibly broken) "复制为 Markdown"
+    // entry. Take that one over instead of stacking a second copy.
+    const foreign = items.find((i) => /复制为\s*Markdown/i.test(i.textContent || ''));
+    if (foreign) {
+      if (foreign.dataset.xvlBound === '1') return;
+      foreign.classList.add('xvl-copy-md-item');
+      ensureMenuIcon(foreign);
+      setMenuItemLabel(foreign, '复制为 Markdown', 'X Viral Monitor Lite');
+      bindCopyHandler(foreign);
+      return;
+    }
+
+    if (menuEl.querySelector(SEL.ownMenuItem)) return;
+
+    const nativeItems = items.filter((item) => !item.matches(`${SEL.ownMenuItem}, .xvm-starchart-item`));
+    const template = nativeItems[nativeItems.length - 1] || items[items.length - 1];
+    const clone = template.cloneNode(true);
+    clone.classList.add('xvl-copy-md-item');
+    clone.removeAttribute('data-testid');
+    clone.removeAttribute('id');
+    clone.removeAttribute('aria-labelledby');
+    clone.querySelectorAll('[data-testid]').forEach((el) => el.removeAttribute('data-testid'));
+    clone.querySelectorAll('.xvl-copy-md-source, .xvm-copy-md-source').forEach((el) => el.remove());
+
+    ensureMenuIcon(clone);
+    setMenuItemLabel(clone, '复制为 Markdown', 'X Viral Monitor Lite');
+    bindCopyHandler(clone);
 
     items[items.length - 1].parentElement.appendChild(clone);
   }
 
+  function setMenuItemLabel(item, title, source) {
+    // 1) XDS: the label is the last direct child <div> of the item.
+    const labelDiv = [...item.children].reverse().find((c) => c.tagName === 'DIV');
+    if (labelDiv) {
+      labelDiv.textContent = '';
+      labelDiv.append(
+        Object.assign(document.createElement('span'), { textContent: title }),
+        document.createElement('br'),
+        Object.assign(document.createElement('span'), { className: 'xvl-copy-md-source', textContent: source }),
+      );
+      return;
+    }
+    // 2) Any descendant div that is not the icon wrapper.
+    const anyDiv = [...item.querySelectorAll('div')].find((d) => !d.querySelector('svg'));
+    if (anyDiv) {
+      anyDiv.textContent = '';
+      anyDiv.append(
+        Object.assign(document.createElement('span'), { textContent: title }),
+        document.createElement('br'),
+        Object.assign(document.createElement('span'), { className: 'xvl-copy-md-source', textContent: source }),
+      );
+      return;
+    }
+    // 3) Legacy flat layout: the leaf span that holds the text.
+    const leaf = [...item.querySelectorAll('span')]
+      .find((span) => span.children.length === 0 && span.textContent.trim());
+    if (leaf) {
+      leaf.textContent = '';
+      leaf.append(
+        Object.assign(document.createElement('span'), { textContent: title }),
+        document.createElement('br'),
+        Object.assign(document.createElement('span'), { className: 'xvl-copy-md-source', textContent: source })
+      );
+      return;
+    }
+    item.textContent = title;
+  }
+
   function isShareMenu(menuEl) {
-    const text = (menuEl.textContent || '').toLowerCase();
-    return /复制链接|复制帖子链接|copy link|copy post link|copy/i.test(text);
+    // Must contain a share-ish native item. Exclude the copied-Markdown item's own
+    // text so our injection never makes a menu look like a share menu.
+    const native = [...menuEl.querySelectorAll(SEL.menuItem)]
+      .filter((i) => !i.matches(SEL.ownMenuItem));
+    const text = native.map((i) => i.textContent).join(' ').toLowerCase();
+    return /复制链接|复制帖子链接|复制帖子|copy link|copy post link|copy post|帖子分享途径|share via/i.test(text);
   }
 
   function buildTweetMarkdown(ctx) {
     const article = ctx?.article;
     const id = ctx?.id || (article && getTweetIdFromArticle(article));
     const fallback = article ? getArticleFallbackData(article, id) : {};
-    const data = { ...(tweetDataStore.get(id) || {}), ...withoutEmpty(fallback) };
+    const data = { ...withoutEmpty(fallback), ...(tweetDataStore.get(id) || {}) };
     const screenName = data.screenName || '';
     const author = data.author || screenName || 'X user';
     const url = screenName && id ? `https://x.com/${screenName}/status/${id}` : location.href;
@@ -512,7 +855,7 @@
       const replacement = /^!\[\]/.test(expanded) || /^\[video\]/.test(expanded) ? `\n\n${expanded}` : expanded;
       body = body.split(shortUrl).join(replacement);
     }
-    body = body.trim() || article?.querySelector('[data-testid="tweetText"]')?.innerText?.trim() || '';
+    body = body.trim() || article?.querySelector(SEL.text)?.innerText?.trim() || '';
 
     const media = article ? collectArticleMediaMarkdown(article, body) : [];
     const parts = [];
@@ -528,7 +871,7 @@
   function collectArticleMediaMarkdown(article, existingText) {
     const out = [];
     const seen = new Set();
-    for (const img of article.querySelectorAll('img[src*="pbs.twimg.com/media"], img[src*="pbs.twimg.com/card_img"]')) {
+    for (const img of article.querySelectorAll('img[src*="pbs.twimg.com/media"], img[src*="pbs.twimg.com/card_img"], img[src*="pbs.twimg.com/amplify_video_thumb"]')) {
       const url = upgradeMediaUrl(img.currentSrc || img.src);
       if (!url || seen.has(url) || existingText.includes(url)) continue;
       seen.add(url);
@@ -589,14 +932,14 @@
       for (const m of mutations) {
         for (const node of m.addedNodes) {
           if (!(node instanceof Element)) continue;
-          if (node.matches?.('article[data-testid="tweet"]') || node.querySelector?.('article[data-testid="tweet"]')) {
+          if (node.matches?.('article') || node.querySelector?.('article')) {
             shouldRender = true;
           }
           const menus = [
-            ...(node.matches?.('[role="menu"]') ? [node] : []),
-            ...(node.querySelectorAll?.('[role="menu"]') || []),
+            ...(node.matches?.(SEL.menu) ? [node] : []),
+            ...(node.querySelectorAll?.(SEL.menu) || []),
           ];
-          menus.filter(isShareMenu).forEach(injectCopyMarkdownItem);
+          menus.forEach(scheduleMenuInject);
         }
       }
       if (shouldRender) scheduleRender();
