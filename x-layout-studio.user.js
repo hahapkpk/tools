@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Layout Studio
 // @namespace    local.codex.x-layout-studio
-// @version      0.3.2
+// @version      0.3.3
 // @description  Drag to resize the X timeline column, reclaim the empty right rail, compact the nav, and declutter the timeline.
 // @match        https://x.com/*
 // @match        https://pro.x.com/*
@@ -13,6 +13,7 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
+// @grant        unsafeWindow
 // @license      MIT
 // ==/UserScript==
 
@@ -895,11 +896,16 @@ div[class*="border-b-[0.5px]"] {
   }
 
   // ---- promoted-post tagging ------------------------------------------------
-  // X labels ads with a small element, e.g. "来自 nordace.com 的广告",
-  // "Promoted by Acme", "Sponsored". The domain may itself be a nested link, so
-  // match on any element whose ENTIRE text is the label (the anchors make it
-  // unambiguous), instead of requiring a childless leaf node.
-  const AD_LABEL = /^(?:来自\s*\S.*?\s*的广告|Promoted(?:\s+by\s+.+)?|Sponsored(?:\s+by\s+.+)?|广告|推广|赞助|Ad)$/i;
+  // X labels ads with a small element. zh variants seen in the wild:
+  //   "来自 nordace.com 的广告"   "已推广"   "推广"   "赞助内容"
+  // en: "Promoted", "Promoted by Acme", "Sponsored", "Ad".
+  // The domain may itself be a nested link, so match on any element whose ENTIRE
+  // text is the label (the anchors make it unambiguous), instead of requiring a
+  // childless leaf node.
+  const AD_LABEL = /^(?:来自\s*\S.*?\s*的广告|已推广|推广|广告|赞助(?:内容)?|Promoted(?:\s+by\s+.+)?|Sponsored(?:\s+by\s+.+)?|Ad(?:vertisement)?)$/i;
+
+  /** Tweet ids the GraphQL payload marked as promoted (authoritative). */
+  const promotedIds = new Set();
 
   /** Nearest timeline cell for an element: a post, else the virtualised row. */
   function adCellOf(el) {
@@ -924,8 +930,26 @@ div[class*="border-b-[0.5px]"] {
     return false;
   }
 
+  /** Tweet id of a timeline cell, read from its permalink. */
+  function cellTweetId(cell) {
+    const link = [...cell.querySelectorAll('a[href*="/status/"]')]
+      .find((a) => !/\/(analytics|photo|video)/.test(a.getAttribute('href') || ''));
+    return link?.getAttribute('href')?.match(/\/status\/(\d+)/)?.[1] || null;
+  }
+
   function tagPromoted() {
     if (!settings.hidePromo) return;
+
+    // 1) API-authoritative: promotedMetadata in the GraphQL response.
+    if (promotedIds.size) {
+      for (const cell of document.querySelectorAll('article')) {
+        if (cell.dataset.xvlPromo) continue;
+        const id = cellTweetId(cell);
+        if (id && promotedIds.has(id)) cell.dataset.xvlPromo = '1';
+      }
+    }
+
+    // 2) DOM labels: catches ads the API payload did not expose.
     // Only look at label-sized elements, then walk up to the cell that owns them.
     for (const el of document.querySelectorAll('div, span, a')) {
       const text = (el.textContent || '').trim();
@@ -935,6 +959,83 @@ div[class*="border-b-[0.5px]"] {
       if (isAdCell(cell)) cell.dataset.xvlPromo = '1';
     }
   }
+
+  // ---- page-world GraphQL hook (promotedMetadata) ---------------------------
+  // The label vocabulary changes between X builds ("来自 x.com 的广告" today,
+  // "已推广" tomorrow, nothing at all for some inventory). promotedMetadata is
+  // set server-side, so it survives every wording change. unsafeWindow is the
+  // page's own fetch; if the grant is unavailable this is simply skipped and the
+  // DOM path above still runs.
+  function collectPromotedIds(root) {
+    const out = [];
+    const seen = new WeakSet();
+    const walk = (o) => {
+      if (!o || typeof o !== 'object' || seen.has(o)) return;
+      seen.add(o);
+      if (o.promotedMetadata) {
+        const id = o.rest_id || o.id || o.legacy?.id_str;
+        if (id) out.push(String(id));
+      }
+      for (const k in o) {
+        if (k !== 'promotedMetadata') walk(o[k]);
+      }
+    };
+    walk(root);
+    return out;
+  }
+
+  function installPromotedHook() {
+    if (typeof unsafeWindow === 'undefined' || !unsafeWindow) return;
+    const pw = unsafeWindow;
+    if (pw.__xlsPromotedHook) return;
+    pw.__xlsPromotedHook = true;
+
+    const post = (payload) => {
+      try { window.postMessage({ __xlsPromoted: payload }, '*'); } catch (_) {}
+    };
+    const interesting = /graphql|Timeline|TweetDetail|SearchTimeline|ListLatest/i;
+
+    try {
+      const original = pw.fetch;
+      pw.fetch = function xlsFetchHook(...args) {
+        const p = original.apply(this, args);
+        try {
+          const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
+          if (interesting.test(url)) {
+            p.then((res) => {
+              try { res.clone().json().then(post).catch(() => {}); } catch (_) {}
+            }).catch(() => {});
+          }
+        } catch (_) {}
+        return p;
+      };
+    } catch (_) {}
+
+    try {
+      const open = pw.XMLHttpRequest?.prototype?.open;
+      if (open) {
+        pw.XMLHttpRequest.prototype.open = function xlsXhrOpen(method, url, ...rest) {
+          this.__xlsUrl = String(url || '');
+          this.addEventListener('load', () => {
+            if (!interesting.test(this.__xlsUrl || '')) return;
+            try { post(JSON.parse(this.responseText)); } catch (_) {}
+          });
+          return open.call(this, method, url, ...rest);
+        };
+      }
+    } catch (_) {}
+  }
+
+  window.addEventListener('message', (event) => {
+    if (event.data?.__xlsPromoted === undefined) return;
+    const ids = collectPromotedIds(event.data.__xlsPromoted);
+    if (!ids.length) return;
+    let added = false;
+    for (const id of ids) {
+      if (!promotedIds.has(id)) { promotedIds.add(id); added = true; }
+    }
+    if (added) tagPromoted();
+  });
 
   // ---- bootstrap ------------------------------------------------------------
   let bootTimer = 0;
@@ -1006,6 +1107,10 @@ div[class*="border-b-[0.5px]"] {
       save();
     });
   }
+
+  // Hook before X's own bundle starts issuing requests, so the very first
+     // timeline payload is inspected.
+  installPromotedHook();
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
