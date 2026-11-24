@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Element Blocker
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.5.2
+// @version      1.5.3
 // @description  在 X.com 上通过点选元素来屏蔽不想要的区域，类似 uBlock 的自定义屏蔽功能
 // @author       hahapkpk
 // @match        https://x.com/*
@@ -997,7 +997,11 @@
   }
 
   function escHtml(s) {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
   }
 
   // ─── 事件绑定 ────────────────────────────────────────────────────────────────
@@ -1240,10 +1244,11 @@
 
   function shouldIgnoreShortcut(e) {
     const el = e.target;
-    if (!el) return false;
-    const tag = el.tagName ? el.tagName.toLowerCase() : '';
+    if (!el || !el.tagName) return false;
+    const tag = el.tagName.toLowerCase();
     if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
-    return el.isContentEditable || !!el.closest('[contenteditable="true"]');
+    if (el.isContentEditable) return true;
+    return typeof el.closest === 'function' ? !!el.closest('[contenteditable="true"]') : false;
   }
 
   // ─── 选取模式鼠标事件 ────────────────────────────────────────────────────────
@@ -1379,22 +1384,31 @@
   }
 
   // ─── 面板显隐 ────────────────────────────────────────────────────────────────
-  function togglePanel(show) {
+  function togglePanel(show, opts = {}) {
     panelVisible = show;
     const panel = document.getElementById('xeb-panel');
     const fab = document.getElementById('xeb-toggle-fab');
     if (!panel) return;
+
+    // The floating button is the ONLY discoverable entry point. Hiding it with the
+    // panel left the script with no visible UI at all after init() called
+    // togglePanel(false), so it stays on screen permanently.
+    if (fab) {
+      fab.classList.remove('xeb-hidden');
+      fab.classList.toggle('panel-on', panelVisible);
+    }
+
     if (panelVisible) {
       panel.classList.remove('xeb-hidden');
-      fab && fab.classList.remove('xeb-hidden');
-      fab && fab.classList.add('panel-on');
       renderRules();
     } else {
       panel.classList.add('xeb-hidden');
-      fab && fab.classList.add('xeb-hidden');
       if (pickMode) stopPickMode();
       clearPreview();
     }
+
+    // Remember the state across reloads (this key was declared but never used).
+    if (!opts.silent) GM_setValue(PANEL_VISIBLE_KEY, panelVisible);
   }
 
   // ─── 拖动 ────────────────────────────────────────────────────────────────────
@@ -1439,8 +1453,9 @@
   function init() {
     buildPanel();
     applyRules();
-    // 默认隐藏，不打扰用户
-    togglePanel(false);
+    // Restore the last state instead of forcing it closed. The floating button
+    // stays visible either way, so the panel is always reachable.
+    togglePanel(GM_getValue(PANEL_VISIBLE_KEY, false), { silent: true });
   }
 
   if (document.readyState === 'loading') {
