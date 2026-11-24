@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Viral Monitor Lite
 // @namespace    local.codex.x-viral-monitor-lite
-// @version      0.2.6
+// @version      0.2.7
 // @description  X timeline velocity badges, bookmark counts, and copy tweet as Markdown. No image viewer.
 // @match        https://x.com/*
 // @match        https://pro.x.com/*
@@ -388,8 +388,8 @@
   }
 
   function findHeaderRow(article) {
-    // The redesign puts the name/handle/time inside .x-middot-group, whose parent
-    // is the flex row that also holds the caret. Never walk further up than that.
+    // Timeline cards put the name/handle/time inside .x-middot-group, whose parent
+    // is the flex row that also holds the caret.
     const middot = article.querySelector(SEL.header);
     if (middot) {
       let el = middot.parentElement;
@@ -399,9 +399,30 @@
         el = el.parentElement;
       }
     }
+
+    // Tweet detail page: the focal tweet has NO .x-middot-group. Its header is
+    // "div.flex.items-start.justify-between" holding a stacked name/handle block
+    // plus the caret. Walk up from the caret to the first row that also contains
+    // the display-name link.
+    const caret = article.querySelector(SEL.caret);
+    if (caret) {
+      const nameLink = [...article.querySelectorAll('a[href^="/"]')]
+        .find((a) => {
+          const t = a.textContent.trim();
+          return t && !t.startsWith('@');
+        });
+      let el = caret.parentElement;
+      for (let i = 0; el && el !== article && i < 6; i++) {
+        if (nameLink && el.contains(nameLink)) {
+          const cs = getComputedStyle(el);
+          if (cs.display === 'flex' && cs.flexDirection === 'row') return el;
+        }
+        el = el.parentElement;
+      }
+    }
+
     // Legacy layout fallback (pre-XDS DOM, still served to some accounts).
-    const caret = article.querySelector('[data-testid="caret"]');
-    el = caret?.parentElement || article.querySelector('[data-testid="User-Name"]')?.parentElement;
+    let el = caret?.parentElement || article.querySelector('[data-testid="User-Name"]')?.parentElement;
     while (el && el !== article) {
       const cs = getComputedStyle(el);
       if (cs.display === 'flex' && cs.flexDirection === 'row' && el.querySelector('[data-testid="User-Name"]')) return el;
@@ -452,10 +473,12 @@
   }
 
   function findDateLink(article) {
-    // The permalink date link is an <a href="/user/status/ID"> whose visible text
-    // is a relative time ("8小时", "3天"), a short date ("11月23日", "Mar 5"),
-    // or an exact time for same-year posts ("2024年3月5日", "10:32").
-    const re = /^\s*(?:\d+\s*(?:秒|分钟|小时|天|周|s|m|h|d|w)\S*|[A-Za-z]{3,}\s+\d{1,2}(?:,?\s*\d{4})?|\d{4}年\d{1,2}月\d{1,2}日|\d{1,2}月\d{1,2}日|\d{1,2}:\d{2})\s*$/i;
+    // Timeline cards: "8小时", "11月23日", "Mar 5", "2024年3月5日".
+    // Tweet detail pages prefix a clock: "21:26 · 2026年11月24日",
+    // "9:26 PM · Nov 24, 2026", "21:26 · 11月24日".
+    const TIME = '(?:\\d{1,2}:\\d{2}(?:\\s*(?:AM|PM))?)';
+    const DATE = '(?:\\d+\\s*(?:秒|分钟|小时|天|周|s|m|h|d|w)\\S*|[A-Za-z]{3,}\\s+\\d{1,2}(?:,?\\s*\\d{4})?|\\d{4}年\\d{1,2}月\\d{1,2}日|\\d{1,2}月\\d{1,2}日)';
+    const re = new RegExp(`^\\s*(?:${TIME}\\s*[·•,]?\\s*${DATE}|${DATE}|${TIME})\\s*$`, 'i');
     return [...article.querySelectorAll('a[href*="/status/"]')]
       .find((a) => !/\/(analytics|photo|video)/.test(a.getAttribute('href') || '') && re.test(a.textContent))
       || null;
@@ -465,7 +488,30 @@
     // Low-precision fallback only. GraphQL created_at is the precise source and
     // always wins when present.
     if (!raw) return '';
-    const s = raw.trim();
+    let s = raw.trim();
+
+    // Detail pages prefix the date with a clock: "21:26 · 2026年11月24日".
+    let hours = null;
+    let minutes = null;
+    let meridiem = '';
+    const tm = s.match(/^(\d{1,2}):(\d{2})\s*(AM|PM|上午|下午)?\s*[·•,]?\s*/i);
+    if (tm) {
+      hours = Number(tm[1]);
+      minutes = Number(tm[2]);
+      meridiem = (tm[3] || '').toUpperCase();
+      s = s.slice(tm[0].length).trim();
+    }
+
+    const withTime = (d) => {
+      if (hours !== null && !Number.isNaN(d.getTime())) {
+        let h = hours;
+        if (meridiem === 'PM' || meridiem === '下午') { if (h < 12) h += 12; }
+        else if (meridiem === 'AM' || meridiem === '上午') { if (h === 12) h = 0; }
+        d.setHours(h, minutes || 0, 0, 0);
+      }
+      return d.toISOString();
+    };
+
     let m = s.match(/^(\d+)\s*(秒|分钟|小时|天|周|seconds?|minutes?|hours?|days?|weeks?|sec|min|s|m|h|d|w)(?![a-z])/i);
     if (m) {
       const n = Number(m[1]);
@@ -493,7 +539,7 @@
       if (Number.isNaN(month)) return '';
       let d = new Date(year, month, day);
       if (!m[3] && !m[0].includes('年') && d.getTime() > now.getTime()) d = new Date(year - 1, month, day);
-      return d.toISOString();
+      return withTime(d);
     }
     return '';
   }
