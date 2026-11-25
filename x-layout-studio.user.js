@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Layout Studio
 // @namespace    local.codex.x-layout-studio
-// @version      0.3.3
+// @version      0.3.4
 // @description  Drag to resize the X timeline column, reclaim the empty right rail, compact the nav, and declutter the timeline.
 // @match        https://x.com/*
 // @match        https://pro.x.com/*
@@ -963,9 +963,13 @@ div[class*="border-b-[0.5px]"] {
   // ---- page-world GraphQL hook (promotedMetadata) ---------------------------
   // The label vocabulary changes between X builds ("来自 x.com 的广告" today,
   // "已推广" tomorrow, nothing at all for some inventory). promotedMetadata is
-  // set server-side, so it survives every wording change. unsafeWindow is the
-  // page's own fetch; if the grant is unavailable this is simply skipped and the
-  // DOM path above still runs.
+  // set server-side, so it survives every wording change.
+  //
+  // Hiding an ad cell in the DOM is not enough on the tweet detail page: the reply
+  // list is an absolutely positioned virtual list. The row is placed from the ad's
+  // ORIGINAL height, so hiding it leaves that band empty — the black gap users
+  // see. The fix is to drop promoted entries from the response body before React
+  // ever builds the list.
   function collectPromotedIds(root) {
     const out = [];
     const seen = new WeakSet();
@@ -984,6 +988,37 @@ div[class*="border-b-[0.5px]"] {
     return out;
   }
 
+  const entryResult = (e) => e?.content?.itemContent?.tweet_results?.result || null;
+  const isPromotedEntry = (e) => {
+    const r = entryResult(e);
+    if (!r) return false;
+    return !!(r.promotedMetadata || r.tweet?.promotedMetadata);
+  };
+
+  /**
+   * Remove promoted entries from every timeline array in the payload.
+   * Only splices array elements that are exactly a timeline entry pointing at a
+   * promoted tweet result, so unrelated data is untouched.
+   */
+  function stripPromoted(root) {
+    let removed = 0;
+    const seen = new WeakSet();
+    const walk = (node) => {
+      if (!node || typeof node !== 'object' || seen.has(node)) return;
+      seen.add(node);
+      if (Array.isArray(node)) {
+        for (let i = node.length - 1; i >= 0; i--) {
+          if (isPromotedEntry(node[i])) { node.splice(i, 1); removed++; }
+        }
+        for (const child of node) walk(child);
+        return;
+      }
+      for (const k in node) walk(node[k]);
+    };
+    walk(root);
+    return removed;
+  }
+
   function installPromotedHook() {
     if (typeof unsafeWindow === 'undefined' || !unsafeWindow) return;
     const pw = unsafeWindow;
@@ -997,32 +1032,36 @@ div[class*="border-b-[0.5px]"] {
 
     try {
       const original = pw.fetch;
-      pw.fetch = function xlsFetchHook(...args) {
-        const p = original.apply(this, args);
+      pw.fetch = async function xlsFetchHook(...args) {
+        const res = await original.apply(this, args);
         try {
           const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
-          if (interesting.test(url)) {
-            p.then((res) => {
-              try { res.clone().json().then(post).catch(() => {}); } catch (_) {}
-            }).catch(() => {});
-          }
-        } catch (_) {}
-        return p;
-      };
-    } catch (_) {}
+          if (!interesting.test(url) || !res || !res.ok) return res;
 
-    try {
-      const open = pw.XMLHttpRequest?.prototype?.open;
-      if (open) {
-        pw.XMLHttpRequest.prototype.open = function xlsXhrOpen(method, url, ...rest) {
-          this.__xlsUrl = String(url || '');
-          this.addEventListener('load', () => {
-            if (!interesting.test(this.__xlsUrl || '')) return;
-            try { post(JSON.parse(this.responseText)); } catch (_) {}
+          const text = await res.clone().text();
+          let data;
+          try { data = JSON.parse(text); } catch (_) { return res; }
+
+          // Keep the ids for the DOM fallback before the entries disappear.
+          const ids = collectPromotedIds(data);
+          if (ids.length) post(data);
+
+          const removed = stripPromoted(data);
+          if (!removed) return res;
+
+          const headers = new Headers();
+          res.headers.forEach((value, key) => {
+            if (!/^content-(length|encoding)$/i.test(key)) headers.set(key, value);
           });
-          return open.call(this, method, url, ...rest);
-        };
-      }
+          return new Response(JSON.stringify(data), {
+            status: res.status,
+            statusText: res.statusText,
+            headers,
+          });
+        } catch (_) {
+          return res;
+        }
+      };
     } catch (_) {}
   }
 
