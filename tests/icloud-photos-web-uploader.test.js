@@ -196,6 +196,111 @@ test('网格滚动命中外层容器时不遍历其全部缩略图', () => {
   assert.equal(wheel.defaultPrevented, false);
 });
 
+function setupOneUpBlankClick() {
+  const handlers = {};
+  let backClicks = 0;
+  const back = { click: () => { backClicks += 1; }, getAttribute: () => null };
+  const oneUp = { querySelector: selector => selector === '.ToolbarBackButton' ? back : null };
+  const photo = {
+    naturalWidth: 640,
+    naturalHeight: 480,
+    getBoundingClientRect: () => ({ left: 180, right: 620, top: 90, bottom: 420, width: 440, height: 330 }),
+  };
+  const viewer = {
+    closest: selector => selector === '.OneUp' ? oneUp : null,
+    querySelectorAll: () => [photo],
+  };
+  const stage = { contains: node => node === viewer };
+  const background = { closest: selector => selector === '.OneUp-mainViewer' ? stage : null };
+  const doc = {
+    documentElement: { clientWidth: 800, clientHeight: 500 },
+    querySelector: selector => selector === '.OneUpCarouselItem.is-center' ? viewer : null,
+    querySelectorAll: () => [],
+    addEventListener: (type, handler) => { handlers[type] = handler; },
+  };
+  api.installOneUpBlankClickExit(doc);
+
+  function send(type, props) {
+    const event = {
+      isTrusted: true,
+      button: 0,
+      pointerId: 1,
+      detail: 1,
+      clientX: 80,
+      clientY: 200,
+      target: background,
+      defaultPrevented: false,
+      preventDefault() { this.defaultPrevented = true; },
+      stopPropagation() { this.stopped = true; },
+      ...props,
+    };
+    handlers[type](event);
+    return event;
+  }
+  function click(props) {
+    send('pointerdown', { isPrimary: true, ...props });
+    return send('click', { isPrimary: false, ...props });
+  }
+  return { doc, back, send, click, count: () => backClicks };
+}
+
+test('Chrome 实际点击事件不是主指针时，单击大图两侧留白仍执行原生返回', () => {
+  const env = setupOneUpBlankClick();
+  for (const clientX of [80, 720]) {
+    const event = env.click({ clientX });
+    assert.equal(event.defaultPrevented, true);
+    assert.equal(event.stopped, true);
+  }
+  assert.equal(env.count(), 2);
+});
+
+test('即使透明轮播层盖在照片上，单击照片内或边缘也不会退出', () => {
+  const env = setupOneUpBlankClick();
+  for (const clientX of [180, 400, 620]) {
+    assert.equal(env.click({ clientX }).defaultPrevented, false);
+  }
+  assert.equal(env.count(), 0);
+});
+
+test('工具栏、缩略图条和控件仍接收自己的点击', () => {
+  const env = setupOneUpBlankClick();
+  for (const selector of ['.Toolbar', '.Thumbstrip', '[role="button"]']) {
+    const target = { closest: choices => choices.split(', ').includes(selector) ? {} : null };
+    assert.equal(env.click({ target }).defaultPrevented, false);
+  }
+  assert.equal(env.count(), 0);
+});
+
+test('从照片拖出、从留白拖动后回到起点、取消触摸都不会退出', () => {
+  const env = setupOneUpBlankClick();
+  env.send('pointerdown', { clientX: 400 });
+  env.send('click');
+  env.send('pointerdown');
+  env.send('pointermove', { clientX: 120 });
+  env.send('click');
+  env.send('pointerdown');
+  env.send('pointercancel');
+  env.send('click');
+  assert.equal(env.count(), 0);
+});
+
+test('右键、组合键、程序点击和失去当前大图时不拦截', () => {
+  const env = setupOneUpBlankClick();
+  for (const props of [
+    { button: 2 },
+    { ctrlKey: true },
+    { isTrusted: false },
+    { detail: 0 },
+    { isPrimary: false },
+  ]) {
+    assert.equal(env.click(props).defaultPrevented, false);
+  }
+  env.send('pointerdown');
+  env.doc.querySelector = () => null;
+  assert.equal(env.send('click').defaultPrevented, false);
+  assert.equal(env.count(), 0);
+});
+
 function fakeElement(attributes, text) {
   return {
     getAttribute(name) {

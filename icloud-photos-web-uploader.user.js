@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.21.2
+// @version      1.21.3
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader.user.js
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader.user.js
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click native download, Ctrl+C / OneUp PNG image copy, and native high-resolution OneUp zoom with double-click / smooth mouse-wheel zoom / drag-pan.
@@ -2293,6 +2293,61 @@
     return best;
   }
 
+  function installOneUpBlankClickExit(doc) {
+    const controls = 'a, button, input, select, textarea, label, [contenteditable="true"], ' +
+      '[role="button"], [role="slider"], [role="menu"], [role="menuitem"], [role="dialog"], ui-popover, .Toolbar, .Thumbstrip';
+    let press = null;
+
+    function isPrimaryPress(event) {
+      return event.isTrusted && !event.defaultPrevented && event.button === 0 &&
+        !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey;
+    }
+
+    function getBlankViewer(event) {
+      const target = event.target;
+      if (!target || !target.closest || target.closest(controls)) return null;
+      const stage = target.closest('.OneUp-mainViewer');
+      const viewer = getCenteredViewer(doc);
+      if (!stage || !viewer || !stage.contains(viewer)) return null;
+
+      // iCloud's transparent swipe surface can receive the event even over a photo.
+      const photo = resolveOneUpImage(doc, viewer);
+      if (!photo) return null;
+      const rect = photo.getBoundingClientRect();
+      const x = event.clientX;
+      const y = event.clientY;
+      return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom ? null : viewer;
+    }
+
+    function moved(event, started) {
+      return Math.hypot(event.clientX - started.x, event.clientY - started.y) > 6;
+    }
+
+    doc.addEventListener('pointerdown', function (event) {
+      const viewer = isPrimaryPress(event) && event.isPrimary !== false ? getBlankViewer(event) : null;
+      press = viewer ? { viewer, pointerId: event.pointerId, x: event.clientX, y: event.clientY } : null;
+    }, true);
+    doc.addEventListener('pointermove', function (event) {
+      if (press && event.pointerId === press.pointerId && moved(event, press)) press = null;
+    }, { capture: true, passive: true });
+    doc.addEventListener('pointercancel', function (event) {
+      if (press && event.pointerId === press.pointerId) press = null;
+    }, true);
+    doc.addEventListener('click', function (event) {
+      const started = press;
+      press = null;
+      if (!started || !isPrimaryPress(event) || event.detail === 0 || moved(event, started)) return;
+      const viewer = getBlankViewer(event);
+      if (viewer !== started.viewer) return;
+      const oneUp = viewer.closest('.OneUp');
+      const back = oneUp && oneUp.querySelector('.ToolbarBackButton');
+      if (!back || typeof back.click !== 'function' || back.disabled || back.getAttribute('aria-disabled') === 'true') return;
+      event.preventDefault();
+      event.stopPropagation();
+      back.click();
+    }, true);
+  }
+
   async function copyCurrentOneUpImage(doc, win) {
     const image = resolveOneUpImage(doc);
     if (!image) {
@@ -3785,6 +3840,7 @@
     installGridPhotoCopyMenu(doc, win);
     installGridPhotoKeyboardCopy(doc, win);
     installOneUpCopyButton(doc, win);
+    installOneUpBlankClickExit(doc);
     installImageZoomPan(doc, win);
     observeAndRemount(doc, win, attachPanel);
     return true;
@@ -3880,6 +3936,7 @@
     installGridPhotoCopyMenu,
     installGridPhotoKeyboardCopy,
     installOneUpCopyButton,
+    installOneUpBlankClickExit,
     enableOneUpButtonDragging,
     isEditablePhotoCopyTarget,
     isInICloudPhotosAppFrame,
