@@ -40,6 +40,7 @@ test('dictionary translates classic and 2026 GitHub UI terms with punctuation no
 test('pattern rules translate counts, relative times, GMT timestamps, and PR checks', () => {
   assert.equal(api.patternTranslate('1081 Branches'), '1081 个分支');
   assert.equal(api.patternTranslate('180 Tags'), '180 个标签');
+  assert.equal(api.patternTranslate('+ 136 releases'), '+ 136 个发行版');
   assert.equal(api.patternTranslate('21,814 Commits'), '21,814 个提交');
   assert.equal(api.patternTranslate('187 / 204 checks OK'), '187 / 204 项检查通过');
   assert.equal(api.patternTranslate('1 participant'), '1 位参与者');
@@ -77,12 +78,59 @@ test('translatability and identifier filters protect versions, URLs, files, and 
 
 test('2026 selectors match React/Primer DOM and skipSelectors preserve dropdowns while skipping search/files', () => {
   assert.match(api.REPO_DESC_SELECTORS, /sidebarSection/);
+  assert.match(api.REPO_DESC_SELECTORS, /\.BorderGrid-cell p\.f4/);
   assert.match(api.README_SELECTORS, /SharedMarkdownContent/);
+  assert.match(api.README_SELECTORS, /readmeContainer/);
+  assert.match(api.README_SELECTORS, /blobContentSectionMarkdown/);
   assert.match(api.ISSUE_SELECTORS, /issue-viewer-comments-container/);
   assert.match(api.ISSUE_SELECTORS, /\.comment-body\.markdown-body/);
   assert.doesNotMatch(api.CFG.skipSelectors, /(^|,)\s*\[role="listbox"\]\s*(,|$)/);
   assert.match(api.CFG.skipSelectors, /query-builder \[role="listbox"\]/);
   assert.match(api.CFG.skipSelectors, /react-directory-row-name-cell/);
+  assert.match(api.CFG.skipSelectors, /Breadcrumbs/);
+});
+
+test('About and README auto-translation are enabled by default while Issue stays opt-in', () => {
+  assert.equal(api.autoPrefs.about, true);
+  assert.equal(api.autoPrefs.readme, true);
+  assert.equal(api.autoPrefs.issue, false);
+  assert.equal(api.ssGet('about'), true);
+  assert.equal(api.ssGet('readme'), true);
+  assert.equal(api.ssGet('issue'), false);
+});
+
+test('timeout or network error trips provider circuit breaker immediately', () => {
+  Object.keys(api.providerState).forEach((k) => { delete api.providerState[k]; });
+  try {
+    api.providerFail('googleClient', new Error('timeout'));
+    assert.equal(api.providerAvailable('googleClient'), false);
+  } finally {
+    Object.keys(api.providerState).forEach((k) => { delete api.providerState[k]; });
+  }
+});
+
+test('bingWebBatch translates multiple short items in a single batched request', async () => {
+  const origGM = global.GM_xmlhttpRequest;
+  let postCount = 0;
+  try {
+    global.GM_xmlhttpRequest = ({ method, url, onload }) => {
+      if (method === 'GET' && url.includes('www.bing.com/translator')) {
+        onload({ status: 200, responseText: 'IG:"ABCDEF" data-iid="translator.5023" params_AbusePreventionHelper = [12345,"tok",36000];' });
+        return;
+      }
+      if (method === 'POST' && url.includes('ttranslatev3')) {
+        postCount += 1;
+        onload({ status: 200, responseText: JSON.stringify([{ translations: [{ text: '第一句。\n|||\n第二句。' }] }]) });
+        return;
+      }
+      onload({ status: 500, responseText: '' });
+    };
+    const res = await api.PROVIDERS.bingWeb(['First sentence.', 'Second sentence.']);
+    assert.deepEqual(res, ['第一句。', '第二句。']);
+    assert.equal(postCount, 1);
+  } finally {
+    global.GM_xmlhttpRequest = origGM;
+  }
 });
 
 test('dedupeScopes removes nested duplicate markdown containers', () => {

@@ -2,9 +2,9 @@
 // @name         GitHub 中文化增强版
 // @name:en      GitHub Chinese Translator Pro
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.0.0
-// @description  将 GitHub 界面（导航、下拉菜单、弹窗、工具提示、Shadow DOM 时间、Issue/PR 等）即时译为简体中文。本地词表与规则引擎零请求毫秒级响应；README / 仓库简介 / Issue·PR 正文支持无刷新就地翻译与还原；内置 Google / Bing / 有道 / MyMemory 多源在线翻译与熔断机制，支持配置 AI（DeepSeek / 硅基流动 / 智谱 GLM / OpenAI 兼容）、百度及腾讯云翻译源。
-// @description:en  Translate GitHub UI and content into Simplified Chinese with a fast local dictionary, updated 2026 React/Primer selectors, in-place toggle translation without page reload, and resilient online translation providers.
+// @version      1.1.0
+// @description  将 GitHub 界面（导航、下拉菜单、弹窗、工具提示、Shadow DOM 时间、关于简介、README、Issue/PR 等）自动译为简体中文。默认开启界面、仓库「关于」简介与 README 自动翻译，支持页内按钮无刷新还原/切换；内置多源在线翻译与快切熔断机制，支持配置 AI（DeepSeek / 硅基流动 / 智谱 GLM / OpenAI 兼容）、百度及腾讯云翻译源。
+// @description:en  Translate GitHub UI, About descriptions, and READMEs into Simplified Chinese automatically by default, with in-place toggle/restore buttons, 2026 React/Primer selectors, and resilient online translation providers.
 // @author       hahapkpk
 // @match        https://github.com/*
 // @match        https://gist.github.com/*
@@ -54,6 +54,11 @@
   const ONLINE_KEY = 'gh_zh_online_v1';
   const CREDS_KEY = 'gh_zh_creds_v1';
   const CACHE_KEY = 'gh_zh_cache_v1';
+  const AUTO_KEYS = {
+    about: 'gh_zh_auto_about_v1',
+    readme: 'gh_zh_auto_readme_v1',
+    issue: 'gh_zh_auto_issue_v1',
+  };
   const SS_PREFIX = 'gh_zh_toggle:';
   const CACHE_MAX = 5000;
 
@@ -77,7 +82,7 @@
     batchItems: 16,
     batchChars: 1800,
     apiDelay: 60,
-    requestTimeout: 6500,
+    requestTimeout: 4500,
     maxRetry: 2,
     fullRescanMs: 8000,
     skipSelectors: [
@@ -106,6 +111,7 @@
       '.react-directory-filename-column',
       '[class*="react-directory-row-name-cell"]',
       '.react-directory-row-commit-cell',
+      '[aria-label="Breadcrumbs"]', '[class*="Breadcrumbs"]', '[data-testid="breadcrumbs"]',
       '[data-testid="tree-view"]', '[role="tree"]',
       // 分支/标签切换按钮自身的分支名
       '[class*="RefSelectorOverlayBtn"]',
@@ -135,14 +141,25 @@
     }
   }
 
-  (function loadOnlinePref() {
+  const autoPrefs = { about: true, readme: true, issue: false };
+
+  (function loadPrefs() {
     const raw = readStore(ONLINE_KEY, '');
     if (raw === '0') CFG.online = false;
     else if (raw === '1') CFG.online = true;
+    for (const kind of ['about', 'readme', 'issue']) {
+      const v = readStore(AUTO_KEYS[kind], '');
+      if (v === '0') autoPrefs[kind] = false;
+      else if (v === '1') autoPrefs[kind] = true;
+    }
   })();
 
   function saveOnline() {
     writeStore(ONLINE_KEY, CFG.online ? '1' : '0');
+  }
+
+  function saveAutoPref(kind) {
+    if (AUTO_KEYS[kind]) writeStore(AUTO_KEYS[kind], autoPrefs[kind] ? '1' : '0');
   }
 
   function repoKey(pathname) {
@@ -159,17 +176,19 @@
 
   function ssGet(kind) {
     try {
-      return typeof sessionStorage !== 'undefined' && sessionStorage.getItem(ssKey(kind)) === '1';
-    } catch (e) {
-      return false;
-    }
+      if (typeof sessionStorage !== 'undefined') {
+        const val = sessionStorage.getItem(ssKey(kind));
+        if (val === '1') return true;
+        if (val === '0') return false;
+      }
+    } catch (e) {}
+    return !!autoPrefs[kind];
   }
 
   function ssSet(kind, on) {
     try {
       if (typeof sessionStorage === 'undefined') return;
-      if (on) sessionStorage.setItem(ssKey(kind), '1');
-      else sessionStorage.removeItem(ssKey(kind));
+      sessionStorage.setItem(ssKey(kind), on ? '1' : '0');
     } catch (e) {}
   }
 
@@ -1364,6 +1383,8 @@
     [/^(\d[\d,]*)\s+comments?$/i, (m) => `${m[1]} 条评论`],
     [/^(\d[\d,]*)\s+Branch(?:es)?$/i, (m) => `${m[1]} 个分支`],
     [/^(\d[\d,]*)\s+Tags?$/i, (m) => `${m[1]} 个标签`],
+    [/^\+\s*(\d[\d,]*)\s+releases?$/i, (m) => `+ ${m[1]} 个发行版`],
+    [/^(\d[\d,]*)\s+releases?$/i, (m) => `${m[1]} 个发行版`],
     [/^(\d[\d,]*)\s*\/\s*(\d[\d,]*)\s+checks?\s+(?:OK|passing|passed|successful)$/i, (m) => `${m[1]} / ${m[2]} 项检查通过`],
     [/^(\d[\d,]*)\s+workflow runs?$/i, (m) => `${m[1]} 次工作流运行`],
     [/^([A-Za-z]+\.?\s+\d{1,2},\s*\d{4},?\s+\d{1,2}:\d{2}(?:\s*[AP]M)?(?:\s+(?:GMT[+-]\d{1,2}(?::\d{2})?|UTC))?)$/i, (m) => cnDateTime(m[1])],
@@ -1548,6 +1569,7 @@
     '[class*="sidebarSection" i]',
     '[data-component="SplitPageLayout.Pane"]',
     '.BorderGrid',
+    '.BorderGrid-cell',
   ].join(', ');
 
   const REPO_DESC_SELECTORS = [
@@ -1556,6 +1578,8 @@
     '[data-testid="repository-description"]',
     '.repo-list-description',
     '.org-repos-repo-description',
+    '.BorderGrid-cell p.f4',
+    '.BorderGrid-row p.f4',
     '[class*="SidebarAbout"][class*="description"]',
     '[class*="sidebarSection" i] p[class*="description" i]',
     '[data-component="SplitPageLayout.Pane"] p[class*="description" i]',
@@ -1569,6 +1593,10 @@
     '#readme .markdown-body',
     '[class*="DirectoryRichtextContent"] .markdown-body',
     '[class*="SharedMarkdownContent"] .markdown-body',
+    '[class*="readmeContainer"] .markdown-body',
+    '[class*="blobContentSectionMarkdown"] .markdown-body',
+    '[class*="markdownBlob"] .markdown-body',
+    '.gist-content .markdown-body',
     '[data-testid="readme-content"]',
   ].join(', ');
 
@@ -1615,7 +1643,11 @@
   }
 
   function isReadmeContext(el) {
-    try { return !!(el && el.closest && el.closest(README_SELECTORS)); } catch (e) { return false; }
+    try {
+      if (!el || !el.closest) return false;
+      if (isIssueContext(el)) return false;
+      return !!el.closest(README_SELECTORS);
+    } catch (e) { return false; }
   }
 
   function isIssueContext(el) {
@@ -1838,8 +1870,17 @@
   }
 
   async function bingWebBatch(texts) {
+    if (texts.length === 1) return [await bingWebSingle(texts[0])];
+    const sep = '\n|||\n';
+    const clean = texts.map((t) => t.replace(/\s*\n+\s*/g, ' '));
+    const joined = clean.join(sep);
+    if (joined.length <= 900 && texts.length <= 8) {
+      const resText = await bingWebSingle(joined);
+      const parts = resText.split(/\n?\s*\|\|\|\s*\n?/);
+      if (parts.length === texts.length) return parts.map((s) => s.trim());
+    }
     const out = [];
-    for (const t of texts) {
+    for (const t of clean) {
       out.push(await bingWebSingle(t));
       await sleep(70);
     }
@@ -2085,9 +2126,11 @@
     return !st || !st.until || Date.now() > st.until;
   }
 
-  function providerFail(name) {
+  function providerFail(name, err) {
     const st = providerState[name] || (providerState[name] = { fails: 0, until: 0 });
-    st.fails += 1;
+    const msg = err && err.message ? err.message : '';
+    const fastTrip = msg === 'timeout' || msg === 'network';
+    st.fails += fastTrip ? 2 : 1;
     if (st.fails >= 2) {
       st.until = Date.now() + 5 * 60 * 1000;
       st.fails = 0;
@@ -2111,7 +2154,7 @@
         }
         providerFail(name);
       } catch (e) {
-        providerFail(name);
+        providerFail(name, e);
         if (typeof console !== 'undefined' && console.debug) {
           console.debug('[GitHub中文化增强版] 翻译源失败：' + name, e && e.message);
         }
@@ -2185,15 +2228,24 @@
     return false;
   }
 
+  const queuedNodes = new WeakSet();
+
+  function isProseHeadingOrLabel(parent, text) {
+    if (!parent || !parent.closest) return false;
+    return !!(parent.closest('h1,h2,h3,h4,h5,h6,strong,b,th') && !parent.closest('a') && /^[A-Z][A-Za-z-]+:?$/.test(text));
+  }
+
   async function processGroup(units) {
     const todo = [];
     for (const u of units) {
       const host = unitHostEl(u);
       if (!host || !host.isConnected || isUnitDone(u)) continue;
+      if (u.kind === 'text' ? shouldSkip(host) : shouldSkipAttr(host)) continue;
       const t = (unitText(u) || '').trim();
       if (!t || !isTranslatable(t)) { markUnitDone(u); continue; }
       if (cache.has(t)) { applyUnit(u, cache.get(t), true); markUnitDone(u); continue; }
-      if (!/\s/.test(t)) { markUnitDone(u); continue; }
+      const allowSingle = u.kind === 'text' && isProseHeadingOrLabel(host, t) && (isReadmeContext(host) || isIssueContext(host));
+      if (!/\s/.test(t) && !allowSingle) { markUnitDone(u); continue; }
       todo.push(u);
     }
     if (!todo.length || !CFG.online) return;
@@ -2205,17 +2257,18 @@
       if (results) {
         for (let i = 0; i < group.length; i++) {
           const zh = (results[i] || '').trim();
-          if (zh && containsCJK(zh)) {
+          const host = unitHostEl(group[i]);
+          const skipped = host && host.isConnected && (group[i].kind === 'text' ? shouldSkip(host) : shouldSkipAttr(host));
+          if (zh && containsCJK(zh) && !skipped) {
             cache.set(raw[i], zh);
             zhToEn.set(zh, raw[i]);
-            const host = unitHostEl(group[i]);
             if (host && host.isConnected) {
               applyUnit(group[i], zh, true);
             } else if (group[i].kind === 'text') {
               applyByText(raw[i].replace(/\s+/g, ' ').trim(), zh);
             }
           }
-          markUnitDone(group[i]);
+          if (!skipped) markUnitDone(group[i]);
         }
         saveCache();
       } else {
@@ -2261,7 +2314,7 @@
   function collectTextUnits(scope, pending) {
     const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
-        if (processedText.has(node)) return NodeFilter.FILTER_REJECT;
+        if (processedText.has(node) || queuedNodes.has(node)) return NodeFilter.FILTER_REJECT;
         const p = node.parentElement;
         if (!p || shouldSkip(p) || isUserContext(p)) return NodeFilter.FILTER_REJECT;
         if (!(node.nodeValue || '').trim()) return NodeFilter.FILTER_REJECT;
@@ -2286,9 +2339,11 @@
       if (isIdentifierInLink(n) && !dictHasExact(text)) { processedText.add(n); continue; }
       if (cache.has(text)) { applyUnit(u, cache.get(text), true); processedText.add(n); continue; }
       if (parent && parent.tagName === 'OPTION') { processedText.add(n); continue; }
-      if (!/\s/.test(text)) { processedText.add(n); continue; }
+      const allowZoneSingle = isProseHeadingOrLabel(parent, text) && (isReadmeContext(parent) || isIssueContext(parent));
+      if (!/\s/.test(text) && !allowZoneSingle) { processedText.add(n); continue; }
       if (!CFG.online || !parent) { processedText.add(n); continue; }
 
+      queuedNodes.add(n);
       if (!pending.has(parent)) pending.set(parent, []);
       pending.get(parent).push(u);
     }
@@ -2473,6 +2528,7 @@
   }
 
   function restoreNodeText(node) {
+    queuedNodes.delete(node);
     if (nodeOriginalText.has(node)) {
       node.nodeValue = nodeOriginalText.get(node);
       processedText.delete(node);
@@ -2536,9 +2592,17 @@
     return items;
   }
 
-  async function translateZone(kind) {
+  function getZoneScopes(kind) {
     const scopeSel = zoneSelectorFor(kind);
-    const scopes = dedupeScopes([...document.querySelectorAll(scopeSel)]);
+    let scopes = dedupeScopes([...document.querySelectorAll(scopeSel)]);
+    if (kind === 'readme') {
+      scopes = scopes.filter((sc) => !sc.matches(ISSUE_SELECTORS) && !sc.closest(ISSUE_SELECTORS));
+    }
+    return scopes;
+  }
+
+  async function translateZone(kind) {
+    const scopes = getZoneScopes(kind);
     if (!scopes.length) return;
 
     const on = !!pageState[kind];
@@ -2561,13 +2625,15 @@
       const todo = [];
       for (const it of items) {
         if (!pageState[kind] || zoneSeq[kind] !== mySeq) break;
+        if (processedText.has(it.node) || queuedNodes.has(it.node)) continue;
         const u = { kind: 'text', node: it.node };
         const hit = dictLookup(it.text) || patternTranslate(it.text);
         if (hit) { applyUnit(u, hit, false); processedText.add(it.node); continue; }
         const p = it.node.parentElement;
-        const isHeadingOrLabel = p && p.closest && p.closest('h1,h2,h3,h4,h5,h6,strong,b,th') && !p.closest('a') && /^[A-Z][A-Za-z-]+:?$/.test(it.text);
+        const isHeadingOrLabel = isProseHeadingOrLabel(p, it.text);
         if (!isTranslatable(it.text) || (!/\s/.test(it.text) && !isHeadingOrLabel)) continue;
         if (cache.has(it.text)) { applyUnit(u, cache.get(it.text), true); processedText.add(it.node); continue; }
+        queuedNodes.add(it.node);
         todo.push(it);
       }
 
@@ -2577,8 +2643,12 @@
           const slice = todo.slice(i, i + CFG.batchItems);
           const send = slice.map((it) => it.text.replace(/\s*\n+\s*/g, ' '));
           const res = await translateTexts(send);
-          if (!res || !pageState[kind] || zoneSeq[kind] !== mySeq) continue;
+          if (!res || !pageState[kind] || zoneSeq[kind] !== mySeq) {
+            slice.forEach((it) => queuedNodes.delete(it.node));
+            continue;
+          }
           slice.forEach((it, idx) => {
+            queuedNodes.delete(it.node);
             const zh = (res[idx] || '').trim();
             if (zh && containsCJK(zh)) {
               zhToEn.set(zh, it.text);
@@ -2671,6 +2741,64 @@
     return null;
   }
 
+  function mountReadmeToggle(b) {
+    // Layout 1: 仓库根目录 README 标签栏
+    const nav = findReadmeNav();
+    if (nav) {
+      b.style.marginRight = '8px';
+      const headerBox = nav.closest('[class*="Box_3"]') || nav.parentElement;
+      const outlineBtn = headerBox ? headerBox.querySelector('button[aria-label="Outline"], button[aria-label="大纲"]') : null;
+      if (outlineBtn && outlineBtn.parentElement) {
+        outlineBtn.parentElement.insertBefore(b, outlineBtn);
+      } else if (headerBox && headerBox !== nav && getComputedStyle(headerBox).display.includes('flex')) {
+        b.style.marginLeft = 'auto';
+        headerBox.appendChild(b);
+      } else {
+        b.style.marginLeft = 'auto';
+        nav.appendChild(b);
+      }
+      return true;
+    }
+
+    // Layout 2: 子目录 /tree/... 内的 README.md 头部
+    const subHeader = document.querySelector('[class*="readmeContainer"] [class*="readmeHeader"], [class*="readmeHeader"]');
+    if (subHeader) {
+      b.style.marginLeft = 'auto';
+      b.style.marginRight = '8px';
+      const outlineBtn = subHeader.querySelector('button[aria-label="Outline"], button[aria-label="大纲"]');
+      if (outlineBtn && outlineBtn.parentElement) {
+        outlineBtn.parentElement.insertBefore(b, outlineBtn);
+      } else {
+        subHeader.appendChild(b);
+      }
+      return true;
+    }
+
+    // Layout 3: /blob/.../*.md 独立 Markdown 文件页头部
+    const blobSection = document.querySelector('[class*="blobContentSectionMarkdown"]');
+    if (blobSection) {
+      const sticky = document.querySelector('[class*="StickyHeader"], .react-blob-sticky-header');
+      if (sticky) {
+        b.style.marginLeft = '8px';
+        sticky.appendChild(b);
+        return true;
+      }
+      b.style.margin = '8px 0';
+      blobSection.insertBefore(b, blobSection.firstChild);
+      return true;
+    }
+
+    // Layout 4: Classic #readme / [data-testid="readme"] 头部
+    const classicHead = document.querySelector('#readme .Box-header, [data-testid="readme"] > div:first-child');
+    if (classicHead) {
+      b.style.marginLeft = 'auto';
+      classicHead.appendChild(b);
+      return true;
+    }
+
+    return false;
+  }
+
   function placeToggles() {
     if (typeof document === 'undefined' || !document.body) return;
     refreshPageState();
@@ -2688,23 +2816,9 @@
     });
 
     // 1) README 就地翻译按钮
-    if (!document.querySelector('[data-zh-toggle="readme"]') && document.querySelector(README_SELECTORS)) {
-      const nav = findReadmeNav();
-      if (nav) {
-        const b = makeToggle('readme', '翻译 README');
-        b.style.marginRight = '8px';
-        const headerBox = nav.closest('[class*="Box_3"]') || nav.parentElement;
-        const outlineBtn = headerBox ? headerBox.querySelector('button[aria-label="Outline"], button[aria-label="大纲"]') : null;
-        if (outlineBtn && outlineBtn.parentElement) {
-          outlineBtn.parentElement.insertBefore(b, outlineBtn);
-        } else if (headerBox && headerBox !== nav && getComputedStyle(headerBox).display.includes('flex')) {
-          b.style.marginLeft = 'auto';
-          headerBox.appendChild(b);
-        } else {
-          b.style.marginLeft = 'auto';
-          nav.appendChild(b);
-        }
-      }
+    if (!document.querySelector('[data-zh-toggle="readme"]') && getZoneScopes('readme').length) {
+      const b = makeToggle('readme', '翻译 README');
+      mountReadmeToggle(b);
     }
 
     // 2) Issue / PR / Discussion 正文与评论就地翻译按钮
@@ -2815,6 +2929,36 @@
       creds.ai = null;
       saveCreds();
       showToast('已清空所有自定义翻译密钥');
+    });
+    GM_registerMenuCommand('⑧ 切换默认自动翻译「关于」简介', () => {
+      autoPrefs.about = !autoPrefs.about;
+      saveAutoPref('about');
+      pageState.about = autoPrefs.about;
+      ssSet('about', autoPrefs.about);
+      zoneSeq.about += 1;
+      syncToggleButtons();
+      translateZone('about');
+      showToast('默认自动翻译「关于」简介：' + (autoPrefs.about ? '开' : '关'));
+    });
+    GM_registerMenuCommand('⑨ 切换默认自动翻译 README 正文', () => {
+      autoPrefs.readme = !autoPrefs.readme;
+      saveAutoPref('readme');
+      pageState.readme = autoPrefs.readme;
+      ssSet('readme', autoPrefs.readme);
+      zoneSeq.readme += 1;
+      syncToggleButtons();
+      translateZone('readme');
+      showToast('默认自动翻译 README 正文：' + (autoPrefs.readme ? '开' : '关'));
+    });
+    GM_registerMenuCommand('⑩ 切换默认自动翻译 Issue/PR 正文', () => {
+      autoPrefs.issue = !autoPrefs.issue;
+      saveAutoPref('issue');
+      pageState.issue = autoPrefs.issue;
+      ssSet('issue', autoPrefs.issue);
+      zoneSeq.issue += 1;
+      syncToggleButtons();
+      translateZone('issue');
+      showToast('默认自动翻译 Issue/PR 正文：' + (autoPrefs.issue ? '开' : '关'));
     });
   }
 
@@ -2975,6 +3119,7 @@
 
   return {
     CFG,
+    autoPrefs,
     RAW_DICT,
     PATTERN_RULES,
     PROVIDERS,
@@ -2990,6 +3135,8 @@
     patternTranslate,
     translateTitleText,
     repoKey,
+    ssGet,
+    ssSet,
     isTranslatable,
     isIdentifierLike,
     shouldSkip,
