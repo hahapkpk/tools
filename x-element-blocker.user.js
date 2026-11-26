@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Element Blocker
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.5.4
+// @version      1.5.5
 // @description  在 X.com 上通过点选元素来屏蔽不想要的区域，类似 uBlock 的自定义屏蔽功能
 // @author       hahapkpk
 // @match        https://x.com/*
@@ -10,6 +10,8 @@
 // @updateURL    https://cdn.jsdelivr.net/gh/hahapkpk/tools@main/x-element-blocker.user.js
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_listValues
+// @grant        GM_addValueChangeListener
 // @grant        GM_registerMenuCommand
 // @grant        GM_addStyle
 // @run-at       document-idle
@@ -20,15 +22,21 @@
 
   // ─── 常量 ───────────────────────────────────────────────────────────────────
   const STORAGE_KEY = 'x_element_blocker_rules';
+  const RULE_PREFIX = `${STORAGE_KEY}:rule:`;
+  const RULE_CHANGE_KEY = `${STORAGE_KEY}:change`;
   const PANEL_VISIBLE_KEY = 'x_element_blocker_panel_visible';
   const PAUSED_KEY = 'x_element_blocker_paused';
   const DEBUG_KEY = 'x_element_blocker_debug';
   const BACKUPS_KEY = 'x_element_blocker_backups';
   const LAST_ADDED_KEY = 'x_element_blocker_last_added';
+  const OWN_CONTROLS = '#xeb-panel, #xeb-toggle-fab, .xeb-debug-badge';
+  const PICKER_CONTROLS = `${OWN_CONTROLS}, .xls-panel, .xls-fab, .xls-pickbox, .xls-picktip, .xls-handle`;
+  const PICKER_EVENT = 'x-userscript-picker-start';
+  const PICKER_ID = 'element-blocker';
 
   // ─── 状态 ───────────────────────────────────────────────────────────────────
-  let rules = normalizeRules(GM_getValue(STORAGE_KEY, []));
-  GM_setValue(STORAGE_KEY, rules);
+  const legacyTimestamp = new Date().toISOString();
+  let rules = readRules();
   let panelVisible = false; // 默认隐藏
   let paused = GM_getValue(PAUSED_KEY, false);
   let debugMode = GM_getValue(DEBUG_KEY, false);
@@ -40,9 +48,11 @@
   let filterText = '';
   let filterMode = 'all';
   let previewRuleIndex = null;
+  let ui = null;
+  let lastPath = location.pathname;
+  const hiddenElements = new Map();
 
-  function normalizeRules(saved) {
-    const now = new Date().toISOString();
+  function normalizeRules(saved, now = new Date().toISOString()) {
     if (!Array.isArray(saved)) return [];
     return saved
       .map(item => {
@@ -59,7 +69,7 @@
         if (item && typeof item.selector === 'string') {
           return {
             selector: item.selector,
-            note: item.note || '',
+            note: typeof item.note === 'string' ? item.note : '',
             scope: normalizeScope(item.scope),
             enabled: item.enabled !== false,
             createdAt: item.createdAt || now,
@@ -74,11 +84,65 @@
   function normalizeScope(scope) {
     if (!scope || typeof scope !== 'object') return { type: 'global', value: '' };
     const type = ['global', 'path', 'profile'].includes(scope.type) ? scope.type : 'global';
-    return { type, value: scope.value || '' };
+    return { type, value: type !== 'global' && typeof scope.value === 'string' ? scope.value : '' };
   }
 
-  function saveRules() {
-    GM_setValue(STORAGE_KEY, rules);
+  function ruleKey(rule) {
+    return RULE_PREFIX + JSON.stringify([rule.selector, rule.scope.type, rule.scope.value]);
+  }
+
+  function readRules() {
+    const legacy = normalizeRules(GM_getValue(STORAGE_KEY, []), legacyTimestamp);
+    const byKey = new Map(legacy.map(rule => [ruleKey(rule), rule]));
+    // A per-rule entry overrides the old array. Independent tabs can edit
+    // different rules without replacing each other's changes.
+    for (const key of GM_listValues()) {
+      if (!key.startsWith(RULE_PREFIX)) continue;
+      const stored = GM_getValue(key, null);
+      if (stored === null) byKey.delete(key);
+      else {
+        const [rule] = normalizeRules([stored]);
+        if (rule && ruleKey(rule) === key) byKey.set(key, rule);
+      }
+    }
+    return [...byKey.values()];
+  }
+
+  function updateRules(action, edit) {
+    const before = readRules();
+    const after = edit(before);
+    if (!after) return 0;
+    const previous = new Map(before.map(rule => [ruleKey(rule), rule]));
+    const next = new Map(after.map(rule => [ruleKey(rule), rule]));
+    const writes = new Map();
+    for (const key of previous.keys()) if (!next.has(key)) writes.set(key, null);
+    for (const [key, rule] of next) {
+      if (JSON.stringify(previous.get(key)) !== JSON.stringify(rule)) writes.set(key, rule);
+    }
+    if (writes.size) {
+      createBackup(action, before);
+      for (const [key, rule] of writes) GM_setValue(key, rule);
+      GM_setValue(RULE_CHANGE_KEY, `${Date.now()}:${Math.random()}`);
+    }
+    rules = readRules();
+    applyRules();
+    renderRules();
+    return writes.size;
+  }
+
+  function addRules(action, incoming) {
+    const added = [];
+    updateRules(action, current => {
+      const byKey = new Map(current.map(rule => [ruleKey(rule), rule]));
+      for (const rule of incoming) {
+        const key = ruleKey(rule);
+        if (byKey.has(key)) continue;
+        byKey.set(key, rule);
+        added.push(key);
+      }
+      return [...byKey.values()];
+    });
+    return added;
   }
 
   function createRule(selector, scopeType = 'global') {
@@ -142,12 +206,12 @@
     return '全站';
   }
 
-  function createBackup(action) {
+  function createBackup(action, snapshot) {
     const backups = GM_getValue(BACKUPS_KEY, []);
     backups.unshift({
       action,
       createdAt: new Date().toISOString(),
-      rules: JSON.parse(JSON.stringify(rules))
+      rules: snapshot
     });
     GM_setValue(BACKUPS_KEY, backups.slice(0, 5));
   }
@@ -160,34 +224,28 @@
     }
     const backup = backups[0];
     if (!confirm(`恢复到 ${formatDate(backup.createdAt)} 的备份？\n来源：${backup.action}`)) return;
-    createBackup('恢复前自动备份');
-    rules = normalizeRules(backup.rules);
-    saveRules();
-    applyRules({ restore: true });
-    renderRules();
+    updateRules('恢复前自动备份', () => normalizeRules(backup.rules));
   }
 
-  function setLastAdded(selectors) {
+  function setLastAdded(keys) {
     GM_setValue(LAST_ADDED_KEY, {
-      selectors,
+      keys,
       createdAt: new Date().toISOString()
     });
   }
 
   function undoLastAdded() {
     const last = GM_getValue(LAST_ADDED_KEY, null);
-    if (!last || !Array.isArray(last.selectors) || !last.selectors.length) {
+    const legacySelectors = Array.isArray(last?.selectors) ? last.selectors : [];
+    const keys = Array.isArray(last?.keys) ? last.keys : normalizeRules(GM_getValue(STORAGE_KEY, []), legacyTimestamp)
+      .filter(rule => legacySelectors.includes(rule.selector)).map(ruleKey);
+    if (!keys.length) {
       alert('暂无可撤销的最近添加规则');
       return;
     }
-    createBackup('撤销最近添加前自动备份');
-    const before = rules.length;
-    rules = rules.filter(rule => !last.selectors.includes(rule.selector));
+    const count = updateRules('撤销最近添加前自动备份', current => current.filter(rule => !keys.includes(ruleKey(rule))));
     GM_setValue(LAST_ADDED_KEY, null);
-    saveRules();
-    applyRules({ restore: true });
-    renderRules();
-    alert(`已撤销 ${before - rules.length} 条最近添加规则`);
+    alert(`已撤销 ${count} 条最近添加规则`);
   }
 
   function getRiskInfo(selector, hitCount) {
@@ -216,7 +274,8 @@
   }
 
   // ─── 样式 ───────────────────────────────────────────────────────────────────
-  GM_addStyle(`
+  const blockerStyle = GM_addStyle(`
+    :root [data-xeb-hidden="1"] { display: none !important; }
     #xeb-panel {
       position: fixed;
       top: 72px;
@@ -725,7 +784,7 @@
       let seg = cur.tagName.toLowerCase();
       // 优先 data-testid
       if (cur.dataset && cur.dataset.testid) {
-        parts.unshift(`[data-testid="${cur.dataset.testid}"]`);
+        parts.unshift(`[data-testid="${cssEscape(cur.dataset.testid)}"]`);
         break;
       }
       // nth-of-type 定位
@@ -744,35 +803,49 @@
   }
 
   // ─── 应用规则（隐藏元素）────────────────────────────────────────────────────
-  function applyRules(options = {}) {
-    const restoreFirst = options.restore === true;
-    if (restoreFirst) restoreHiddenElements();
-    clearDebugMarks();
-    if (paused) {
-      return;
-    }
-    rules.forEach((rule, index) => {
-      if (!rule.enabled) return;
-      if (!scopeMatches(rule)) return;
-      const selector = getSelector(rule);
-      try {
-        document.querySelectorAll(selector).forEach(el => {
-          if (el.closest('#xeb-panel') || el.closest('#xeb-toggle-fab')) return;
-          if (debugMode) {
-            if (!el.dataset.xebDebugRule) {
-              el.dataset.xebHadTitle = el.hasAttribute('title') ? '1' : '0';
-              el.dataset.xebOldTitle = el.getAttribute('title') || '';
-            }
-            el.classList.add('xeb-debug-match');
-            el.dataset.xebDebugRule = String(index + 1);
-            el.title = `[X Element Blocker #${index + 1}] ${selector}`;
-            addDebugBadge(el, index + 1);
-          } else {
-            hideElement(el);
-          }
+  function applyRules() {
+    if (!document.body) return;
+    const pathChanged = lastPath !== location.pathname;
+    lastPath = location.pathname;
+
+    // Layout and debug changes happen synchronously. Observe the page again
+    // once those writes finish so our own badges cannot schedule another pass.
+    observer.disconnect();
+    try {
+      ensurePanel();
+      document.documentElement.dataset.xebBooted = '1';
+      if (pathChanged) clearPreview();
+      clearDebugMarks();
+      const matches = new Map();
+      if (!paused) {
+        rules.forEach((rule, index) => {
+          if (!rule.enabled || !scopeMatches(rule)) return;
+          try {
+            document.querySelectorAll(rule.selector).forEach(el => {
+              if (!isProtected(el)) matches.set(el, index);
+            });
+          } catch (_) { /* 无效选择器跳过 */ }
         });
-      } catch (e) { /* 无效选择器跳过 */ }
-    });
+      }
+      for (const [el, inlineDisplay] of hiddenElements) {
+        if (debugMode || !matches.has(el)) restoreHiddenElement(el, inlineDisplay);
+      }
+      for (const [el, index] of matches) {
+        if (debugMode) {
+          el.dataset.xebHadTitle = el.hasAttribute('title') ? '1' : '0';
+          el.dataset.xebOldTitle = el.getAttribute('title') || '';
+          el.classList.add('xeb-debug-match');
+          el.dataset.xebDebugRule = String(index + 1);
+          el.title = `[X Element Blocker #${index + 1}] ${rules[index].selector}`;
+          addDebugBadge(el, index + 1);
+        } else {
+          hideElement(el);
+        }
+      }
+    } finally {
+      observePage();
+    }
+    if (pathChanged && panelVisible) renderRules();
   }
 
   function scheduleApplyRules() {
@@ -783,12 +856,12 @@
     }, 150);
   }
 
-  function restoreHiddenElements() {
-    document.querySelectorAll('[data-xeb-hidden="1"]').forEach(el => {
-      el.style.display = el.dataset.xebOldDisplay || '';
-      delete el.dataset.xebHidden;
-      delete el.dataset.xebOldDisplay;
-    });
+  function restoreHiddenElement(el, inlineDisplay) {
+    if (inlineDisplay && el.style.display === 'none' && el.style.getPropertyPriority('display') === 'important') {
+      el.style.setProperty('display', inlineDisplay, 'important');
+    }
+    delete el.dataset.xebHidden;
+    hiddenElements.delete(el);
   }
 
   function clearDebugMarks() {
@@ -818,36 +891,71 @@
   }
 
   function hideElement(el) {
-    if (!el.dataset.xebHidden) {
-      el.dataset.xebOldDisplay = el.style.display || '';
-      el.dataset.xebHidden = '1';
+    if (el.dataset.xebHidden !== '1') el.dataset.xebHidden = '1';
+    if (!hiddenElements.has(el)) hiddenElements.set(el, null);
+    // An author stylesheet cannot override an inline !important display.
+    if (el.style.display && el.style.display !== 'none' && el.style.getPropertyPriority('display') === 'important') {
+      hiddenElements.set(el, el.style.display);
+      el.style.setProperty('display', 'none', 'important');
     }
-    if (el.style.display === 'none') return;
-    el.style.setProperty('display', 'none', 'important');
+  }
+
+  function isProtected(el) {
+    return el === document.body || el === document.documentElement || !!el.closest(PICKER_CONTROLS);
   }
 
   function countMatches(selector) {
     try {
       return Array.from(document.querySelectorAll(selector))
-        .filter(el => !el.closest('#xeb-panel') && !el.closest('#xeb-toggle-fab')).length;
+        .filter(el => !isProtected(el)).length;
     } catch (e) {
       return 0;
     }
   }
 
-  // MutationObserver 监听 DOM 变化（懒加载 / 动态内容）
   const observer = new MutationObserver(mutations => {
-    if (mutations.every(mutation => {
-      const target = mutation.target;
-      return target.closest && (target.closest('#xeb-panel') || target.closest('#xeb-toggle-fab'));
-    })) {
+    const missingStyle = blockerStyle?.nodeType === 1 && !blockerStyle.isConnected;
+    if (ui && (!ui.panel.isConnected || !ui.fab.isConnected || missingStyle)) {
+      scheduleApplyRules();
       return;
     }
-    scheduleApplyRules();
+    if (!rules.length) return;
+    if (mutations.some(mutation => {
+      const target = mutation.target;
+      if (target.closest?.(OWN_CONTROLS)) return false;
+      if (mutation.type === 'attributes') return true;
+      return [...mutation.addedNodes, ...mutation.removedNodes].some(node => !node.matches?.(OWN_CONTROLS));
+    })) {
+      scheduleApplyRules();
+    }
   });
-  observer.observe(document.body, { childList: true, subtree: true });
+
+  function observePage() {
+    observer.observe(document, { childList: true, subtree: true, attributes: true });
+  }
+
+  window.navigation?.addEventListener('currententrychange', scheduleApplyRules);
+  window.addEventListener('popstate', scheduleApplyRules);
+
+  GM_addValueChangeListener(RULE_CHANGE_KEY, (_key, _old, _current, remote) => {
+    if (!remote || !document.body) return;
+    rules = readRules();
+    clearPreview();
+    applyRules();
+    renderRules();
+  });
 
   // ─── 面板 UI ─────────────────────────────────────────────────────────────────
+  function ensurePanel() {
+    if (!ui) ui = buildPanel();
+    if (!ui.panel.isConnected) document.body.appendChild(ui.panel);
+    if (!ui.fab.isConnected) document.body.appendChild(ui.fab);
+    if (blockerStyle?.nodeType === 1 && !blockerStyle.isConnected) {
+      (document.head || document.documentElement).appendChild(blockerStyle);
+    }
+    return ui;
+  }
+
   function buildPanel() {
     const panel = document.createElement('div');
     panel.id = 'xeb-panel';
@@ -911,7 +1019,7 @@
 
     bindEvents(panel, fab);
     renderRules();
-    return panel;
+    return { panel, fab };
   }
 
   function renderPending() {
@@ -1043,9 +1151,11 @@
 
     // 选取按钮
     document.getElementById('xeb-pick-btn').addEventListener('click', () => {
-      pickMode = !pickMode;
-      const btn = document.getElementById('xeb-pick-btn');
-      if (pickMode) {
+      if (!pickMode) {
+        document.dispatchEvent(new CustomEvent(PICKER_EVENT, { detail: PICKER_ID }));
+        pickMode = true;
+        document.body.dataset.xUserscriptPicker = PICKER_ID;
+        const btn = document.getElementById('xeb-pick-btn');
         btn.textContent = '⏹ 停止选取';
         btn.classList.add('active');
         document.body.style.cursor = 'crosshair';
@@ -1060,7 +1170,7 @@
       pendingSelectors.forEach(sel => {
         try {
           document.querySelectorAll(sel).forEach(el => {
-            if (!el.closest('#xeb-panel') && !el.closest('#xeb-toggle-fab')) {
+            if (!isProtected(el)) {
               el.classList.add('xeb-preview-hidden');
             }
           });
@@ -1079,21 +1189,11 @@
         const message = risky.map(item => `${item.sel}\n${item.warnings.join('、')}，当前命中 ${item.hit}`).join('\n\n');
         if (!confirm(`以下规则可能误屏蔽，仍然保存吗？\n\n${message}`)) return;
       }
-      createBackup('保存新规则前自动备份');
-      const added = [];
-      pendingSelectors.forEach(sel => {
-        if (!rules.some(rule => getSelector(rule) === sel)) {
-          rules.push(createRule(sel, scopeType));
-          added.push(sel);
-        }
-      });
+      const added = addRules('保存新规则前自动备份', pendingSelectors.map(sel => createRule(sel, scopeType)));
       if (added.length) setLastAdded(added);
-      saveRules();
       pendingSelectors = [];
       clearSelectedHighlights();
       renderPending();
-      applyRules();
-      renderRules();
     });
 
     // 取消
@@ -1133,25 +1233,23 @@
       }
       const toggle = e.target.closest('.xeb-rule-toggle');
       if (toggle) {
-        const i = parseInt(toggle.dataset.i);
-        if (rules[i]) {
-          createBackup('切换规则启用状态前自动备份');
-          rules[i].enabled = !rules[i].enabled;
-          rules[i].updatedAt = new Date().toISOString();
-          saveRules();
-          applyRules({ restore: true });
-          renderRules();
+        const selected = rules[parseInt(toggle.dataset.i)];
+        if (selected) {
+          const key = ruleKey(selected);
+          updateRules('切换规则启用状态前自动备份', current => current.map(rule => ruleKey(rule) === key
+            ? { ...rule, enabled: !selected.enabled, updatedAt: new Date().toISOString() }
+            : rule));
         }
         return;
       }
       const del = e.target.closest('.xeb-rule-del');
       if (del) {
-        const i = parseInt(del.dataset.i);
-        createBackup('删除规则前自动备份');
-        rules.splice(i, 1);
-        saveRules();
-        applyRules({ restore: true });
-        renderRules();
+        const selected = rules[parseInt(del.dataset.i)];
+        if (selected) {
+          const key = ruleKey(selected);
+          clearPreview();
+          updateRules('删除规则前自动备份', current => current.filter(rule => ruleKey(rule) !== key));
+        }
       }
     });
 
@@ -1180,14 +1278,8 @@
           try {
             const imported = JSON.parse(ev.target.result);
             if (!Array.isArray(imported)) throw new Error('格式错误');
-            createBackup('导入规则前自动备份');
-            normalizeRules(imported).forEach(rule => {
-              if (!rules.some(item => getSelector(item) === rule.selector)) rules.push(rule);
-            });
-            saveRules();
-            applyRules({ restore: true });
-            renderRules();
-            alert(`已导入 ${imported.length} 条规则`);
+            const added = addRules('导入规则前自动备份', normalizeRules(imported));
+            alert(`已导入 ${added.length} 条规则`);
           } catch (e) {
             alert('导入失败：' + e.message);
           }
@@ -1226,6 +1318,7 @@
       return;
     }
     if (e.key === 'Escape') {
+      if (e.target.closest?.('[role="menu"]')) return;
       if (pickMode) {
         e.preventDefault();
         stopPickMode();
@@ -1257,7 +1350,7 @@
   function onMouseOver(e) {
     if (!pickMode) return;
     const el = e.target;
-    if (el.closest('#xeb-panel') || el.closest('#xeb-toggle-fab')) return;
+    if (isProtected(el)) return;
     if (highlightedEl && highlightedEl !== el) {
       highlightedEl.classList.remove('xeb-hover-highlight');
     }
@@ -1276,7 +1369,7 @@
   function onPickClick(e) {
     if (!pickMode) return;
     const el = e.target;
-    if (el.closest('#xeb-panel') || el.closest('#xeb-toggle-fab')) return;
+    if (isProtected(el)) return;
     e.preventDefault();
     e.stopPropagation();
 
@@ -1294,6 +1387,7 @@
 
   function stopPickMode() {
     pickMode = false;
+    if (document.body.dataset.xUserscriptPicker === PICKER_ID) delete document.body.dataset.xUserscriptPicker;
     const btn = document.getElementById('xeb-pick-btn');
     if (btn) {
       btn.textContent = '🖱 点击选取元素';
@@ -1305,6 +1399,10 @@
       highlightedEl = null;
     }
   }
+
+  document.addEventListener(PICKER_EVENT, (e) => {
+    if (pickMode && e.detail !== PICKER_ID) stopPickMode();
+  });
 
   function clearSelectedHighlights() {
     selectedEls.forEach(el => el.classList.remove('xeb-selected-highlight'));
@@ -1335,7 +1433,7 @@
     previewRuleIndex = index;
     try {
       document.querySelectorAll(rule.selector).forEach(el => {
-        if (!el.closest('#xeb-panel') && !el.closest('#xeb-toggle-fab')) {
+        if (!isProtected(el)) {
           el.classList.add('xeb-rule-preview-match');
         }
       });
@@ -1349,7 +1447,7 @@
     setDebugMode(true);
     try {
       const target = Array.from(document.querySelectorAll(rule.selector))
-        .find(el => !el.closest('#xeb-panel') && !el.closest('#xeb-toggle-fab'));
+        .find(el => !isProtected(el));
       if (target) target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
     } catch (e) {}
   }
@@ -1359,29 +1457,36 @@
     if (!rule) return;
     const note = prompt('规则备注：', rule.note || '');
     if (note === null) return;
-    const currentScope = normalizeScope(rule.scope).type;
-    const scope = prompt('作用范围：global=全站，path=当前路径，profile=当前主页', currentScope);
+    const currentScope = rule.scope;
+    const scope = prompt('作用范围：global=全站，path=当前路径，profile=当前主页', currentScope.type);
     if (scope === null) return;
-    createBackup('编辑规则前自动备份');
-    rule.note = note.trim();
-    rule.scope = createScope(['global', 'path', 'profile'].includes(scope) ? scope : currentScope);
-    rule.updatedAt = new Date().toISOString();
-    saveRules();
-    applyRules({ restore: true });
-    renderRules();
+    const key = ruleKey(rule);
+    updateRules('编辑规则前自动备份', current => {
+      const selected = current.find(item => ruleKey(item) === key);
+      if (!selected) return null;
+      const newScope = ['global', 'path', 'profile'].includes(scope) && scope !== currentScope.type
+        ? createScope(scope) : currentScope;
+      const edited = { ...selected, note: note.trim(), scope: newScope, updatedAt: new Date().toISOString() };
+      const newKey = ruleKey(edited);
+      if (newKey !== key && current.some(item => ruleKey(item) === newKey)) {
+        alert('已存在相同选择器和作用范围的规则');
+        return null;
+      }
+      return current.map(item => ruleKey(item) === key ? edited : item);
+    });
   }
 
   function setPaused(value) {
     paused = value;
     GM_setValue(PAUSED_KEY, paused);
-    applyRules({ restore: true });
+    applyRules();
     renderRules();
   }
 
   function setDebugMode(value) {
     debugMode = value;
     GM_setValue(DEBUG_KEY, debugMode);
-    applyRules({ restore: true });
+    applyRules();
     renderRules();
   }
 
@@ -1428,19 +1533,14 @@
   function togglePanel(show, opts = {}) {
     panelVisible = show;
 
-    // Self-heal: a panel that failed to build (or was removed) must not make the
-    // menu command silently do nothing.
-    if (!document.getElementById('xeb-panel')) {
-      try { buildPanel(); } catch (e) {
-        console.error('[XEB] buildPanel failed', e);
-        alert('X Element Blocker: 面板创建失败\n' + e.message);
-        return;
-      }
+    let panel, fab;
+    try {
+      ({ panel, fab } = ensurePanel());
+    } catch (e) {
+      console.error('[XEB] buildPanel failed', e);
+      alert('X Element Blocker: 面板创建失败\n' + e.message);
+      return;
     }
-
-    const panel = document.getElementById('xeb-panel');
-    const fab = document.getElementById('xeb-toggle-fab');
-    if (!panel) return;
 
     // The floating button is the ONLY discoverable entry point. Hiding it with the
     // panel left the script with no visible UI at all after init() called
@@ -1522,9 +1622,7 @@
 
   // ─── 初始化 ──────────────────────────────────────────────────────────────────
   function init() {
-    document.documentElement.dataset.xebBooted = '1';
     try {
-      buildPanel();
       applyRules();
       // Restore the last state instead of forcing it closed. The floating button
       // stays visible either way, so the panel is always reachable.

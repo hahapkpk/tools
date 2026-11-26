@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Viral Monitor Lite
 // @namespace    local.codex.x-viral-monitor-lite
-// @version      0.2.7
+// @version      0.2.8
 // @description  X timeline velocity badges, bookmark counts, and copy tweet as Markdown. No image viewer.
 // @match        https://x.com/*
 // @match        https://pro.x.com/*
@@ -61,8 +61,7 @@
  *             entities}), so never read counters from it on XDS payloads.
  *   fallback  DOM only. Views/counts come from the action-group aria-label;
  *             createdAt is parsed from the relative date text (low precision).
- *             DOM data is merged with fillOnly, so it can never overwrite the
- *             authoritative GraphQL fields.
+ *             DOM readings stay current and fill fields missing from GraphQL.
  */
 
 (() => {
@@ -72,8 +71,9 @@
   const DEBUG = false;
   // X moved GraphQL from x.com/i/api/graphql/<hash>/<op> to api.x.com/graphql/<hash>/<op>
   // (verified 2026-11 against the XDS frontend). Match both, plus the legacy form.
-  const GRAPHQL_RE = /\/(?:i\/api\/)?graphql\//;
-  const MSG = `${SCRIPT_ID}:graphql`;
+  const GRAPHQL_RE = /^\/(?:i\/api\/)?graphql\//;
+  const API_HOSTS = new Set(['x.com', 'api.x.com', 'pro.x.com', 'twitter.com', 'api.twitter.com']);
+  const STATUS_PATH = /^\/(?:i\/web|[^/]+)\/status\/(\d+)\/?$/;
   const pageWindow = typeof unsafeWindow === 'undefined' ? window : unsafeWindow;
   const thresholds = { trending: 1000, viral: 10000 };
   const tweetDataStore = new Map();
@@ -96,6 +96,8 @@
     tweet: 'article',
     share: '[data-engagement-action="share"]',
     header: '.x-middot-group',
+    authorHeader: '.x-middot-group, [data-testid="User-Name"]',
+    quote: '[data-testid="quoteTweet"], [data-testid="card.wrapper"], [role="link"]:not(a)',
     caret: 'button[aria-label="更多"], button[aria-label="More"]',
     text: '.whitespace-pre-wrap.wrap-anywhere[lang]',
     group: '[role="group"]',
@@ -180,56 +182,59 @@
   }
 
   // ---- network hook (page main world via unsafeWindow) -----------------------
+  function isGraphqlRequest(input) {
+    try {
+      const value = typeof input === 'string' ? input : input?.url || input?.href;
+      if (!value) return false;
+      const url = new URL(value, location.href);
+      return url.protocol === 'https:' && API_HOSTS.has(url.hostname) && GRAPHQL_RE.test(url.pathname);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function ingestGraphql(payload) {
+    netPayloads += 1;
+    scanForTweets(payload);
+    markDiag();
+  }
+
   function installNetworkHook() {
     if (pageWindow.__xvlNetworkHookInstalled) return;
     pageWindow.__xvlNetworkHookInstalled = true;
 
-    const postGraphql = (url, payload, source) => {
-      try {
-        window.postMessage({ type: MSG, url, payload, source }, '*');
-      } catch (_) {}
-    };
-
-    const extractUrl = (input) => {
-      if (!input) return '';
-      if (typeof input === 'string') return input;
-      if (input instanceof URL) return input.href;
-      if (typeof input.url === 'string') return input.url;
-      return '';
-    };
-
     const originalFetch = pageWindow.fetch;
     pageWindow.fetch = async function xvlFetchHook(...args) {
-      const url = extractUrl(args[0]);
       const response = await originalFetch.apply(this, args);
-      if (GRAPHQL_RE.test(url)) {
-        response.clone().json()
-          .then((payload) => postGraphql(url, payload, 'fetch'))
-          .catch(() => {});
+      if (response.ok && isGraphqlRequest(args[0])) {
+        try {
+          // The hook and the collector share a closure, even when Tampermonkey
+          // exposes the page's fetch through a different Window object.
+          response.clone().json().then(ingestGraphql).catch(() => {});
+        } catch (_) {}
       }
       return response;
     };
 
     const xhrOpen = pageWindow.XMLHttpRequest?.prototype?.open;
     if (xhrOpen) {
+      const graphqlRequests = new WeakMap();
       pageWindow.XMLHttpRequest.prototype.open = function xvlXhrOpen(method, url, ...rest) {
-        this.__xvlUrl = typeof url === 'string' ? url : String(url || '');
-        this.addEventListener('load', function xvlXhrLoad() {
-          if (!GRAPHQL_RE.test(this.__xvlUrl || '')) return;
-          try { postGraphql(this.__xvlUrl, JSON.parse(this.responseText), 'xhr'); } catch (_) {}
-        });
-        return xhrOpen.call(this, method, url, ...rest);
+        const result = xhrOpen.call(this, method, url, ...rest);
+        if (!graphqlRequests.has(this)) {
+          this.addEventListener('load', function xvlXhrLoad() {
+            if (!graphqlRequests.get(this) || this.status < 200 || this.status >= 300) return;
+            try {
+              ingestGraphql(this.responseType === 'json' ? this.response : JSON.parse(this.responseText));
+            } catch (_) {}
+          });
+        }
+        graphqlRequests.set(this, isGraphqlRequest(url));
+        return result;
       };
     }
     log('network hook installed');
   }
-
-  window.addEventListener('message', (event) => {
-    if (event.source !== window || event.data?.type !== MSG) return;
-    netPayloads += 1;
-    scanForTweets(event.data.payload);
-    markDiag();
-  });
 
   function scanForTweets(root) {
     const seen = new WeakSet();
@@ -243,7 +248,7 @@
       if (result) {
         const data = extractTweetData(result);
         if (data?.id) {
-          mergeTweetData(data.id, data);
+          mergeTweetData(data.id, data, 'api');
           changed = true;
         }
       }
@@ -261,22 +266,35 @@
     if (changed) scheduleRender();
   }
 
-  function mergeTweetData(id, patch, opts = {}) {
-    const prev = tweetDataStore.get(id) || {};
-    let next;
-    if (opts.fillOnly) {
-      // DOM fallback must never clobber authoritative GraphQL fields: DOM text is
-      // truncated at "显示更多" and its createdAt is relative-time rounded.
-      next = { ...patch };
-      for (const [k, v] of Object.entries(prev)) {
-        const empty = v === undefined || v === null || v === '';
-        if (!empty) next[k] = v;
-      }
-    } else {
-      next = { ...prev, ...patch };
+  function mergeTweetData(id, patch, source) {
+    let record = tweetDataStore.get(id);
+    if (!record) {
+      record = { api: {}, dom: {} };
+      tweetDataStore.set(id, record);
     }
-    next.urlMap = { ...(prev.urlMap || {}), ...(patch.urlMap || {}) };
-    tweetDataStore.set(id, next);
+
+    if (source === 'dom') {
+      if (record.api.bookmarks === undefined && patch.bookmarks !== undefined && patch.bookmarks !== record.dom.bookmarks) {
+        delete record.bookmarkOverride;
+      }
+      record.dom = patch;
+      return;
+    }
+
+    record.api = {
+      ...record.api,
+      ...patch,
+      urlMap: { ...record.api.urlMap, ...patch.urlMap },
+    };
+    if (patch.bookmarks !== undefined) delete record.bookmarkOverride;
+  }
+
+  function getTweetData(id) {
+    const record = tweetDataStore.get(id);
+    if (!record) return {};
+    const data = { ...record.dom, ...record.api };
+    if (record.bookmarkOverride !== undefined) data.bookmarks = record.bookmarkOverride;
+    return data;
   }
 
   function extractTweetData(result) {
@@ -302,14 +320,16 @@
 
     // created_at: XDS ships epoch milliseconds in details.created_at_ms;
     // the pre-XDS schema used a "Wed Oct 05 ..." string in legacy.created_at.
-    const createdMs = Number(details.created_at_ms) || 0;
-    const createdAt = createdMs ? new Date(createdMs).toISOString() : (legacy.created_at || '');
+    const created = new Date(Number(details.created_at_ms));
+    const createdAt = created.getTime() > 0 ? created.toISOString() : (legacy.created_at || '');
 
-    const viewRaw = tweet.views?.count ?? legacy.ext_views?.count ?? '0';
-    const viewCount = Number.parseInt(viewRaw, 10) || 0;
     const num = (...vals) => {
-      for (const v of vals) if (v !== undefined && v !== null) return Number(v) || 0;
-      return 0;
+      for (const value of vals) {
+        if (value === '' || value == null) continue;
+        const count = Number(value);
+        if (Number.isFinite(count) && count >= 0) return count;
+      }
+      return undefined;
     };
 
     const urlMap = {};
@@ -344,11 +364,11 @@
       }
     }
 
-    return {
-      id: tweetId,
+    return withoutEmpty({
+      id: String(tweetId),
       screenName: userCore.screen_name || userLegacy.screen_name || '',
       author: userCore.name || userLegacy.name || '',
-      views: viewCount,
+      views: num(tweet.views?.count, legacy.ext_views?.count),
       likes: num(counts.favorite_count, legacy.favorite_count),
       retweets: num(counts.retweet_count, legacy.retweet_count),
       replies: num(counts.reply_count, legacy.reply_count),
@@ -356,7 +376,7 @@
       createdAt,
       text: note?.text || details.full_text || legacy.full_text || '',
       urlMap,
-    };
+    });
   }
 
   // ---- DOM readers ----------------------------------------------------------
@@ -380,17 +400,33 @@
     return [...root.querySelectorAll?.('article') || []].filter(isTweetArticle);
   }
 
-  function getTweetIdFromArticle(article) {
-    const links = [...article.querySelectorAll('a[href*="/status/"]')];
-    const main = links.find((a) => !/\/(?:analytics|photo|video)(?:\/|$)/.test(a.getAttribute('href') || ''))
-      || links[0];
-    return main?.getAttribute('href')?.match(/\/status\/(\d+)/)?.[1] || null;
+  function belongsToPost(el, article) {
+    if (el.closest('article') !== article) return false;
+    const quote = el.closest(SEL.quote);
+    return !quote || !article.contains(quote);
+  }
+
+  function getStatusLinks(article) {
+    return [...article.querySelectorAll('a[href*="/status/"]')].filter((link) => {
+      if (!belongsToPost(link, article) || !API_HOSTS.has(link.hostname)) return false;
+      if (!STATUS_PATH.test(link.pathname)) return false;
+      return !link.closest(`${SEL.text}, [data-testid="tweetText"]`);
+    });
+  }
+
+  function getTweetPermalink(article) {
+    const links = getStatusLinks(article);
+    return findDateLink(article, links) || (links.length === 1 ? links[0] : null);
+  }
+
+  function getTweetId(link) {
+    return link?.pathname.match(STATUS_PATH)?.[1] || null;
   }
 
   function findHeaderRow(article) {
     // Timeline cards put the name/handle/time inside .x-middot-group, whose parent
     // is the flex row that also holds the caret.
-    const middot = article.querySelector(SEL.header);
+    const middot = [...article.querySelectorAll(SEL.header)].find((el) => belongsToPost(el, article));
     if (middot) {
       let el = middot.parentElement;
       for (let i = 0; el && el !== article && i < 3; i++) {
@@ -452,15 +488,15 @@
     }) || null;
   }
 
-  function getArticleFallbackData(article, id) {
+  function getArticleFallbackData(article, permalink, id) {
     const groupLabel = article.querySelector(SEL.group)?.getAttribute('aria-label') || '';
     const counts = parseActionGroupLabel(groupLabel);
-    const dateLink = findDateLink(article);
+    const dateLink = findDateLink(article, permalink ? [permalink] : []);
     const createdAt = dateLink ? relativeTimeToIso(dateLink.textContent) : '';
     const text = article.querySelector(SEL.text)?.innerText?.trim()
       || article.querySelector('[data-testid="tweetText"]')?.innerText?.trim() || '';
-    const { author, screenName } = readAuthor(article);
-    const time = article.querySelector('time[datetime]')?.getAttribute('datetime') || createdAt;
+    const { author, screenName } = readAuthor(article, permalink);
+    const time = permalink?.querySelector('time[datetime]')?.getAttribute('datetime') || createdAt;
 
     return {
       id,
@@ -472,16 +508,24 @@
     };
   }
 
-  function findDateLink(article) {
+  function findDateLink(article, links) {
     // Timeline cards: "8小时", "11月23日", "Mar 5", "2024年3月5日".
     // Tweet detail pages prefix a clock: "21:26 · 2026年11月24日",
     // "9:26 PM · Nov 24, 2026", "21:26 · 11月24日".
-    const TIME = '(?:\\d{1,2}:\\d{2}(?:\\s*(?:AM|PM))?)';
+    const TIME = '(?:\\d{1,2}:\\d{2}(?:\\s*(?:AM|PM|上午|下午))?)';
     const DATE = '(?:\\d+\\s*(?:秒|分钟|小时|天|周|s|m|h|d|w)\\S*|[A-Za-z]{3,}\\s+\\d{1,2}(?:,?\\s*\\d{4})?|\\d{4}年\\d{1,2}月\\d{1,2}日|\\d{1,2}月\\d{1,2}日)';
     const re = new RegExp(`^\\s*(?:${TIME}\\s*[·•,]?\\s*${DATE}|${DATE}|${TIME})\\s*$`, 'i');
-    return [...article.querySelectorAll('a[href*="/status/"]')]
-      .find((a) => !/\/(analytics|photo|video)/.test(a.getAttribute('href') || '') && re.test(a.textContent))
-      || null;
+    const dates = links.filter((link) => link.querySelector('time[datetime]') || re.test(link.textContent));
+    const body = article.querySelector(`${SEL.text}, [data-testid="tweetText"]`);
+    const headerDate = dates.find((link) => {
+      const header = link.closest(SEL.authorHeader);
+      return header && belongsToPost(header, article)
+        && (!body || (link.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING));
+    });
+    const postId = location.pathname.match(STATUS_PATH)?.[1];
+    return headerDate
+      || dates.find((link) => postId && getTweetId(link) === postId)
+      || dates[0] || null;
   }
 
   function relativeTimeToIso(raw) {
@@ -544,16 +588,21 @@
     return '';
   }
 
-  function readAuthor(article) {
-    const header = article.querySelector(SEL.header) || article.querySelector('[data-testid="User-Name"]');
-    const links = [...(header?.querySelectorAll('a[href^="/"]') || [])];
+  function readAuthor(article, permalink) {
+    const path = permalink?.pathname.match(/^\/([^/]+)\/status\//);
+    const handle = path?.[1] === 'i' ? '' : (path?.[1] || '');
+    const header = permalink?.closest(SEL.authorHeader)
+      || [...article.querySelectorAll(SEL.authorHeader)].find((el) => belongsToPost(el, article));
+    const scope = header || article;
+    const links = [...scope.querySelectorAll('a[href^="/"]')].filter((link) =>
+      belongsToPost(link, article) && (!handle || link.pathname.toLowerCase() === `/${handle.toLowerCase()}`)
+    );
     const handleLink = links.find((a) => /^@/.test(a.textContent.trim()));
     const nameLink = links.find((a) => !/^@/.test(a.textContent.trim()) && a.textContent.trim());
-    const href = article.querySelector('a[href*="/status/"]')?.getAttribute('href') || '';
     return {
-      screenName: handleLink?.textContent.trim().replace(/^@/, '')
+      screenName: handle || handleLink?.textContent.trim().replace(/^@/, '')
         || nameLink?.getAttribute('href')?.slice(1).split('/')[0]
-        || href.match(/^\/([^/]+)\/status\//)?.[1] || '',
+        || '',
       author: nameLink?.textContent.trim().split('\n')[0] || '',
     };
   }
@@ -562,7 +611,8 @@
     const out = {};
     if (!label) return out;
     // XDS zh-CN joins counters with the ideographic 、 (U+3001); older builds used ，or , .
-    for (const part of label.split(/[，,、]/).map((s) => s.trim())) {
+    const ungrouped = label.replace(/(\d)[,，](?=\d{3}(?!\d))/g, '$1');
+    for (const part of ungrouped.split(/[，,、]/)) {
       const value = parseHumanNumber(part);
       if (!Number.isFinite(value)) continue;
       if (/回复|repl/i.test(part)) out.replies = value;
@@ -576,10 +626,10 @@
 
   function parseHumanNumber(raw) {
     if (!raw) return NaN;
-    const m = String(raw).replace(/,/g, '').match(/(\d+(?:\.\d+)?)\s*([万萬亿億kKmMbB]?)/);
+    const m = String(raw).match(/(\d+(?:\.\d+)?)(?:\s*(万|萬|亿|億|[kmb](?![a-z])))?/i);
     if (!m) return NaN;
     const n = Number.parseFloat(m[1]);
-    const unit = m[2].toLowerCase();
+    const unit = (m[2] || '').toLowerCase();
     const mult = unit === '万' || unit === '萬' ? 10000
       : unit === '亿' || unit === '億' ? 100000000
       : unit === 'k' ? 1000
@@ -632,11 +682,12 @@
   function renderAll() {
     injectStyles();
     for (const article of getTweetArticles()) {
-      const id = getTweetIdFromArticle(article);
+      const permalink = getTweetPermalink(article);
+      const id = getTweetId(permalink);
       if (!id) continue;
-      const fallback = getArticleFallbackData(article, id);
-      mergeTweetData(id, withoutEmpty(fallback), { fillOnly: true });
-      const data = tweetDataStore.get(id);
+      const fallback = getArticleFallbackData(article, permalink, id);
+      mergeTweetData(id, withoutEmpty(fallback), 'dom');
+      const data = getTweetData(id);
       renderBadge(article, data);
       renderBookmarkCount(article, data);
     }
@@ -649,7 +700,10 @@
 
   function renderBadge(article, data) {
     const score = computeScore(data);
-    if (!score) return;
+    if (!score) {
+      article.querySelector('.xvl-badge')?.remove();
+      return;
+    }
     const { velocity } = score;
     const tier = velocity >= thresholds.viral ? 'viral' : velocity >= thresholds.trending ? 'trending' : 'normal';
     const prefix = tier === 'viral' ? '🔥' : tier === 'trending' ? '🚀' : '🌱';
@@ -661,21 +715,25 @@
     if (!badge) {
       badge = document.createElement('span');
       badge.className = 'xvl-badge';
-      const caret = headerRow.querySelector(SEL.caret) || article.querySelector(SEL.caret);
-      headerRow.insertBefore(badge, caret?.parentElement || null);
+      let before = headerRow.querySelector(SEL.caret);
+      while (before && before.parentElement !== headerRow) before = before.parentElement;
+      headerRow.insertBefore(badge, before);
     }
-    badge.className = `xvl-badge xvl-badge--${tier}`;
-    badge.dataset.prefix = prefix;
-    badge.dataset.velocity = formatCompact(velocity);
-    badge.title = [
+    const className = `xvl-badge xvl-badge--${tier}`;
+    if (badge.className !== className) badge.className = className;
+    if (badge.dataset.prefix !== prefix) badge.dataset.prefix = prefix;
+    const displayVelocity = formatCompact(velocity);
+    if (badge.dataset.velocity !== displayVelocity) badge.dataset.velocity = displayVelocity;
+    const title = [
       `浏览量: ${(data.views || 0).toLocaleString()}`,
       `点赞: ${(data.likes || 0).toLocaleString()}`,
       `转发: ${(data.retweets || 0).toLocaleString()}`,
       `回复: ${(data.replies || 0).toLocaleString()}`,
       `书签: ${(data.bookmarks || 0).toLocaleString()}`,
-      `流速: ${formatCompact(velocity)}/h`,
+      `流速: ${displayVelocity}/h`,
       `爆帖指数: ${score.score}/100`,
     ].join('\n');
+    if (badge.title !== title) badge.title = title;
   }
 
   function renderBookmarkCount(article, data) {
@@ -698,33 +756,46 @@
       const pill = button.querySelector('.x-engagement-pill') || button.querySelector(':scope > div') || button;
       pill.appendChild(node);
     }
-    node.textContent = formatCompact(count);
-    node.title = `${count.toLocaleString()} 书签`;
+    const text = formatCompact(count);
+    const title = `${count.toLocaleString()} 书签`;
+    if (node.textContent !== text) node.textContent = text;
+    if (node.title !== title) node.title = title;
   }
 
   // ---- interactions ---------------------------------------------------------
 
   document.addEventListener('click', (event) => {
+    if (event.defaultPrevented || document.body?.dataset.xUserscriptPicker) return;
     const shareButton = event.target.closest?.(
       `${SEL.share}, button[aria-label*="分享"], button[aria-label*="Share"], button[aria-label*="共有"], button[aria-label*="share"]`
     );
     if (shareButton) {
       const article = shareButton.closest('article');
       if (article && isTweetArticle(article)) {
-        lastShareContext = { article, id: getTweetIdFromArticle(article) };
-        scheduleMenuInject();
+        const trigger = event.target.closest('button, [role="button"]')
+          || shareButton.querySelector('button, [role="button"]') || shareButton;
+        if (trigger.getAttribute('aria-expanded') !== 'true') {
+          const permalink = getTweetPermalink(article);
+          lastShareContext = {
+            article, permalink, trigger,
+            previousMenus: new Set(document.querySelectorAll(SEL.menu)),
+            startedAt: Date.now(),
+          };
+          scheduleMenuInject();
+        }
       }
     }
 
     const bookmark = event.target.closest?.('button');
     if (bookmark && isBookmarkControl(bookmark)) {
       const article = bookmark.closest('article');
-      const id = article && getTweetIdFromArticle(article);
-      const data = id && tweetDataStore.get(id);
-      if (data) {
-        const isRemoving = /已添加书签|已加入书签|remove/i.test(bookmark.getAttribute('aria-label') || '')
+      const id = article && getTweetId(getTweetPermalink(article));
+      const record = tweetDataStore.get(id);
+      if (record) {
+        const isRemoving = /已添加书签|已加入书签|从书签|remove/i.test(bookmark.getAttribute('aria-label') || '')
+          || bookmark.getAttribute('data-testid') === 'removeBookmark'
           || bookmark.getAttribute('aria-pressed') === 'true';
-        data.bookmarks = Math.max(0, (data.bookmarks || 0) + (isRemoving ? -1 : 1));
+        record.bookmarkOverride = Math.max(0, (getTweetData(id).bookmarks || 0) + (isRemoving ? -1 : 1));
         window.setTimeout(scheduleRender, 100);
       }
     }
@@ -732,7 +803,8 @@
 
   function isBookmarkControl(el) {
     if (el.matches('button[data-testid="bookmark"], button[data-testid="removeBookmark"]')) return true;
-    if (el.hasAttribute('data-engagement-action')) return false;
+    const action = el.closest(SEL.engagement)?.getAttribute('data-engagement-action');
+    if (action) return action === 'bookmark';
     const label = el.getAttribute('aria-label') || '';
     return /书签|bookmark/i.test(label);
   }
@@ -740,6 +812,7 @@
   // ---- share-menu injection ------------------------------------------------
 
   let menuPollTimer = 0;
+  const copyContexts = new WeakMap();
 
   /**
    * Base UI mounts an EMPTY [role=menu] container first and fills the items in a
@@ -747,18 +820,27 @@
    * menuitems. Poll until the menu is populated (or 2s elapses) before injecting.
    */
   function scheduleMenuInject(menuEl) {
-    if (menuPollTimer) return;
-    const started = Date.now();
+    const context = lastShareContext;
+    if (!context || menuPollTimer || Date.now() - context.startedAt > 2000) return;
     const tick = () => {
       menuPollTimer = 0;
-      const menus = menuEl && menuEl.isConnected ? [menuEl] : [...document.querySelectorAll(SEL.menu)];
-      for (const menu of menus) {
-        if (!menu.querySelectorAll(SEL.menuItem).length) continue;
-        if (!isShareMenu(menu)) continue;
-        injectCopyMarkdownItem(menu);
+      if (context !== lastShareContext) {
+        scheduleMenuInject();
         return;
       }
-      if (Date.now() - started > 2000) return;
+      if (!context.article.isConnected) return;
+      const menuId = context.trigger.getAttribute('aria-controls');
+      const current = [...document.querySelectorAll(SEL.menu)];
+      const menus = menuEl?.isConnected ? [menuEl, ...current.filter((menu) => menu !== menuEl)] : current;
+      for (const menu of menus) {
+        const belongsToTrigger = menuId && menu.id ? menu.id === menuId : !context.previousMenus.has(menu);
+        if (!belongsToTrigger) continue;
+        if (!menu.querySelectorAll(SEL.menuItem).length) continue;
+        if (!isShareMenu(menu)) continue;
+        injectCopyMarkdownItem(menu, context);
+        return;
+      }
+      if (Date.now() - context.startedAt > 2000) return;
       menuPollTimer = window.setTimeout(tick, 80);
     };
     tick();
@@ -788,21 +870,23 @@
     else iconBox.appendChild(buildCopyIcon());
   }
 
-  function bindCopyHandler(item) {
+  function bindCopyHandler(item, menu, context) {
+    copyContexts.set(item, { menu, context });
     if (item.dataset.xvlBound === '1') return;
     item.dataset.xvlBound = '1';
     item.addEventListener('click', async (event) => {
       event.preventDefault();
       event.stopPropagation();
-      const markdown = buildTweetMarkdown(lastShareContext);
+      const binding = copyContexts.get(item);
+      const markdown = buildTweetMarkdown(binding.context);
       const ok = await copyToClipboard(markdown);
       showToast(ok ? '已复制为 Markdown' : '复制失败', ok ? 'success' : 'error');
-      closeMenus();
+      if (ok) closeShareMenu(binding.menu, binding.context);
     });
   }
 
-  function injectCopyMarkdownItem(menuEl) {
-    if (!lastShareContext?.article?.isConnected) return;
+  function injectCopyMarkdownItem(menuEl, context) {
+    if (!context.article.isConnected) return;
     const items = [...menuEl.querySelectorAll(SEL.menuItem)];
     if (!items.length) return;
 
@@ -810,11 +894,12 @@
     // entry. Take that one over instead of stacking a second copy.
     const foreign = items.find((i) => /复制为\s*Markdown/i.test(i.textContent || ''));
     if (foreign) {
-      if (foreign.dataset.xvlBound === '1') return;
-      foreign.classList.add('xvl-copy-md-item');
-      ensureMenuIcon(foreign);
-      setMenuItemLabel(foreign, '复制为 Markdown', 'X Viral Monitor Lite');
-      bindCopyHandler(foreign);
+      if (foreign.dataset.xvlBound !== '1') {
+        foreign.classList.add('xvl-copy-md-item');
+        ensureMenuIcon(foreign);
+        setMenuItemLabel(foreign, '复制为 Markdown', 'X Viral Monitor Lite');
+      }
+      bindCopyHandler(foreign, menuEl, context);
       return;
     }
 
@@ -832,7 +917,7 @@
 
     ensureMenuIcon(clone);
     setMenuItemLabel(clone, '复制为 Markdown', 'X Viral Monitor Lite');
-    bindCopyHandler(clone);
+    bindCopyHandler(clone, menuEl, context);
 
     items[items.length - 1].parentElement.appendChild(clone);
   }
@@ -885,13 +970,15 @@
   }
 
   function buildTweetMarkdown(ctx) {
-    const article = ctx?.article;
-    const id = ctx?.id || (article && getTweetIdFromArticle(article));
-    const fallback = article ? getArticleFallbackData(article, id) : {};
-    const data = { ...withoutEmpty(fallback), ...(tweetDataStore.get(id) || {}) };
+    const article = ctx.article;
+    const permalink = ctx.permalink || getTweetPermalink(article);
+    const id = getTweetId(permalink);
+    const fallback = getArticleFallbackData(article, permalink, id);
+    if (id) mergeTweetData(id, withoutEmpty(fallback), 'dom');
+    const data = id ? getTweetData(id) : fallback;
     const screenName = data.screenName || '';
     const author = data.author || screenName || 'X user';
-    const url = screenName && id ? `https://x.com/${screenName}/status/${id}` : location.href;
+    const url = permalink ? `https://x.com${permalink.pathname}` : location.href;
     const created = data.createdAt ? new Date(data.createdAt) : null;
     const createdText = created && !Number.isNaN(created.getTime()) ? created.toLocaleString() : '';
 
@@ -949,9 +1036,13 @@
       ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px';
       document.body.appendChild(ta);
       ta.select();
-      const ok = document.execCommand('copy');
-      ta.remove();
-      return ok;
+      try {
+        return document.execCommand('copy');
+      } catch (_) {
+        return false;
+      } finally {
+        ta.remove();
+      }
     }
   }
 
@@ -967,15 +1058,27 @@
     }, 1800);
   }
 
-  function closeMenus() {
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
-    setTimeout(() => document.querySelectorAll('[role="menu"]').forEach((menu) => menu.remove()), 80);
+  function closeShareMenu(menu, context) {
+    const trigger = context.trigger;
+    if (lastShareContext !== context || !menu.isConnected || !trigger.isConnected) return;
+    if (document.body?.dataset.xUserscriptPicker || trigger.getAttribute('aria-expanded') === 'false') return;
+    const menuId = trigger.getAttribute('aria-controls');
+    if (menuId && menu.id && menuId !== menu.id) return;
+    const focused = document.activeElement;
+    const target = menu.contains(focused) ? focused : menu.querySelector(SEL.menuItem) || menu;
+    target.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Escape', code: 'Escape', bubbles: true, cancelable: true,
+    }));
   }
 
   function watchDom() {
     const observer = new MutationObserver((mutations) => {
       let shouldRender = false;
       for (const m of mutations) {
+        if (m.type === 'attributes') {
+          if (m.target.matches(SEL.group) && m.target.closest(SEL.tweet)) shouldRender = true;
+          continue;
+        }
         for (const node of m.addedNodes) {
           if (!(node instanceof Element)) continue;
           if (node.matches?.('article') || node.querySelector?.('article')) {
@@ -990,7 +1093,9 @@
       }
       if (shouldRender) scheduleRender();
     });
-    observer.observe(document.documentElement, { childList: true, subtree: true });
+    observer.observe(document.documentElement, {
+      childList: true, subtree: true, attributes: true, attributeFilter: ['aria-label'],
+    });
   }
 
   function initWhenReady() {

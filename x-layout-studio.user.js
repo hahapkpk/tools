@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Layout Studio
 // @namespace    local.codex.x-layout-studio
-// @version      0.3.4
+// @version      0.3.5
 // @description  Drag to resize the X timeline column, reclaim the empty right rail, compact the nav, and declutter the timeline.
 // @match        https://x.com/*
 // @match        https://pro.x.com/*
@@ -49,12 +49,15 @@
   const SCRIPT_ID = 'xls';
   const DEBUG = false;
   const log = (...a) => DEBUG && console.log(`[${SCRIPT_ID}]`, ...a);
+  const pageWindow = typeof unsafeWindow === 'undefined' ? window : unsafeWindow;
+  const PICKER_EVENT = 'x-userscript-picker-start';
+  const PICKER_ID = 'layout-studio';
 
   // Single instance only. Two copies (e.g. a Tampermonkey install plus a manual
   // injection) would each rewrite the same <style> element from their own
   // settings, so toggles would visibly flap.
-  if (document.documentElement.dataset.xlsBooted === '1') return;
-  document.documentElement.dataset.xlsBooted = '1';
+  if (pageWindow.__xlsBooted) return;
+  pageWindow.__xlsBooted = true;
 
   const DEFAULTS = {
     mainWidth: 700,     // px, user-draggable
@@ -115,6 +118,7 @@
     // shared
     tablist: '[role="tablist"]',
     viewCount: 'a[aria-label="查看次数"], a[aria-label="View post analytics"], a[href$="/analytics"]',
+    pickerControls: '.xls-panel, .xls-fab, .xls-pickbox, .xls-picktip, .xls-handle, #xeb-panel, #xeb-toggle-fab',
   };
 
   /** The element whose width the user drags. XDS main, else legacy primaryColumn. */
@@ -421,10 +425,10 @@ ${SEL.banner} nav a, ${SEL.banner} nav button {
     // which only ever marks elements that hold text and contain no <svg>.
     out.push('[data-xls-navlabel="1"] { display: none !important; }');
 
-    if (settings.hideTabs) {
+    if (settings.hideTabs && /^\/(?:home\/?)?$/.test(location.pathname)) {
       out.push(`
-${SEL.tabHeaderXds} { display: none !important; }
-${SEL.tablist} { display: none !important; }
+${SEL.mainXds} ${SEL.tabHeaderXds} { display: none !important; }
+:is(${SEL.mainXds}, ${SEL.mainRwn}) ${SEL.tablist} { display: none !important; }
 div[data-testid="primaryColumn"] div:has(> [role="tablist"]) {
   height: 0 !important; min-height: 0 !important; padding: 0 !important;
   margin: 0 !important; overflow: hidden !important; border: 0 !important;
@@ -448,7 +452,7 @@ div[class*="border-b-[0.5px]"] {
     // Selector-based hide rules from the built-in element picker.
     const rules = Array.isArray(settings.hideRules) ? settings.hideRules : [];
     for (const rule of rules) {
-      if (!rule || !rule.selector) continue;
+      if (typeof rule?.selector !== 'string' || !rule.selector) continue;
       out.push(`${rule.selector} { display: none !important; }`);
     }
 
@@ -456,7 +460,9 @@ div[class*="border-b-[0.5px]"] {
   }
 
   function renderStyles() {
-    ensureStyleEl().textContent = buildCss();
+    const style = ensureStyleEl();
+    const css = buildCss();
+    if (style.textContent !== css) style.textContent = css;
   }
 
   // ---- apply state ----------------------------------------------------------
@@ -499,6 +505,17 @@ div[class*="border-b-[0.5px]"] {
     settings[key] = value;
     if (key === 'mainWidth') settings.mainWidth = clampWidth(value);
     dirty = true;
+    if (key === 'hidePromo') {
+      if (value) tagPromoted();
+      else clearPromoted();
+    }
+    applySettings();
+    save();
+  }
+
+  function resetSettings(panelOpen = false) {
+    settings = { ...DEFAULTS, panelOpen };
+    clearPromoted();
     applySettings();
     save();
   }
@@ -507,9 +524,7 @@ div[class*="border-b-[0.5px]"] {
   function ensureHandle() {
     const main = getMain();
     if (!main) return;
-    // Rebuild unconditionally: a handle left in the column by another copy would
-    // look identical but its listeners would drive that copy's settings.
-    main.querySelectorAll(`:scope > .${SCRIPT_ID}-handle`).forEach((h) => h.remove());
+    if (main.querySelector(`:scope > .${SCRIPT_ID}-handle`)) return;
     const handle = document.createElement('div');
     handle.className = `${SCRIPT_ID}-handle`;
     handle.title = '拖动调整时间线宽度（双击重置）';
@@ -585,7 +600,11 @@ div[class*="border-b-[0.5px]"] {
   ];
 
   function buildPanel() {
-    if (panelEl && panelEl.isConnected) return;
+    if (panelEl && fabEl) {
+      if (!fabEl.isConnected) document.body.appendChild(fabEl);
+      if (!panelEl.isConnected) document.body.appendChild(panelEl);
+      return;
+    }
     // A panel present at boot time cannot belong to this instance (we build ours
     // below), so it is an orphan from a dead/previous copy: drop it and rebuild,
     // otherwise the stale panel would render numbers we no longer control.
@@ -608,7 +627,7 @@ div[class*="border-b-[0.5px]"] {
         <span>X Layout Studio</span>
         <span class="${SCRIPT_ID}-wval" data-wval>700px</span>
       </div>
-      <input type="range" min="${MIN_W}" max="1600" step="10" data-range>
+      <input type="range" min="${MIN_W}" max="${MAX_W}" step="1" data-range>
       <div data-rows></div>
       <div class="${SCRIPT_ID}-actions">
         <button type="button" class="${SCRIPT_ID}-btn" data-preset="wide">全宽模式</button>
@@ -633,9 +652,7 @@ div[class*="border-b-[0.5px]"] {
 
     const range = panelEl.querySelector('[data-range]');
     range.addEventListener('input', () => {
-      settings.mainWidth = clampWidth(Number(range.value));
-      applyWidth(settings.mainWidth);
-      syncPanel();
+      applyWidth(clampWidth(Number(range.value)));
     });
     range.addEventListener('change', () => save());
 
@@ -648,9 +665,7 @@ div[class*="border-b-[0.5px]"] {
     });
 
     panelEl.querySelector('[data-reset]').addEventListener('click', () => {
-      settings = { ...DEFAULTS, panelOpen: settings.panelOpen };
-      applySettings();
-      save();
+      resetSettings(settings.panelOpen);
     });
 
     panelEl.querySelector('[data-pick]').addEventListener('click', () => startPicking());
@@ -732,11 +747,13 @@ div[class*="border-b-[0.5px]"] {
     if (!panelEl) return;
     const val = panelEl.querySelector('[data-wval]');
     const range = panelEl.querySelector('[data-range]');
-    if (val) val.textContent = `${settings.mainWidth}px`;
-    if (range && Number(range.value) !== settings.mainWidth) range.value = String(settings.mainWidth);
+    const width = clampWidth(settings.mainWidth);
+    if (val && val.textContent !== `${width}px`) val.textContent = `${width}px`;
+    if (range && Number(range.value) !== width) range.value = String(width);
     const count = panelEl.querySelector('[data-rulecount]');
-    if (count) count.textContent = String((Array.isArray(settings.hideRules) ? settings.hideRules : []).length);
-    panelEl.classList.toggle(`${SCRIPT_ID}-open`, !!settings.panelOpen);
+    const ruleCount = String((Array.isArray(settings.hideRules) ? settings.hideRules : []).length);
+    if (count && count.textContent !== ruleCount) count.textContent = ruleCount;
+    panelEl.classList.toggle(`${SCRIPT_ID}-open`, !!settings.panelOpen && !picking);
     for (const row of panelEl.querySelectorAll(`.${SCRIPT_ID}-row`)) {
       row.classList.toggle(`${SCRIPT_ID}-on`, !!settings[row.dataset.key]);
     }
@@ -782,9 +799,9 @@ div[class*="border-b-[0.5px]"] {
     if (!el || el === document.body || el === document.documentElement) return '';
     if (el.id) return `#${CSS.escape(el.id)}`;
     const tid = el.getAttribute('data-testid');
-    if (tid) return `[data-testid="${tid.replace(/"/g, '')}"]`;
+    if (tid) return `[data-testid="${CSS.escape(tid)}"]`;
     const aria = (el.getAttribute('aria-label') || '').trim();
-    if (aria && aria.length <= 40) return `${el.tagName.toLowerCase()}[aria-label="${aria.replace(/"/g, '')}"]`;
+    if (aria && aria.length <= 40) return `${el.tagName.toLowerCase()}[aria-label="${CSS.escape(aria)}"]`;
     // Fall back to a structural path. X re-renders constantly, so keep it short.
     const parts = [];
     let cur = el;
@@ -802,13 +819,13 @@ div[class*="border-b-[0.5px]"] {
     if (!pickBox) {
       pickBox = document.createElement('div');
       pickBox.className = `${SCRIPT_ID}-pickbox`;
-      document.body.appendChild(pickBox);
     }
     if (!pickTip) {
       pickTip = document.createElement('div');
       pickTip.className = `${SCRIPT_ID}-picktip`;
-      document.body.appendChild(pickTip);
     }
+    if (!pickBox.isConnected) document.body.appendChild(pickBox);
+    if (!pickTip.isConnected) document.body.appendChild(pickTip);
   }
 
   function hidePickUi() {
@@ -819,7 +836,9 @@ div[class*="border-b-[0.5px]"] {
 
   function startPicking() {
     ensurePickUi();
+    document.dispatchEvent(new CustomEvent(PICKER_EVENT, { detail: PICKER_ID }));
     picking = true;
+    document.body.dataset.xUserscriptPicker = PICKER_ID;
     document.body.classList.add(`${SCRIPT_ID}-picking`);
     if (panelEl) panelEl.classList.remove(`${SCRIPT_ID}-open`);
     if (fabEl) fabEl.style.opacity = '.25';
@@ -827,9 +846,11 @@ div[class*="border-b-[0.5px]"] {
 
   function stopPicking() {
     picking = false;
+    if (document.body.dataset.xUserscriptPicker === PICKER_ID) delete document.body.dataset.xUserscriptPicker;
     document.body.classList.remove(`${SCRIPT_ID}-picking`);
     if (fabEl) fabEl.style.opacity = '';
     hidePickUi();
+    syncPanel();
   }
 
   function addHideRule(selector, label) {
@@ -853,10 +874,14 @@ div[class*="border-b-[0.5px]"] {
     if (bindPicker.done) return;
     bindPicker.done = true;
 
+    document.addEventListener(PICKER_EVENT, (e) => {
+      if (picking && e.detail !== PICKER_ID) stopPicking();
+    });
+
     document.addEventListener('mousemove', (e) => {
       if (!picking) return;
       const el = document.elementFromPoint(e.clientX, e.clientY);
-      if (!el || el.closest?.(`.${SCRIPT_ID}-panel, .${SCRIPT_ID}-fab, .${SCRIPT_ID}-pickbox, .${SCRIPT_ID}-picktip`)) {
+      if (!el || el.closest?.(SEL.pickerControls)) {
         hidePickUi();
         return;
       }
@@ -875,15 +900,13 @@ div[class*="border-b-[0.5px]"] {
     }, true);
 
     document.addEventListener('click', (e) => {
-      if (!picking) return;
+      if (!picking || e.target.closest?.(SEL.pickerControls)) return;
       e.preventDefault();
       e.stopPropagation();
-      if (e.target.closest?.(`.${SCRIPT_ID}-panel, .${SCRIPT_ID}-fab`)) return;
-      const el = pickTarget || e.target;
+      const el = pickTarget?.isConnected && pickTarget.contains(e.target) ? pickTarget : e.target;
       const sel = selectorFor(el);
       if (sel) addHideRule(sel, (el.getAttribute('aria-label') || el.tagName.toLowerCase()).slice(0, 40));
       stopPicking();
-      window.setTimeout(() => { if (settings.panelOpen) applySettings(); }, 0);
     }, true);
 
     document.addEventListener('keydown', (e) => {
@@ -903,61 +926,60 @@ div[class*="border-b-[0.5px]"] {
   // text is the label (the anchors make it unambiguous), instead of requiring a
   // childless leaf node.
   const AD_LABEL = /^(?:来自\s*\S.*?\s*的广告|已推广|推广|广告|赞助(?:内容)?|Promoted(?:\s+by\s+.+)?|Sponsored(?:\s+by\s+.+)?|Ad(?:vertisement)?)$/i;
+  const AD_DISCLOSURE = /^(?:来自\s*\S.*?\s*的广告|(?:Promoted|Sponsored)\s+by\s+.+)$/i;
+  const AD_LABEL_AREA = 'header, footer, [data-testid="socialContext"], [data-testid="promotedIndicator"], [data-testid="adLabel"]';
+  const POST_TEXT = '[data-testid="tweetText"], .whitespace-pre-wrap.wrap-anywhere[lang]';
+  const POST_IDENTITY = '[data-testid="User-Name"], .x-middot-group, [data-testid="card.wrapper"], [role="link"]:not(a)';
 
   /** Tweet ids the GraphQL payload marked as promoted (authoritative). */
   const promotedIds = new Set();
 
-  /** Nearest timeline cell for an element: a post, else the virtualised row. */
-  function adCellOf(el) {
-    const article = el.closest('article');
-    if (article) return article;
-    const cell = el.closest('div[class*="outline-focus"]');
-    if (!cell) return null;
-    // Safety net: never hide something larger than a single post. If X ever
-    // reshapes the shell so the fallback matches a page-level container, this
-    // refuses instead of blanking the timeline.
-    const rect = cell.getBoundingClientRect();
-    if (rect.height > 3000 || rect.width > 1600) return null;
-    return cell;
-  }
-
-  function isAdCell(cell) {
-    for (const el of cell.querySelectorAll('div, span, a')) {
+  function hasAdLabel(cell) {
+    for (const el of cell.querySelectorAll(`div, span, a, ${AD_LABEL_AREA}`)) {
+      const section = el.closest(`${POST_TEXT}, ${POST_IDENTITY}`);
+      if (section && cell.contains(section)) continue;
+      if (el.querySelector(`${POST_TEXT}, ${POST_IDENTITY}`)) continue;
       const text = (el.textContent || '').trim();
-      if (!text || text.length > 60) continue;
-      if (AD_LABEL.test(text)) return true;
+      if (!text || text.length > 90 || !AD_LABEL.test(text)) continue;
+      const area = el.closest(AD_LABEL_AREA);
+      if (area && cell.contains(area)) return true;
+      // XDS also renders a full disclosure alongside the post body, sometimes
+      // with the advertiser domain as a nested link.
+      if (AD_DISCLOSURE.test(text) && (el.querySelector('a[href]') || cell.querySelector(POST_TEXT))) return true;
     }
     return false;
   }
 
   /** Tweet id of a timeline cell, read from its permalink. */
   function cellTweetId(cell) {
-    const link = [...cell.querySelectorAll('a[href*="/status/"]')]
-      .find((a) => !/\/(analytics|photo|video)/.test(a.getAttribute('href') || ''));
+    const links = [...cell.querySelectorAll('a[href*="/status/"]')]
+      .filter((a) => /\/status\/\d+\/?$/.test(a.pathname));
+    const link = links.find((a) => a.closest('.x-middot-group, [data-testid="User-Name"]') || a.querySelector('time'))
+      || (links.length === 1 ? links[0] : null);
     return link?.getAttribute('href')?.match(/\/status\/(\d+)/)?.[1] || null;
   }
 
   function tagPromoted() {
     if (!settings.hidePromo) return;
 
-    // 1) API-authoritative: promotedMetadata in the GraphQL response.
-    if (promotedIds.size) {
-      for (const cell of document.querySelectorAll('article')) {
-        if (cell.dataset.xvlPromo) continue;
-        const id = cellTweetId(cell);
-        if (id && promotedIds.has(id)) cell.dataset.xvlPromo = '1';
+    for (const cell of document.querySelectorAll('article, div[class*="outline-focus"]:not(:has(article))')) {
+      if (cell.tagName !== 'ARTICLE') {
+        if (cell.closest('article')) continue;
+        const { height, width } = cell.getBoundingClientRect();
+        if (height > 3000 || width > 1600) continue;
+      }
+      const promoted = (promotedIds.size > 0 && promotedIds.has(cellTweetId(cell))) || hasAdLabel(cell);
+      if (promoted) {
+        if (cell.dataset.xvlPromo !== '1') cell.dataset.xvlPromo = '1';
+      } else {
+        delete cell.dataset.xvlPromo;
       }
     }
+  }
 
-    // 2) DOM labels: catches ads the API payload did not expose.
-    // Only look at label-sized elements, then walk up to the cell that owns them.
-    for (const el of document.querySelectorAll('div, span, a')) {
-      const text = (el.textContent || '').trim();
-      if (!text || text.length > 60 || !AD_LABEL.test(text)) continue;
-      const cell = adCellOf(el);
-      if (!cell || cell.dataset.xvlPromo) continue;
-      if (isAdCell(cell)) cell.dataset.xvlPromo = '1';
-    }
+  function clearPromoted() {
+    promotedIds.clear();
+    for (const el of document.querySelectorAll('[data-xvl-promo]')) delete el.dataset.xvlPromo;
   }
 
   // ---- page-world GraphQL hook (promotedMetadata) ---------------------------
@@ -977,7 +999,9 @@ div[class*="border-b-[0.5px]"] {
       if (!o || typeof o !== 'object' || seen.has(o)) return;
       seen.add(o);
       if (o.promotedMetadata) {
-        const id = o.rest_id || o.id || o.legacy?.id_str;
+        const result = o.tweet_results?.result || o.tweetResult?.result || o;
+        const tweet = result.tweet || result;
+        const id = tweet.rest_id || tweet.id || tweet.legacy?.id_str;
         if (id) out.push(String(id));
       }
       for (const k in o) {
@@ -988,11 +1012,12 @@ div[class*="border-b-[0.5px]"] {
     return out;
   }
 
-  const entryResult = (e) => e?.content?.itemContent?.tweet_results?.result || null;
   const isPromotedEntry = (e) => {
-    const r = entryResult(e);
+    const item = e?.content?.itemContent || e?.item?.itemContent;
+    const r = item?.tweet_results?.result || item?.tweetResult?.result;
     if (!r) return false;
-    return !!(r.promotedMetadata || r.tweet?.promotedMetadata);
+    return !!(item.promotedMetadata || e.content?.promotedMetadata || r.promotedMetadata
+      || r.legacy?.promotedMetadata || r.tweet?.promotedMetadata || r.tweet?.legacy?.promotedMetadata);
   };
 
   /**
@@ -1019,70 +1044,67 @@ div[class*="border-b-[0.5px]"] {
     return removed;
   }
 
-  function installPromotedHook() {
-    if (typeof unsafeWindow === 'undefined' || !unsafeWindow) return;
-    const pw = unsafeWindow;
-    if (pw.__xlsPromotedHook) return;
-    pw.__xlsPromotedHook = true;
+  const API_HOSTS = new Set(['x.com', 'api.x.com', 'pro.x.com', 'twitter.com', 'api.twitter.com']);
 
-    const post = (payload) => {
-      try { window.postMessage({ __xlsPromoted: payload }, '*'); } catch (_) {}
-    };
-    const interesting = /graphql|Timeline|TweetDetail|SearchTimeline|ListLatest/i;
-
+  function isGraphqlRequest(input) {
     try {
-      const original = pw.fetch;
-      pw.fetch = async function xlsFetchHook(...args) {
-        const res = await original.apply(this, args);
-        try {
-          const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
-          if (!interesting.test(url) || !res || !res.ok) return res;
-
-          const text = await res.clone().text();
-          let data;
-          try { data = JSON.parse(text); } catch (_) { return res; }
-
-          // Keep the ids for the DOM fallback before the entries disappear.
-          const ids = collectPromotedIds(data);
-          if (ids.length) post(data);
-
-          const removed = stripPromoted(data);
-          if (!removed) return res;
-
-          const headers = new Headers();
-          res.headers.forEach((value, key) => {
-            if (!/^content-(length|encoding)$/i.test(key)) headers.set(key, value);
-          });
-          return new Response(JSON.stringify(data), {
-            status: res.status,
-            statusText: res.statusText,
-            headers,
-          });
-        } catch (_) {
-          return res;
-        }
-      };
-    } catch (_) {}
+      const value = typeof input === 'string' ? input : input?.url || input?.href;
+      if (!value) return false;
+      const url = new URL(value, location.href);
+      return url.protocol === 'https:' && API_HOSTS.has(url.hostname) && /^\/(?:i\/api\/)?graphql\//.test(url.pathname);
+    } catch (_) {
+      return false;
+    }
   }
 
-  window.addEventListener('message', (event) => {
-    if (event.data?.__xlsPromoted === undefined) return;
-    const ids = collectPromotedIds(event.data.__xlsPromoted);
-    if (!ids.length) return;
-    let added = false;
-    for (const id of ids) {
-      if (!promotedIds.has(id)) { promotedIds.add(id); added = true; }
-    }
-    if (added) tagPromoted();
-  });
+  function preserveResponseMetadata(response, original) {
+    const clone = response.clone;
+    return Object.defineProperties(response, {
+      url: { value: original.url },
+      type: { value: original.type },
+      redirected: { value: original.redirected },
+      clone: { value() { return preserveResponseMetadata(clone.call(this), original); } },
+    });
+  }
+
+  function installPromotedHook() {
+    if (pageWindow.__xlsPromotedHook) return;
+    pageWindow.__xlsPromotedHook = true;
+    const original = pageWindow.fetch;
+    pageWindow.fetch = async function xlsFetchHook(...args) {
+      const filter = settings.hidePromo && isGraphqlRequest(args[0]);
+      const route = location.pathname;
+      const response = await original.apply(this, args);
+      if (!filter || !settings.hidePromo || !response.ok || route !== location.pathname) return response;
+      try {
+        const data = await response.clone().json();
+        if (!settings.hidePromo || route !== location.pathname) return response;
+
+        for (const id of collectPromotedIds(data)) promotedIds.add(id);
+        if (!stripPromoted(data)) return response;
+
+        const headers = new Headers(response.headers);
+        headers.delete('content-length');
+        headers.delete('content-encoding');
+        const filtered = new pageWindow.Response(JSON.stringify(data), {
+          status: response.status,
+          statusText: response.statusText,
+          headers,
+        });
+        return preserveResponseMetadata(filtered, response);
+      } catch (_) {
+        return response;
+      }
+    };
+  }
 
   // ---- bootstrap ------------------------------------------------------------
   let bootTimer = 0;
 
   function boot() {
-    renderStyles();
-    applySettings();
+    document.documentElement.dataset.xlsBooted = '1';
     buildPanel();
+    applySettings();
     bindHotkey();
     bindPicker();
     ensureHandle();
@@ -1099,7 +1121,15 @@ div[class*="border-b-[0.5px]"] {
   }
 
   function watch() {
+    let lastPath = location.pathname;
+    const checkPath = () => {
+      if (lastPath === location.pathname) return;
+      lastPath = location.pathname;
+      clearPromoted();
+      scheduleBoot();
+    };
     const observer = new MutationObserver((mutations) => {
+      checkPath();
       for (const m of mutations) {
         for (const node of m.addedNodes) {
           if (!(node instanceof Element)) continue;
@@ -1111,10 +1141,13 @@ div[class*="border-b-[0.5px]"] {
       }
     });
     observer.observe(document.documentElement, { childList: true, subtree: true });
+    window.navigation?.addEventListener('currententrychange', checkPath);
+    window.addEventListener('popstate', checkPath);
 
     // The shell is re-created on client-side navigation, so re-attach the handle.
     let lastMain = null;
     window.setInterval(() => {
+      checkPath();
       const main = getMain();
       if (main !== lastMain) {
         lastMain = main;
@@ -1124,14 +1157,7 @@ div[class*="border-b-[0.5px]"] {
       applyCompactNav(); // React re-creates nav items on re-render
     }, 1000);
 
-    window.addEventListener('resize', () => {
-      // keep the width legal when the window shrinks
-      if (settings.mainWidth > availableWidth()) {
-        settings.mainWidth = clampWidth(settings.mainWidth);
-        applySettings();
-        save();
-      }
-    });
+    window.addEventListener('resize', applySettings);
   }
 
   if (typeof GM_registerMenuCommand === 'function') {
@@ -1141,14 +1167,11 @@ div[class*="border-b-[0.5px]"] {
       save();
     });
     GM_registerMenuCommand('重置布局设置', () => {
-      settings = { ...DEFAULTS };
-      applySettings();
-      save();
+      resetSettings();
     });
   }
 
-  // Hook before X's own bundle starts issuing requests, so the very first
-     // timeline payload is inspected.
+  // Install before X starts its first timeline request.
   installPromotedHook();
 
   if (document.readyState === 'loading') {
