@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Layout Studio
 // @namespace    local.codex.x-layout-studio
-// @version      0.3.5
+// @version      0.3.6
 // @description  Drag to resize the X timeline column, reclaim the empty right rail, compact the nav, and declutter the timeline.
 // @match        https://x.com/*
 // @match        https://pro.x.com/*
@@ -447,7 +447,20 @@ div[class*="border-b-[0.5px]"] {
 `);
     }
 
-    if (settings.hidePromo) out.push('[data-xvl-promo="1"] { display: none !important; }');
+    if (settings.hidePromo) out.push(`
+[data-xvl-promo="1"] { display: none !important; }
+li[data-xls-folded-ad="1"] {
+  display: list-item !important;
+  height: 1px !important;
+  min-height: 1px !important;
+  max-height: 1px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  overflow: hidden !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+`);
 
     // Selector-based hide rules from the built-in element picker.
     const rules = Array.isArray(settings.hideRules) ? settings.hideRules : [];
@@ -930,24 +943,84 @@ div[class*="border-b-[0.5px]"] {
   const AD_LABEL_AREA = 'header, footer, [data-testid="socialContext"], [data-testid="promotedIndicator"], [data-testid="adLabel"]';
   const POST_TEXT = '[data-testid="tweetText"], .whitespace-pre-wrap.wrap-anywhere[lang]';
   const POST_IDENTITY = '[data-testid="User-Name"], .x-middot-group, [data-testid="card.wrapper"], [role="link"]:not(a)';
+  const VIRTUAL_POST_LIST = '[id^="urt"] > ul';
+  const VIRTUAL_POST_ROW = `${VIRTUAL_POST_LIST} > li[data-index]`;
+  const TRACKED_AD_LINK = 'a[href*="?twclid="]';
+  const DISCLOSURE_CLASS = 'data-ad-disclosure';
+  const FOLDED_DISCLOSURE_CLASS = 'xls-folded-ad-disclosure';
+  const FOLDED_LINK_TARGET = 'xls-folded-ad-link';
+  const FOLDED_ROW = 'li[data-xls-folded-ad="1"]';
 
   /** Tweet ids the GraphQL payload marked as promoted (authoritative). */
   const promotedIds = new Set();
+  const foldedRows = new Map();
+  let promoFrame = 0;
 
-  function hasAdLabel(cell) {
-    for (const el of cell.querySelectorAll(`div, span, a, ${AD_LABEL_AREA}`)) {
+  function hasAdLabel(cell, virtualRow) {
+    const hasTrackedLink = !!virtualRow && !!virtualRow.querySelector(TRACKED_AD_LINK);
+    const disclosure = `[class*="${DISCLOSURE_CLASS}"], [class*="${FOLDED_DISCLOSURE_CLASS}"]`;
+    for (const el of cell.querySelectorAll(`div, span, a, ${AD_LABEL_AREA}, ${disclosure}`)) {
       const section = el.closest(`${POST_TEXT}, ${POST_IDENTITY}`);
       if (section && cell.contains(section)) continue;
       if (el.querySelector(`${POST_TEXT}, ${POST_IDENTITY}`)) continue;
+      if (el.matches(disclosure)) return true;
       const text = (el.textContent || '').trim();
       if (!text || text.length > 90 || !AD_LABEL.test(text)) continue;
       const area = el.closest(AD_LABEL_AREA);
-      if (area && cell.contains(area)) return true;
+      if (hasTrackedLink || (area && cell.contains(area))) return true;
       // XDS also renders a full disclosure alongside the post body, sometimes
       // with the advertiser domain as a nested link.
       if (AD_DISCLOSURE.test(text) && (el.querySelector('a[href]') || cell.querySelector(POST_TEXT))) return true;
     }
     return false;
+  }
+
+  function virtualPostRow(article) {
+    const row = article.closest(VIRTUAL_POST_ROW);
+    if (!row || (row.style.position || getComputedStyle(row).position) !== 'absolute') return null;
+    // A row may contain several posts. Collapse only a single top-level post.
+    if ([...row.querySelectorAll('article')].some(post => !article.contains(post))) return null;
+    return row;
+  }
+
+  function restoreAdMarker(el) {
+    if (el.getAttribute('target') === FOLDED_LINK_TARGET) el.setAttribute('target', '_blank');
+    const cls = el.getAttribute('class');
+    if (cls?.includes(FOLDED_DISCLOSURE_CLASS)) {
+      el.setAttribute('class', cls.replaceAll(FOLDED_DISCLOSURE_CLASS, DISCLOSURE_CLASS));
+    }
+  }
+
+  function foldAdRow(row) {
+    let touched = foldedRows.get(row);
+    if (!touched) {
+      touched = new Set();
+      foldedRows.set(row, touched);
+    }
+    if (row.dataset.xlsFoldedAd !== '1') row.dataset.xlsFoldedAd = '1';
+    for (const el of touched) {
+      if (row.contains(el)) continue;
+      restoreAdMarker(el);
+      touched.delete(el);
+    }
+
+    // Cosmetic filters can hide the entire LI via :has(). Keep the ad hidden
+    // with the 1px row above and release those two selectors so X can remeasure
+    // the LI. The link destination and the virtualizer's offsets are untouched.
+    for (const link of row.querySelectorAll(`${TRACKED_AD_LINK}[target="_blank"]`)) {
+      link.setAttribute('target', FOLDED_LINK_TARGET);
+      touched.add(link);
+    }
+    for (const label of row.querySelectorAll(`[class*="${DISCLOSURE_CLASS}"]`)) {
+      label.setAttribute('class', label.getAttribute('class').replaceAll(DISCLOSURE_CLASS, FOLDED_DISCLOSURE_CLASS));
+      touched.add(label);
+    }
+  }
+
+  function unfoldAdRow(row) {
+    for (const el of foldedRows.get(row)) restoreAdMarker(el);
+    foldedRows.delete(row);
+    delete row.dataset.xlsFoldedAd;
   }
 
   /** Tweet id of a timeline cell, read from its permalink. */
@@ -962,24 +1035,44 @@ div[class*="border-b-[0.5px]"] {
   function tagPromoted() {
     if (!settings.hidePromo) return;
 
+    const virtualAds = new Set();
     for (const cell of document.querySelectorAll('article, div[class*="outline-focus"]:not(:has(article))')) {
+      let row = null;
       if (cell.tagName !== 'ARTICLE') {
         if (cell.closest('article')) continue;
         const { height, width } = cell.getBoundingClientRect();
         if (height > 3000 || width > 1600) continue;
+      } else {
+        row = virtualPostRow(cell);
       }
-      const promoted = (promotedIds.size > 0 && promotedIds.has(cellTweetId(cell))) || hasAdLabel(cell);
-      if (promoted) {
+      const promoted = (promotedIds.size > 0 && promotedIds.has(cellTweetId(cell))) || hasAdLabel(cell, row);
+      if (promoted && row) {
+        virtualAds.add(row);
+        delete cell.dataset.xvlPromo;
+      } else if (promoted) {
         if (cell.dataset.xvlPromo !== '1') cell.dataset.xvlPromo = '1';
       } else {
         delete cell.dataset.xvlPromo;
       }
     }
+    for (const row of foldedRows.keys()) {
+      if (!virtualAds.has(row)) unfoldAdRow(row);
+    }
+    for (const row of virtualAds) foldAdRow(row);
   }
 
   function clearPromoted() {
     promotedIds.clear();
+    for (const row of foldedRows.keys()) unfoldAdRow(row);
     for (const el of document.querySelectorAll('[data-xvl-promo]')) delete el.dataset.xvlPromo;
+  }
+
+  function schedulePromoted() {
+    if (promoFrame) return;
+    promoFrame = window.requestAnimationFrame(() => {
+      promoFrame = 0;
+      tagPromoted();
+    });
   }
 
   // ---- page-world GraphQL hook (promotedMetadata) ---------------------------
@@ -987,11 +1080,8 @@ div[class*="border-b-[0.5px]"] {
   // "已推广" tomorrow, nothing at all for some inventory). promotedMetadata is
   // set server-side, so it survives every wording change.
   //
-  // Hiding an ad cell in the DOM is not enough on the tweet detail page: the reply
-  // list is an absolutely positioned virtual list. The row is placed from the ad's
-  // ORIGINAL height, so hiding it leaves that band empty — the black gap users
-  // see. The fix is to drop promoted entries from the response body before React
-  // ever builds the list.
+  // Remove promoted entries before X lays out the list. Preloaded entries and
+  // inventory missed here are handled by the DOM fallback above.
   function collectPromotedIds(root) {
     const out = [];
     const seen = new WeakSet();
@@ -1130,7 +1220,14 @@ div[class*="border-b-[0.5px]"] {
     };
     const observer = new MutationObserver((mutations) => {
       checkPath();
+      if (settings.hidePromo && mutations.some(({ target }) =>
+        target.matches?.(VIRTUAL_POST_LIST) || target.closest?.(VIRTUAL_POST_ROW)
+      )) schedulePromoted();
       for (const m of mutations) {
+        if (m.target.closest?.(FOLDED_ROW)) {
+          scheduleBoot();
+          return;
+        }
         for (const node of m.addedNodes) {
           if (!(node instanceof Element)) continue;
           if (node.matches?.('main, article') || node.querySelector?.('main, article')) {
@@ -1140,7 +1237,9 @@ div[class*="border-b-[0.5px]"] {
         }
       }
     });
-    observer.observe(document.documentElement, { childList: true, subtree: true });
+    observer.observe(document.documentElement, {
+      childList: true, subtree: true, attributes: true, attributeFilter: ['href', 'data-index'],
+    });
     window.navigation?.addEventListener('currententrychange', checkPath);
     window.addEventListener('popstate', checkPath);
 
