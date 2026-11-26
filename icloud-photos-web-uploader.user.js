@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iCloud Photos Web Uploader
 // @namespace    https://github.com/hahapkpk/tools
-// @version      1.21.1
+// @version      1.21.2
 // @updateURL    https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader.user.js
 // @downloadURL  https://raw.githubusercontent.com/hahapkpk/tools/main/icloud-photos-web-uploader.user.js
 // @description  Upload via paste/drag/pick on iCloud Photos, with auto JPEG conversion, quick library refresh, grid right-click native download, Ctrl+C / OneUp PNG image copy, and native high-resolution OneUp zoom with double-click / smooth mouse-wheel zoom / drag-pan.
@@ -27,6 +27,11 @@
   'use strict';
 
   const PANEL_ID = 'icloud-web-uploader-panel';
+  const PICKER_ID = PANEL_ID + '-picker';
+  const MOUNT_ATTRIBUTE = 'data-icloud-web-uploader-mounted';
+  const CENTERED_VIEWER = '.OneUpCarouselItem.is-center';
+  const SIDEBAR_ITEMS = '.Sidebar-innerContainer .SidebarItem[role="treeitem"]';
+  const GRID_TILE = '.grid-item, [role="gridcell"]';
   const LOG_PREFIX = '[iCloud Photos Web Uploader]';
   const POSITION_KEY = 'icloud-web-uploader-position';
   const ONEUP_COPY_POSITION_KEY = 'icloud-web-uploader-oneup-copy-position';
@@ -37,9 +42,9 @@
   const pasteDispatcherByDocument = new WeakMap();
   const registeredPasteTargets = new WeakSet();
   const handledPasteEvents = new WeakSet();
-  const gridCopyMenuStateByDocument = new WeakMap();
   const keyboardPhotoCopyStateByDocument = new WeakMap();
   const oneUpCopyStateByDocument = new WeakMap();
+  const clipboardWritesByDocument = new WeakSet();
 
   function getPanelText() {
     return {
@@ -294,6 +299,9 @@
       ready: function () {
         return queuedBatches === 0 ? snapshot() : null;
       },
+      hasPending: function () {
+        return Boolean(demand) || queuedBatches > 0;
+      },
       clear: function () {
         demand = null;
       },
@@ -491,7 +499,7 @@
     }
   }
 
-  async function normalizeFilesForICloudWebUpload(files, win, status, converter) {
+  async function normalizeFilesForICloudWebUpload(files, win, status, converter, options) {
     const images = filterImageFiles(files);
     const normalized = [];
     const failures = [];
@@ -501,6 +509,7 @@
     let processedCount = 0;
 
     for (let i = 0; i < images.length; i += 1) {
+      if (options && options.shouldContinue && !options.shouldContinue()) return [];
       const file = images[i];
       if (!shouldConvertForICloudWeb(file)) {
         normalized.push(file);
@@ -522,19 +531,25 @@
       }
     }
 
+    if (options && options.shouldContinue && !options.shouldContinue()) return [];
+    if (options && options.onFailures) options.onFailures(failures);
     if (convertedCount) {
       report('已将 ' + convertedCount + ' 张图片转换为 JPEG。');
     }
 
     if (failures.length) {
       report(
-        '跳过 ' + failures.length + ' 张无法转换的图片：' + failures.join('；') +
+        describeSkippedFiles(failures) +
           (normalized.length ? '。其余 ' + normalized.length + ' 张继续上传。' : '。没有可上传的图片。'),
         !normalized.length
       );
     }
 
     return normalized;
+  }
+
+  function describeSkippedFiles(failures) {
+    return '跳过 ' + failures.length + ' 张无法转换的图片：' + failures.join('；');
   }
 
 
@@ -577,7 +592,7 @@
       if (!node || seen.has(node) || typeof node.querySelectorAll !== 'function') return;
       seen.add(node);
 
-      results.push.apply(results, Array.from(node.querySelectorAll(selector)));
+      for (const item of node.querySelectorAll(selector)) results.push(item);
 
       Array.from(node.querySelectorAll('*')).forEach(function (element) {
         if (element.shadowRoot) walk(element.shadowRoot);
@@ -602,14 +617,29 @@
   const fileInputCacheByDocument = new WeakMap();
   const PHOTO_ACCEPT_PATTERN = /(?:^|,)\s*(?:image\/|\.(?:apng|avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|tiff?|webp)\b)/i;
 
+  function getPhotosShellWindow(win) {
+    try {
+      if (win && win.parent && win.parent !== win && win.parent.location.origin === win.location.origin) {
+        return win.parent;
+      }
+    } catch (error) {
+      // The Photos iframe can also be embedded across origins.
+    }
+    return null;
+  }
+
   function getDocumentRouteKey(doc) {
-    const location = doc && doc.defaultView && doc.defaultView.location;
-    if (!location) return '';
-    return String(location.href || location.pathname || '') + String(location.hash || '');
+    const win = doc && doc.defaultView;
+    if (!win || !win.location) return '';
+    const location = win.location;
+    const appRoute = String(location.href || ((location.pathname || '') + (location.hash || '')));
+    const shell = getPhotosShellWindow(win);
+    return shell ? appRoute + '\n' + shell.location.href : appRoute;
   }
 
   function isUsableICloudFileInput(input) {
     if (!input || input.disabled || input.isConnected === false) return false;
+    if (input.id === PICKER_ID) return false;
     if (input.type && String(input.type).toLowerCase() !== 'file') return false;
     if (typeof input.getAttribute !== 'function') return false;
     if (String(input.getAttribute('aria-disabled') || '').toLowerCase() === 'true') return false;
@@ -735,14 +765,14 @@
     'album', '相簿', '共享', 'share', 'description', 'caption', 'comment',
     '评论', '标题', 'title', 'person', 'people', '人脸', '地点', 'location',
     'date', '日期', 'tag', '标签', 'folder', '文件夹', 'link', '链接',
-    'cancel upload', 'stop upload', 'abort upload', '取消上传', '停止上传', '终止上传',
+    'cancel upload', 'stop upload', 'abort upload', '取消上传', '停止上传', '终止上传', '取消上傳', '停止上傳',
   ];
 
   const UPLOAD_LABEL_MARKERS = [
     'upload', 'uploads', 'uploading', 'add photo', 'add photos', 'add image',
     'add images', 'add picture', 'add pictures', 'import photos', 'import photo',
     'choose photo', 'choose photos', 'select photos', 'upload photos',
-    '上传', '添加照片', '增加照片', '添加图片', '导入',
+    '上传', '上傳', '添加照片', '增加照片', '添加图片', '加入照片', '導入', '导入',
   ];
 
   function isUploadTrigger(element) {
@@ -768,17 +798,20 @@
     const candidates = queryAllDeep(doc, 'button, [role="button"], [aria-label], [title]').filter(function (element) {
       return !(typeof element.closest === 'function' && element.closest('#' + PANEL_ID));
     });
-    const trigger = candidates.find(isUploadTrigger);
-    if (!trigger || typeof trigger.click !== 'function') return false;
+    const trigger = candidates.find(function (element) {
+      return typeof element.click === 'function' && !element.disabled &&
+        element.getAttribute('aria-disabled') !== 'true' && isUploadTrigger(element);
+    });
+    if (!trigger) return false;
     trigger.click();
     return true;
   }
 
   const LIBRARY_SIDEBAR_LABELS = [
-    '图库', '所有照片', '照片', 'Library', 'All Photos', 'Photos',
+    '图库', '圖庫', '所有照片', '照片', 'Library', 'All Photos', 'Photos',
   ];
   const PIVOT_SIDEBAR_LABELS = [
-    '最近项目', '最近', '个人收藏', '回忆', '相簿', '媒体类型',
+    '最近项目', '最近項目', '最近', '个人收藏', '個人收藏', '回忆', '回憶', '相簿', '媒体类型', '媒體類型',
     'Recents', 'Recent', 'Favorites', 'Memories', 'Albums', 'Media Types',
   ];
 
@@ -786,35 +819,36 @@
     return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
   }
 
-  function findSidebarItem(doc, labels) {
-    const normalizedLabels = labels.map(normalizeLabelText);
+  function getSidebarItemKey(item) {
+    return item ? (item.getAttribute && item.getAttribute('href')) || normalizeLabelText(item.textContent) : '';
+  }
+
+  function getSidebarCandidates(doc) {
+    if (!doc || typeof doc.querySelectorAll !== 'function') return [];
+    const sidebar = Array.from(doc.querySelectorAll(SIDEBAR_ITEMS));
+    if (sidebar.length) return sidebar;
     const ownPanel = doc.getElementById ? doc.getElementById(PANEL_ID) : null;
-    const candidates = queryAllDeep(
-      doc,
-      'a, button, [role="button"], [role="menuitem"], [role="tab"], [role="treeitem"]'
-    );
-    for (let i = 0; i < candidates.length; i += 1) {
-      const element = candidates[i];
-      if (ownPanel && typeof ownPanel.contains === 'function' && ownPanel.contains(element)) continue;
-      if (typeof element.click !== 'function') continue;
-      const text = normalizeLabelText(element.textContent);
-      if (!text) continue;
-      for (let j = 0; j < normalizedLabels.length; j += 1) {
-        const label = normalizedLabels[j];
-        if (text === label || text.indexOf(label + ' ') === 0 || text.indexOf(label) === 0) {
-          return element;
-        }
-      }
+    return queryAllDeep(doc, 'nav a, nav button, [role="treeitem"], [role="tab"], [role="navigation"] a')
+      .filter(function (element) {
+        return typeof element.click === 'function' && !(ownPanel && ownPanel.contains && ownPanel.contains(element));
+      });
+  }
+
+  function findSidebarItem(doc, labels) {
+    const candidates = getSidebarCandidates(doc);
+    for (const name of labels) {
+      const label = normalizeLabelText(name);
+      const match = candidates.find(function (element) {
+        return normalizeLabelText(element.textContent) === label;
+      });
+      if (match) return match;
     }
     return null;
   }
 
   function findActiveSidebarItem(doc) {
-    const ownPanel = doc.getElementById ? doc.getElementById(PANEL_ID) : null;
-    const allLabels = LIBRARY_SIDEBAR_LABELS.concat(PIVOT_SIDEBAR_LABELS, [
-      '隐藏', '最近删除', 'Hidden', 'Recently Deleted',
-    ]).map(normalizeLabelText);
-    const activeSelectors = [
+    if (!doc || typeof doc.querySelectorAll !== 'function') return null;
+    const activeMarkers = [
       '[aria-current="page"]',
       '[aria-current="true"]',
       '[aria-selected="true"]',
@@ -822,66 +856,23 @@
       '.selected',
       '.is-active',
       '.active',
-    ];
-    for (let i = 0; i < activeSelectors.length; i += 1) {
-      const els = queryAllDeep(doc, activeSelectors[i]);
-      for (let j = 0; j < els.length; j += 1) {
-        const el = els[j];
-        if (ownPanel && typeof ownPanel.contains === 'function' && ownPanel.contains(el)) continue;
-        if (typeof el.click !== 'function') continue;
-        const text = normalizeLabelText(el.textContent);
-        if (!text) continue;
-        for (let k = 0; k < allLabels.length; k += 1) {
-          const label = allLabels[k];
-          if (text === label || text.indexOf(label + ' ') === 0 || text.indexOf(label) === 0) {
-            return el;
-          }
-        }
-      }
-    }
-    return null;
+    ].join(',');
+    const sidebar = getSidebarCandidates(doc);
+    return sidebar.find(function (element) {
+      return typeof element.matches === 'function' && element.matches(activeMarkers) && getSidebarItemKey(element);
+    }) || null;
   }
 
-  function simulateMouseClick(element) {
-    if (!element) return false;
-    const win = element.ownerDocument && element.ownerDocument.defaultView;
-    const MouseEventCtor = (win && win.MouseEvent) || root.MouseEvent;
-    const rect = typeof element.getBoundingClientRect === 'function'
-      ? element.getBoundingClientRect()
-      : { left: 0, top: 0, width: 1, height: 1 };
-    const x = rect.left + rect.width / 2;
-    const y = rect.top + rect.height / 2;
-    const opts = {
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-      view: win || undefined,
-      button: 0,
-      buttons: 1,
-      clientX: x,
-      clientY: y,
-    };
+  function clickSidebarItem(item) {
+    function preventBrowserNavigation(event) {
+      event.preventDefault();
+    }
+    // Let Photos handle the selection without following the anchor into _top.
+    if (item.addEventListener) item.addEventListener('click', preventBrowserNavigation, { once: true });
     try {
-      if (typeof MouseEventCtor === 'function') {
-        element.dispatchEvent(new MouseEventCtor('pointerdown', opts));
-        element.dispatchEvent(new MouseEventCtor('mousedown', opts));
-        element.dispatchEvent(new MouseEventCtor('pointerup', opts));
-        element.dispatchEvent(new MouseEventCtor('mouseup', opts));
-        element.dispatchEvent(new MouseEventCtor('click', opts));
-      } else if (typeof element.click === 'function') {
-        element.click();
-      }
-      return true;
-    } catch (error) {
-      try {
-        if (typeof element.click === 'function') {
-          element.click();
-          return true;
-        }
-      } catch (e) {
-        // ignore
-      }
-      return false;
+      item.click();
+    } finally {
+      if (item.removeEventListener) item.removeEventListener('click', preventBrowserNavigation);
     }
   }
 
@@ -906,11 +897,7 @@
     const active = doc ? findActiveSidebarItem(doc) : null;
     let activeKey = '';
     if (active) {
-      activeKey = [
-        normalizeLabelText(active.textContent),
-        typeof active.getAttribute === 'function' ? active.getAttribute('aria-current') || '' : '',
-        typeof active.getAttribute === 'function' ? active.getAttribute('aria-selected') || '' : '',
-      ].join('|');
+      activeKey = getSidebarItemKey(active);
     }
     return { view, grid, activeKey };
   }
@@ -921,12 +908,12 @@
     return Boolean(after.activeKey && after.activeKey !== before.activeKey);
   }
 
-  function waitForLibraryViewChange(doc, win, action, timeoutMs) {
+  function waitForLibraryViewChange(doc, win, action, timeoutMs, options) {
+    const opts = options || {};
+    if (opts.signal && opts.signal.aborted) return Promise.resolve(false);
     const before = captureLibraryViewState(doc);
     const Observer = (win && win.MutationObserver) || root.MutationObserver;
-    const target = (before.view && before.view.parentNode) ||
-      before.view ||
-      (doc && (doc.body || doc.documentElement));
+    const target = (doc && (doc.body || doc.documentElement)) || before.view;
     if (typeof Observer !== 'function' || !target) {
       try {
         action();
@@ -938,15 +925,43 @@
 
     return new Promise(function (resolve, reject) {
       let timer = null;
+      let frame = null;
+      let routeCheck = null;
       let settled = false;
       function changed() {
-        return hasLibraryViewStateChanged(before, captureLibraryViewState(doc));
+        return (!opts.isExpected || opts.isExpected()) &&
+          hasLibraryViewStateChanged(before, captureLibraryViewState(doc));
       }
-      const observer = new Observer(function () {
-        if (changed()) finish(true);
-      });
+      function check() {
+        frame = null;
+        if (changed()) {
+          finish(true);
+        } else if (opts.pollRoute && routeCheck === null) {
+          // The shell uses pushState, which does not fire hashchange.
+          routeCheck = setTimeout(function () {
+            routeCheck = null;
+            scheduleCheck();
+          }, 75);
+        }
+      }
+      function scheduleCheck() {
+        if (frame !== null || settled) return;
+        if (win && typeof win.requestAnimationFrame === 'function') frame = win.requestAnimationFrame(check);
+        else check();
+      }
+      function abort() {
+        finish(false);
+      }
+      const observer = new Observer(scheduleCheck);
       function cleanup() {
         clearTimeout(timer);
+        clearTimeout(routeCheck);
+        if (frame !== null && win && typeof win.cancelAnimationFrame === 'function') win.cancelAnimationFrame(frame);
+        if (opts.signal) opts.signal.removeEventListener('abort', abort);
+        if (opts.routeWindow && opts.routeWindow.removeEventListener) {
+          opts.routeWindow.removeEventListener('hashchange', scheduleCheck);
+          opts.routeWindow.removeEventListener('popstate', scheduleCheck);
+        }
         observer.disconnect();
       }
       function finish(didChange) {
@@ -966,10 +981,17 @@
           attributes: true,
           attributeFilter: ['class', 'aria-current', 'aria-selected'],
         });
+        if (opts.signal) opts.signal.addEventListener('abort', abort, { once: true });
+        if (opts.routeWindow && opts.routeWindow.addEventListener) {
+          opts.routeWindow.addEventListener('hashchange', scheduleCheck);
+          opts.routeWindow.addEventListener('popstate', scheduleCheck);
+        }
         if (action() === false) {
           finish(false);
         } else if (changed()) {
           finish(true);
+        } else if (opts.pollRoute) {
+          scheduleCheck();
         }
       } catch (error) {
         if (!settled) {
@@ -987,76 +1009,91 @@
       ? Math.max(0, opts.verificationTimeout)
       : 3000;
     const expiresAt = Date.now() + totalTimeout;
-    function observe(action) {
-      return waitForLibraryViewChange(
-        doc,
-        win,
-        action,
-        Math.max(0, expiresAt - Date.now())
-      );
+    if (!doc || !win || (doc.querySelector && doc.querySelector(CENTERED_VIEWER))) return false;
+    const Controller = win.AbortController || root.AbortController;
+    const navigation = typeof Controller === 'function' ? new Controller() : null;
+    const shell = getPhotosShellWindow(win);
+    function observe(action, isExpected, timeout) {
+      return waitForLibraryViewChange(doc, win, action, Math.min(timeout, Math.max(0, expiresAt - Date.now())), {
+        isExpected,
+        signal: navigation && navigation.signal,
+        routeWindow: shell || win,
+        pollRoute: Boolean(shell),
+      });
     }
 
-    // Prefer iCloud's hash router, but count the round-trip as successful only
-    // when both route changes produce an observable Photos view mutation.
-    if (win && win.location && typeof win.location.hash === 'string' && opts.allowHashNavigation !== false) {
-      const originalHash = win.location.hash || '';
-      let pivotHash = null;
-      for (let i = 0; i < KNOWN_HASH_ROUTES.length; i += 1) {
-        const candidate = KNOWN_HASH_ROUTES[i];
-        if (originalHash === candidate) continue;
-        if (originalHash && originalHash.indexOf(candidate) === 0) continue;
-        pivotHash = candidate;
-        break;
+    let userNavigated = false;
+    function onNavigation(event) {
+      if (!event.isTrusted || !event.target || !event.target.closest) return;
+      if (event.target.closest(SIDEBAR_ITEMS + ', [role="treeitem"], ' + GRID_TILE)) {
+        userNavigated = true;
+        if (navigation) navigation.abort();
       }
-      if (pivotHash) {
-        try {
-          const pivotChanged = await observe(function () {
-            win.location.hash = pivotHash;
+    }
+    if (doc.addEventListener) doc.addEventListener('click', onNavigation, true);
+
+    try {
+      const original = findActiveSidebarItem(doc);
+      const originalKey = getSidebarItemKey(original);
+      const items = getSidebarCandidates(doc);
+      const pivot = PIVOT_SIDEBAR_LABELS.concat(LIBRARY_SIDEBAR_LABELS).map(normalizeLabelText)
+        .map(function (label) {
+          return items.find(function (item) {
+            return normalizeLabelText(item.textContent) === label && getSidebarItemKey(item) !== originalKey;
           });
-          if (pivotChanged) {
-            const originalChanged = await observe(function () {
-              win.location.hash = originalHash;
-            });
-            if (originalChanged) return true;
-          } else {
-            win.location.hash = originalHash;
-          }
-        } catch (error) {
-          try {
-            win.location.hash = originalHash;
-          } catch (restoreError) {
-            // Continue to the DOM fallback with the best state the router kept.
-          }
+        }).find(Boolean);
+
+      // Inside the current iCloud shell the iframe hash is only a launch
+      // parameter. The actual route belongs to the sidebar and outer page.
+      if (original && pivot) {
+        const pivotKey = getSidebarItemKey(pivot);
+        function isSelected(key) {
+          if (userNavigated || getSidebarItemKey(findActiveSidebarItem(doc)) !== key) return false;
+          if (!shell || !/^https?:\/\//i.test(key)) return true;
+          const expected = new URL(key);
+          const current = shell.location;
+          return current.origin === expected.origin && current.pathname === expected.pathname &&
+            current.hash.replace(/\/$/, '') === expected.hash.replace(/\/$/, '');
         }
+        if (!isSelected(originalKey)) return false;
+        const entered = await observe(function () {
+          clickSidebarItem(pivot);
+        }, function () { return isSelected(pivotKey); }, Math.ceil(totalTimeout / 2));
+        // Give the shell time to settle before issuing the second sidebar action.
+        if (shell && entered && !userNavigated) await sleep(250);
+        if (!isSelected(pivotKey)) return false;
+        const currentOriginal = getSidebarCandidates(doc).find(function (item) {
+          return getSidebarItemKey(item) === originalKey;
+        });
+        if (!currentOriginal) return false;
+        const restored = await observe(function () {
+          clickSidebarItem(currentOriginal);
+        }, function () { return isSelected(originalKey); }, totalTimeout);
+        return entered && restored;
       }
+
+      if (
+        !win.location || typeof win.location.hash !== 'string' || opts.allowHashNavigation === false ||
+        shell || win.location.hash.indexOf('#launchRoute=') === 0
+      ) return false;
+
+      const originalHash = win.location.hash || '';
+      const pivotHash = KNOWN_HASH_ROUTES.find(function (candidate) {
+        return !originalHash.startsWith(candidate);
+      });
+      if (!pivotHash) return false;
+      const isAt = function (hash) { return !userNavigated && win.location.hash === hash; };
+      const entered = await observe(function () {
+        win.location.hash = pivotHash;
+      }, function () { return isAt(pivotHash); }, Math.ceil(totalTimeout / 2));
+      if (!isAt(pivotHash)) return false;
+      const restored = await observe(function () {
+        win.location.hash = originalHash;
+      }, function () { return isAt(originalHash); }, totalTimeout);
+      return entered && restored;
+    } finally {
+      if (doc.removeEventListener) doc.removeEventListener('click', onNavigation, true);
     }
-
-    if (Date.now() >= expiresAt) return false;
-
-    // Fallback: simulate the user clicking two distinct sidebar views and apply
-    // the same observable-change requirement to both clicks.
-    const original = findActiveSidebarItem(doc) || findSidebarItem(doc, LIBRARY_SIDEBAR_LABELS);
-    if (!original) return false;
-    const originalText = normalizeLabelText(original.textContent);
-    const pivotLabelPool = PIVOT_SIDEBAR_LABELS.concat(LIBRARY_SIDEBAR_LABELS);
-    let pivot = null;
-    for (let i = 0; i < pivotLabelPool.length; i += 1) {
-      const candidate = findSidebarItem(doc, [pivotLabelPool[i]]);
-      if (!candidate || candidate === original) continue;
-      const candidateText = normalizeLabelText(candidate.textContent);
-      if (candidateText && originalText && candidateText === originalText) continue;
-      pivot = candidate;
-      break;
-    }
-    if (!pivot) return false;
-
-    const pivotChanged = await observe(function () {
-      return simulateMouseClick(pivot);
-    });
-    if (!pivotChanged) return false;
-    return observe(function () {
-      return simulateMouseClick(original);
-    });
   }
 
   function transferFilesToInput(input, files, win) {
@@ -1149,22 +1186,17 @@
     const transfer = createDataTransfer(files, win);
     const target = transfer && findDropTarget(doc);
     if (!target || typeof target.dispatchEvent !== 'function') return false;
-    let accepted = false;
+    let handled = false;
     try {
       ['dragenter', 'dragover', 'drop'].forEach(function (type) {
         const event = createDragEvent(type, transfer, win);
         target.dispatchEvent(event);
-        if (
-          (type === 'dragover' || type === 'drop') &&
-          event.defaultPrevented
-        ) {
-          accepted = true;
-        }
+        if (type === 'drop') handled = event.defaultPrevented;
       });
     } catch (error) {
       return false;
     }
-    return accepted;
+    return handled;
   }
 
   // Returns the number of images actually handed to iCloud (0 on failure) so the
@@ -1172,10 +1204,17 @@
   async function uploadViaICloudPage(files, doc, win, status, options) {
     const route = options && typeof options.routeKey === 'string'
       ? options.routeKey : getDocumentRouteKey(doc);
+    function isOriginalRoute() {
+      return route === getDocumentRouteKey(doc);
+    }
     function routeChanged() {
-      if (route === getDocumentRouteKey(doc)) return false;
+      if (isOriginalRoute()) return false;
       status('图库视图已切换，本批未发送。请在当前视图重新选择图片。', true);
       return true;
+    }
+    let failures = [];
+    function reportHandoff(message, isError) {
+      status(message + (failures.length ? '\n' + describeSkippedFiles(failures) : ''), isError);
     }
 
     if (routeChanged()) return 0;
@@ -1185,16 +1224,18 @@
       return 0;
     }
     try {
-      images = await normalizeFilesForICloudWebUpload(images, win, status);
+      images = await normalizeFilesForICloudWebUpload(images, win, status, undefined, {
+        shouldContinue: isOriginalRoute,
+        onFailures: function (details) {
+          failures = details;
+        },
+      });
     } catch (error) {
       status(error.message, true);
       return 0;
     }
-    if (!images.length) {
-      status('没有图片可以上传：全部转换失败。', true);
-      return 0;
-    }
     if (routeChanged()) return 0;
+    if (!images.length) return 0;
     const beforeDispatch = options && options.beforeDispatch;
     if (typeof beforeDispatch === 'function') await beforeDispatch();
     if (routeChanged()) return 0;
@@ -1211,20 +1252,22 @@
     if (routeChanged()) return 0;
     if (!input) {
       status('找不到 iCloud 上传控件，正在尝试拖拽上传通道...');
-      if (dropFilesOnICloudPage(images, doc, win)) {
-        status('iCloud 页面已接受拖拽上传：' + images.length + ' 张图片。');
-        return images.length;
-      }
-      status('找不到可用的 iCloud 上传入口。请确认当前页面已经登录并停留在“照片”图库视图。', true);
+      const handled = dropFilesOnICloudPage(images, doc, win);
+      reportHandoff(
+        handled
+          ? '已触发拖放，请查看 iCloud 原生上传状态确认是否入队。'
+          : '无法确认 iCloud 是否接收了拖放图片。请查看上传状态，必要时使用原生“上传”按钮。',
+        !handled
+      );
       return 0;
     }
     const inputWindow = input.ownerDocument && input.ownerDocument.defaultView || win;
     const transferred = transferFilesToInput(input, images, inputWindow);
     if (!transferred) {
-      status('未能将图片交给 iCloud。请使用 iCloud 原生工具栏的“上传”按钮。', true);
+      reportHandoff('未能将图片交给 iCloud。请使用 iCloud 原生工具栏的“上传”按钮。', true);
       return 0;
     }
-    status('已发送到 iCloud 上传队列：' + images.length + ' 张图片。');
+    reportHandoff('已向 iCloud 提交 ' + images.length + ' 张图片。');
     return images.length;
   }
 
@@ -1269,7 +1312,8 @@
       '-webkit-user-select:text;user-select:text;touch-action:auto}',
       '#' + PANEL_ID + '-toast.is-visible{opacity:1;visibility:visible;transform:translateY(0);pointer-events:auto}',
       '#' + PANEL_ID + '-toast.is-error{border-left-color:#ff453a;background:rgba(74,25,30,.96)}',
-      '#' + PANEL_ID + ' input[type="file"]{display:none}',
+      '#' + PICKER_ID + '{display:none}',
+      '[data-iu-camera="active"]{transition:var(--iu-camera-transition)!important}',
     ].join('');
     doc.head.appendChild(style);
   }
@@ -1422,9 +1466,6 @@
   }
 
   function createPanel(doc, win) {
-    const existing = doc.getElementById(PANEL_ID);
-    if (existing) return existing;
-
     injectStyles(doc);
 
     const panel = doc.createElement('button');
@@ -1441,17 +1482,20 @@
       '<path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0 0 12 4a8 8 0 1 0 7.74 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>',
       '</svg>',
       '<span class="iu-ring"></span>',
-      '<input type="file" accept="image/*,.heic,.heif,.ico,.svg,.avif" multiple>',
     ].join('');
 
-    const picker = panel.querySelector('input[type="file"]');
+    const picker = doc.createElement('input');
+    picker.id = PICKER_ID;
+    picker.type = 'file';
+    picker.accept = 'image/*,.heic,.heif,.ico,.svg,.avif';
+    picker.multiple = true;
+    picker.hidden = true;
     // Keep notifications outside the 44px draggable/transformed button.
     // A fixed card must use the viewport, not the button's containing block.
     const toastId = PANEL_ID + '-toast';
     const toast = doc.getElementById(toastId) || doc.createElement('div');
     toast.id = toastId;
     toast.className = 'iu-toast';
-    if (toast.parentNode !== doc.body) doc.body.appendChild(toast);
     toast.setAttribute('role', 'status');
     toast.setAttribute('aria-live', 'polite');
     let toastTimer = null;
@@ -1476,6 +1520,8 @@
     let activeRefreshGeneration = null;
     let activeSyncTask = null;
     let reloadInFlight = null;
+    let refreshOriginRoute = null;
+    let uploadFeedback = [];
     let sendQueue = Promise.resolve();
     const refreshGate = createGenerationGate();
     const refreshDemand = createRefreshDemandTracker();
@@ -1486,6 +1532,11 @@
 
     function isRefreshActive() {
       return activeRefreshGeneration !== null && isRefreshCurrent(activeRefreshGeneration);
+    }
+
+    function refreshStatus(message, isError) {
+      status(uploadFeedback.map(function (entry) { return entry.message; }).concat(message).join('\n'),
+        isError || uploadFeedback.some(function (entry) { return entry.isError; }));
     }
 
     function clearPendingReload() {
@@ -1504,22 +1555,25 @@
     function doReload() {
       if (reloadInFlight) return reloadInFlight;
       clearPendingReload();
+      refreshOriginRoute = getDocumentRouteKey(doc);
       reloadInFlight = Promise.resolve().then(async function () {
         try {
           const softened = await softRefreshLibraryView(doc, win);
           if (softened) {
             refreshDemand.clear();
-            status('已刷新图库');
+            refreshStatus('已刷新图库');
+            uploadFeedback = [];
             return true;
           }
-          status('无法自动刷新图库，请使用 iCloud 侧边栏切换视图后返回。', true);
+          refreshStatus('未完成软刷新。若照片尚未显示，可在 iCloud 侧边栏切换视图后返回。');
         } catch (error) {
-          status('刷新图库失败，请手动切换视图。', true);
+          refreshStatus('刷新图库失败，请手动切换视图。', true);
           console.warn(LOG_PREFIX, 'Soft refresh failed:', error && error.message ? error.message : error);
         }
         return false;
       }).finally(function () {
         reloadInFlight = null;
+        refreshOriginRoute = null;
         if (refreshDemand.ready()) {
           panel.classList.add('is-pending-reload');
           panel.title = '点击重试刷新图库';
@@ -1587,7 +1641,7 @@
     async function pollSyncTokenAndRefresh(baseToken, generation) {
       if (!isRefreshCurrent(generation)) return;
       if (!baseToken) {
-        status('无法读取同步状态，将在 5 秒后尝试软刷新。');
+        refreshStatus('无法读取同步状态，将在 5 秒后尝试软刷新。');
         reloadTimer = setTimeout(function () {
           reloadTimer = null;
           if (isRefreshCurrent(generation)) void doReload();
@@ -1595,7 +1649,7 @@
         return;
       }
 
-      status('等待图库同步…');
+      refreshStatus('等待图库同步…');
       const expiresAt = Date.now() + 30000;
       let delay = 2000;
 
@@ -1603,7 +1657,7 @@
         if (!isRefreshCurrent(generation)) return;
         const remaining = expiresAt - Date.now();
         if (remaining <= 0) {
-          status('等待图库同步超时，尝试软刷新…');
+          refreshStatus('等待图库同步超时，尝试软刷新…');
           void doReload();
           return;
         }
@@ -1633,7 +1687,7 @@
         if (activeSyncTask === task) activeSyncTask = null;
         if (!isRefreshCurrent(generation)) return;
         if (token && token !== baseToken) {
-          status('检测到图库同步更新，正在刷新…');
+          refreshStatus('检测到图库同步更新，正在刷新…');
           void doReload();
           return;
         }
@@ -1645,11 +1699,6 @@
     }
 
     async function sendBatch(files, routeKey) {
-      const images = filterImageFiles(files);
-      if (!images.length) {
-        status('只能上传图片', true);
-        return;
-      }
       if (reloadInFlight) await reloadInFlight;
 
       // Batches run serially. The outer queue pauses any active refresh while
@@ -1657,8 +1706,13 @@
       panel.classList.add('is-busy');
       let uploadedCount = 0;
       let baseToken = null;
+      let result;
+      function report(message, isError) {
+        result = { message, isError: Boolean(isError) };
+        status(message, isError);
+      }
       try {
-        uploadedCount = await uploadViaICloudPage(images, doc, win, status, {
+        uploadedCount = await uploadViaICloudPage(files, doc, win, report, {
           routeKey,
           beforeDispatch: async function () {
             baseToken = await captureBaselineToken();
@@ -1666,20 +1720,25 @@
         });
       } catch (error) {
         const detail = error && error.message ? error.message : String(error);
-        status('上传处理失败：' + detail, true);
+        report('上传处理失败：' + detail, true);
         console.warn(LOG_PREFIX, 'Upload failed:', error);
       } finally {
         panel.classList.remove('is-busy');
       }
+      if (result) uploadFeedback.push(result);
       if (uploadedCount > 0) {
-        status('已提交 ' + uploadedCount + ' 张给 iCloud，等待图库同步…');
         refreshDemand.recordSuccess(baseToken);
       }
     }
 
     function send(files) {
-      const queuedFiles = snapshotFiles(files);
-      const routeKey = getDocumentRouteKey(doc);
+      const queuedFiles = filterImageFiles(files);
+      if (!queuedFiles.length) {
+        status('只能上传图片', true);
+        return Promise.resolve();
+      }
+      if (!refreshDemand.hasPending()) uploadFeedback = [];
+      const routeKey = refreshOriginRoute === null ? getDocumentRouteKey(doc) : refreshOriginRoute;
       refreshDemand.enqueue();
       clearPendingReload();
       sendQueue = sendQueue.then(
@@ -1696,14 +1755,12 @@
     }
 
     panel.addEventListener('click', function (event) {
-      // Suppress the click that follows a drag, and never open the picker when
-      // the user is scrolling or selecting text inside a long status message.
-      if (panel._recentDrag || event.target === toast) {
+      // Suppress the click that follows a drag.
+      if (panel._recentDrag) {
         event.preventDefault();
         event.stopPropagation();
         return;
       }
-      if (event.target === picker) return;
       if (isRefreshActive() || panel.classList.contains('is-pending-reload')) {
         event.preventDefault();
         void doReload();
@@ -1759,8 +1816,14 @@
     // even after a MutationObserver re-mount swaps the send closure.
     panel._handlePasteUpload = send;
 
-    doc.body.appendChild(panel);
-    return panel;
+    function attachPanel() {
+      if (!doc.body) return;
+      for (const element of [picker, toast, panel]) {
+        if (element.parentNode !== doc.body) doc.body.appendChild(element);
+      }
+    }
+    attachPanel();
+    return attachPanel;
   }
 
   function installPasteListener(doc, win) {
@@ -1773,17 +1836,7 @@
         handledPasteEvents.add(event);
 
         // Do not hijack text entry in iCloud search, rename, or description UI.
-        const target = event.target;
-        if (target && typeof target.matches === 'function') {
-          try {
-            if (target.matches('input:not([type]), input[type="text"], input[type="search"], input[type="email"], input[type="url"], input[type="password"], textarea')) {
-              return;
-            }
-          } catch (error) {
-            // Ignore selector failures and continue with the file payload.
-          }
-          if (target.isContentEditable) return;
-        }
+        if (isEditablePhotoCopyTarget(event.target)) return;
 
         const files = extractImageFilesFromPaste(event);
         if (!files.length) return;
@@ -1824,7 +1877,6 @@
   const COPY_MENU_APPLIED_HEIGHT_ATTR = 'data-icloud-copy-menu-applied-height';
   const GRID_COPY_MENU_ATTR = 'data-icloud-copy-photo';
   const GRID_DOWNLOAD_MENU_ATTR = 'data-icloud-download-photo';
-  const DOWNLOAD_MENU_LABEL = '下载原片';
 
   function getCopyablePhotoImageSource(image) {
     if (!image) return '';
@@ -1906,9 +1958,12 @@
   async function renderPhotoImageToBlob(image, win) {
     // A revoked object URL still leaves decoded pixels in the <img>.
     const doc = (image && image.ownerDocument) || (win && win.document);
-    const width = Number(image && image.naturalWidth) || 0;
-    const height = Number(image && image.naturalHeight) || 0;
+    const width = Number(image && (image.naturalWidth ?? image.width)) || 0;
+    const height = Number(image && (image.naturalHeight ?? image.height)) || 0;
     if (!width || !height) throw new Error('无法读取图片数据。');
+    if (width > MAX_CANVAS_EDGE_PX || height > MAX_CANVAS_EDGE_PX || width * height > MAX_CANVAS_PIXELS) {
+      throw new RangeError('图像尺寸超出剪贴板转换上限，请使用 iCloud 原生下载。');
+    }
     let canvas = null;
     try {
       canvas = doc && typeof doc.createElement === 'function' ? doc.createElement('canvas') : null;
@@ -1942,6 +1997,15 @@
   }
 
   async function fetchCopyablePhotoImageBlob(image, win, source) {
+    // The decoded image remains usable even after iCloud revokes its blob URL.
+    if (image && image.complete !== false && image.naturalWidth && image.naturalHeight) {
+      try {
+        return await renderUnchangedPhoto(image, win, source);
+      } catch (error) {
+        if (error.name !== 'SecurityError') throw error;
+        // An HTTP image with an unreadable canvas can still have a fetchable response.
+      }
+    }
     const fetchFn = win && win.fetch;
     if (source && typeof fetchFn === 'function') {
       try {
@@ -1949,22 +2013,29 @@
         const task = startAbortableTask(async function (signal) {
           const response = await fetchFn.call(win, source, {
             credentials: 'include',
-            cache: 'no-store',
             signal,
           });
           if (signal && signal.aborted) return null;
           if (response && response.ok && typeof response.blob === 'function') {
-            const blob = await response.blob();
-            if (String(blob && blob.type || '').toLowerCase() === 'image/png') return blob;
+            return response.blob();
           }
           return null;
         }, COPY_FETCH_TIMEOUT_MS, (win && win.AbortController) || root.AbortController,
         '读取图片超时。');
         const blob = await task.promise;
-        if (blob) return blob;
-        // PNG is mandatory; rasterize JPEG/WebP and other derivatives below.
+        const type = String(blob && blob.type || '').toLowerCase();
+        if (type === 'image/png') return blob;
+        if (type.startsWith('image/')) {
+          const decoded = await decodeImageForCanvas(blob, win);
+          try {
+            return await renderPhotoImageToBlob(decoded, win);
+          } finally {
+            if (typeof decoded.close === 'function') decoded.close();
+          }
+        }
       } catch (error) {
-        // Revoked object URLs or a stalled fetch fall back to decoded pixels.
+        if (error.name === 'RangeError') throw error;
+        // The current image may have finished loading during the request.
       }
     }
     return renderUnchangedPhoto(image, win, source);
@@ -1979,7 +2050,9 @@
     const source = getCopyablePhotoImageSource(image);
     const blobPromise = preparedBlob
       ? Promise.resolve(preparedBlob)
-      : fetchCopyablePhotoImageBlob(image, win, source);
+      : Promise.resolve().then(function () {
+        return fetchCopyablePhotoImageBlob(image, win, source);
+      });
     // No await before write: Safari requires the original click/keydown activation.
     const pngPromise = blobPromise.then(function (blob) {
       const type = String(blob && blob.type || '').toLowerCase();
@@ -1992,12 +2065,6 @@
     pngPromise.catch(function () {});
     await clipboard.write([new ClipboardItemCtor({ 'image/png': pngPromise })]);
     return true;
-  }
-
-  function isVisibleMenu(menu) {
-    if (!menu || typeof menu.getBoundingClientRect !== 'function') return true;
-    const rect = menu.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
   }
 
   function isPhotoMenuContainer(node) {
@@ -2067,23 +2134,6 @@
     return element && typeof element.getAttribute === 'function' ? element.getAttribute(name) : null;
   }
 
-  function applyCopyMenuHeight(element, extra) {
-    if (!element || !element.style || !extra) return;
-    const base = resolveCopyMenuBaseHeight({
-      current: parseFloat(element.style.height),
-      storedBase: parseFloat(readCopyMenuAttr(element, COPY_MENU_BASE_HEIGHT_ATTR)),
-      storedApplied: parseFloat(readCopyMenuAttr(element, COPY_MENU_APPLIED_HEIGHT_ATTR)),
-    });
-    if (base === null) return;
-    if (typeof element.setAttribute === 'function') {
-      element.setAttribute(COPY_MENU_BASE_HEIGHT_ATTR, String(base));
-      element.setAttribute(COPY_MENU_APPLIED_HEIGHT_ATTR, String(extra));
-    }
-    element.style.height = base + extra + 'px';
-  }
-
-  // iCloud's popover wrapper is pointer-events:none; only ui-popover-content
-  // restores interaction, so the row must be inserted into the list it owns.
   function findCopyMenuItemList(menu) {
     if (!menu || typeof menu.querySelector !== 'function') return menu || null;
     return (
@@ -2096,38 +2146,6 @@
   // An extra row would otherwise push the last entry into the menu's scroll area
   // and clip it, because iCloud pins an explicit pixel height on the popover.
   // `extra` is the combined height of every row we injected this time.
-  function growCopyMenuHeight(menu, extra) {
-    const height = Math.round(extra || 0);
-    if (!height) return;
-    const popover =
-      menu && typeof menu.closest === 'function' ? menu.closest('ui-popover') || menu : menu;
-    applyCopyMenuHeight(popover, height);
-    const content =
-      popover && typeof popover.querySelector === 'function'
-        ? popover.querySelector('ui-popover-content')
-        : null;
-    applyCopyMenuHeight(content, height);
-  }
-
-  // A plain <button> inherits the popover's dimmed colour and has no icon slot,
-  // so it looks nothing like iCloud's own rows. Clone a real row instead and
-  // swap its label/icon: that keeps typography, colour and hover behaviour.
-  const MENU_ROW_FALLBACK_STYLE = [
-    'display:flex',
-    'width:100%',
-    'align-items:center',
-    'padding:5px 16px',
-    'border:0',
-    'background:transparent',
-    'color:inherit',
-    'font:inherit',
-    'text-align:left',
-    'cursor:pointer',
-    // iCloud sets pointer-events:none on the popover wrapper, so the row must
-    // re-enable hit testing for itself to be reachable by a real mouse click.
-    'pointer-events:auto',
-  ].join(';');
-
   function isInjectedMenuRow(row) {
     if (!row || typeof row.getAttribute !== 'function') return false;
     return (
@@ -2151,93 +2169,6 @@
   // iCloud's own 下载 row, excluding the ones this script injects.
   function findNativeDownloadItem(container) {
     return findNativeMenuRow(container, /^(下载|下載|download)/i);
-  }
-
-  function buildMenuRow(doc, label, marker) {
-    const item = doc.createElement('button');
-    item.type = 'button';
-    item.setAttribute('role', 'menuitem');
-    item.setAttribute(marker, '');
-    item.textContent = label;
-    item.style.cssText = MENU_ROW_FALLBACK_STYLE;
-    return item;
-  }
-
-  function setMenuRowLabel(row, label) {
-    if (!row) return;
-    const title = typeof row.querySelector === 'function' ? row.querySelector('.menuItem-title') : null;
-    if (title) title.textContent = label;
-    else row.textContent = label;
-  }
-
-  function copyMenuRowIcon(row, source) {
-    if (!row || !source || typeof row.querySelector !== 'function') return;
-    const target = row.querySelector('.menuItem-icon');
-    const sourceIcon =
-      typeof source.querySelector === 'function' ? source.querySelector('.menuItem-icon') : null;
-    if (!target || !sourceIcon) return;
-    const svg = typeof sourceIcon.querySelector === 'function' ? sourceIcon.querySelector('svg') : null;
-    if (!svg || typeof svg.cloneNode !== 'function') return;
-    target.textContent = '';
-    target.appendChild(svg.cloneNode(true));
-  }
-
-  function createMenuRow(doc, container, label, marker, iconSourceRow) {
-    const existing =
-      container && typeof container.querySelector === 'function'
-        ? container.querySelector('[' + marker + ']')
-        : null;
-    if (existing) return existing;
-    const template = findNativeMenuRow(container, /./);
-    let item = null;
-    if (template && typeof template.cloneNode === 'function') {
-      item = template.cloneNode(true);
-      item.setAttribute(marker, '');
-      item.setAttribute('role', 'menuitem');
-      item.setAttribute('tabindex', '-1');
-      if (typeof item.removeAttribute === 'function') {
-        item.removeAttribute('aria-selected');
-        item.removeAttribute('aria-disabled');
-      }
-      if (item.style) item.style.pointerEvents = 'auto';
-      setMenuRowLabel(item, label);
-      if (iconSourceRow) copyMenuRowIcon(item, iconSourceRow);
-    }
-    if (!item) item = buildMenuRow(doc, label, marker);
-    return item;
-  }
-
-  // Delegate the download to iCloud's own command: its TCC/asset mapping is the
-  // only reliable way to fetch true originals (multi-select downloads a zip).
-  function triggerNativeDownload(doc, win, container) {
-    const native = findNativeDownloadItem(container);
-    if (!native || typeof native.dispatchEvent !== 'function') return false;
-    const MouseEventCtor = win && win.MouseEvent ? win.MouseEvent : root.MouseEvent;
-    let event = null;
-    if (typeof MouseEventCtor === 'function') {
-      event = new MouseEventCtor('click', { bubbles: true, cancelable: true });
-    } else if (doc && typeof doc.createEvent === 'function') {
-      event = doc.createEvent('MouseEvents');
-      event.initEvent('click', true, true);
-    }
-    if (!event) return false;
-    native.dispatchEvent(event);
-    return true;
-  }
-
-  // Resolve the list at click time: the popover content can be replaced between
-  // opens, so a list captured when the row was created may already be detached.
-  function makeDownloadRowHandler(doc, win, row) {
-    return function (event) {
-      event.preventDefault();
-      event.stopPropagation();
-      if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
-      const menu = typeof row.closest === 'function' ? row.closest('ui-popover') : row.parentElement;
-      const list = findCopyMenuItemList(menu || row.parentElement) || row.parentElement;
-      if (!triggerNativeDownload(doc, win, list)) {
-        showCopyPhotoStatus(doc, '未找到 iCloud 的下载项，请使用菜单中的“下载”', true);
-      }
-    };
   }
 
   // Keep the native menu's item order, DOM identity and event bindings intact.
@@ -2282,62 +2213,14 @@
   }
 
   function installGridPhotoCopyMenu(doc, win) {
-    if (!doc || gridCopyMenuStateByDocument.has(doc)) return;
-    const state = { observer: null, timer: null, knownMenus: null };
-    gridCopyMenuStateByDocument.set(doc, state);
-
-    function clearPending() {
-      if (state.timer) clearTimeout(state.timer);
-      state.timer = null;
-      if (state.observer) state.observer.disconnect();
-      state.observer = null;
-      state.knownMenus = null;
+    const stale = doc.querySelectorAll('[' + GRID_COPY_MENU_ATTR + '], [' + GRID_DOWNLOAD_MENU_ATTR + '], [' +
+      COPY_MENU_APPLIED_HEIGHT_ATTR + ']');
+    const menus = new Set();
+    for (const node of stale) {
+      const menu = node.closest('ui-popover, [role="menu"]');
+      if (menu) menus.add(menu);
     }
-
-    function findOpenedMenu() {
-      const menus = findPhotoContextMenus(doc);
-      return (
-        menus.find(function (menu) {
-          return isVisibleMenu(menu) && (!state.knownMenus || !state.knownMenus.get(menu));
-        }) || null
-      );
-    }
-
-    function tryInstall() {
-      const menu = findOpenedMenu();
-      if (!menu) return;
-      if (addGridDownloadMenuItem(doc, win, menu)) clearPending();
-    }
-
-    doc.addEventListener(
-      'contextmenu',
-      function () {
-        clearPending();
-        // Remember which menus were already on screen so a re-used popover is
-        // not mistaken for a freshly opened one.
-        state.knownMenus = new Map(
-          findPhotoContextMenus(doc).map(function (menu) {
-            return [menu, isVisibleMenu(menu)];
-          })
-        );
-        const MutationObserverCtor = (win && win.MutationObserver) || root.MutationObserver;
-        const rootNode = doc.documentElement || doc.body;
-        if (typeof MutationObserverCtor === 'function' && rootNode) {
-          state.observer = new MutationObserverCtor(function () {
-            tryInstall();
-          });
-          state.observer.observe(rootNode, {
-            childList: true,
-            subtree: true,
-            attributes: true,
-            attributeFilter: ['class', 'style', 'hidden', 'aria-hidden'],
-          });
-        }
-        tryInstall();
-        state.timer = setTimeout(clearPending, 5000);
-      },
-      true
-    );
+    for (const menu of menus) addGridDownloadMenuItem(doc, win, menu);
   }
 
   function isEditablePhotoCopyTarget(target) {
@@ -2351,36 +2234,33 @@
     if (!doc || typeof doc.elementsFromPoint !== 'function') return null;
     if (typeof x !== 'number' || typeof y !== 'number' || x < 0 || y < 0) return null;
     const stack = doc.elementsFromPoint(x, y) || [];
+    const checked = new Set();
     for (let i = 0; i < stack.length; i += 1) {
-      const found = findPhotoImageInNode(stack[i], x, y);
+      const element = stack[i];
+      if (!element || element === doc.body || element === doc.documentElement) continue;
+      const tile = typeof element.closest === 'function' ? element.closest(GRID_TILE) : element;
+      const target = tile || (element.tagName === 'IMG' ? element : null);
+      if (!target || checked.has(target)) continue;
+      checked.add(target);
+      const found = findPhotoImageInNode(target, x, y);
       if (found) return found;
     }
     return null;
   }
 
-  // The enlarged viewer keeps swapping larger derivatives into the same <img>.
-  // Its class names are build-specific (they are not stable strings in the app
-  // bundle), so identify the photo by what it is instead: an <img> that is large
-  // both in pixels and on screen, and that does not live in a grid tile. Grid
-  // thumbnails render ~160px with 480px derivatives, so they never qualify.
+  // Size heuristics are for older or renamed viewer markup.
   const VIEWER_MIN_NATURAL_PX = 800;
   const VIEWER_MIN_RENDERED_PX = 500;
 
-  function isViewerPhotoImage(img) {
-    if (!img || !img.naturalWidth || !img.naturalHeight) return false;
-    if (typeof img.closest === 'function' && img.closest('.grid-item')) return false;
-    if (typeof img.getBoundingClientRect !== 'function') return false;
-    const rect = img.getBoundingClientRect();
-    const naturalMax = Math.max(img.naturalWidth, img.naturalHeight);
-    const renderedMax = Math.max(rect.width, rect.height);
-    return naturalMax >= VIEWER_MIN_NATURAL_PX && renderedMax >= VIEWER_MIN_RENDERED_PX;
+  function getCenteredViewer(doc) {
+    return doc && typeof doc.querySelector === 'function' ? doc.querySelector(CENTERED_VIEWER) : null;
   }
 
   // Pick the viewer-sized image closest to the viewport centre, so a preloaded
   // carousel neighbour never wins over the photo actually on screen.
-  function resolveOneUpImage(doc) {
+  function resolveOneUpImage(doc, viewer = getCenteredViewer(doc)) {
     if (!doc || typeof doc.querySelectorAll !== 'function') return null;
-    const imgs = doc.querySelectorAll('img');
+    const imgs = viewer ? viewer.querySelectorAll('img') : doc.querySelectorAll('img');
     const root = doc.documentElement || doc.body;
     const vw = root ? root.clientWidth || 0 : 0;
     const vh = root ? root.clientHeight || 0 : 0;
@@ -2390,12 +2270,20 @@
     let bestScore = Infinity;
     for (let i = 0; i < imgs.length; i += 1) {
       const img = imgs[i];
-      if (!isViewerPhotoImage(img)) continue;
+      if (!img.naturalWidth || !img.naturalHeight || img.complete === false ||
+          typeof img.getBoundingClientRect !== 'function') continue;
+      if (!viewer && (Math.max(img.naturalWidth, img.naturalHeight) < VIEWER_MIN_NATURAL_PX ||
+          (typeof img.closest === 'function' && img.closest(GRID_TILE)))) continue;
       const rect = img.getBoundingClientRect();
+      if (!rect.width || !rect.height || (!viewer && Math.max(rect.width, rect.height) < VIEWER_MIN_RENDERED_PX)) continue;
       // The carousel keeps neighbours mounted and a closed viewer can leave them
       // laid out just outside the viewport, so off-screen candidates never count.
-      if (rect.right <= 0 || rect.bottom <= 0 || rect.left >= vw || rect.top >= vh) continue;
-      const score =
+      if (rect.left + rect.width <= 0 || rect.top + rect.height <= 0 || rect.left >= vw || rect.top >= vh) continue;
+      if (viewer && doc.defaultView && doc.defaultView.getComputedStyle) {
+        const style = doc.defaultView.getComputedStyle(img);
+        if (style.visibility === 'hidden' || style.opacity === '0') continue;
+      }
+      const score = viewer ? -(img.naturalWidth * img.naturalHeight) :
         Math.abs(rect.left + rect.width / 2 - cx) + Math.abs(rect.top + rect.height / 2 - cy);
       if (score < bestScore) {
         best = img;
@@ -2411,18 +2299,26 @@
       showCopyPhotoStatus(doc, '未找到大图，请等图片加载完成后再试', true);
       return;
     }
-    const width = image.naturalWidth || image.width || 0;
-    const height = image.naturalHeight || image.height || 0;
+    return copyPhotoWithStatus(doc, win, image, true);
+  }
+
+  async function copyPhotoWithStatus(doc, win, image, isViewer) {
+    if (clipboardWritesByDocument.has(doc)) return;
+    clipboardWritesByDocument.add(doc);
+    const complete = isViewer ? '已拷贝大图 ' + image.naturalWidth + '×' + image.naturalHeight : '图像已拷贝到剪贴板';
     try {
+      showCopyPhotoStatus(doc, '正在拷贝图像…');
       const copied = await copyPhotoImageToClipboard(image, win);
       showCopyPhotoStatus(
         doc,
-        copied ? '已拷贝大图 ' + width + '×' + height : '浏览器不支持图像拷贝',
+        copied ? complete : '浏览器不支持图像拷贝',
         !copied
       );
     } catch (error) {
       const detail = error && error.message ? error.message : '未知错误';
-      showCopyPhotoStatus(doc, '拷贝大图失败：' + detail, true);
+      showCopyPhotoStatus(doc, '拷贝图像失败：' + detail, true);
+    } finally {
+      clipboardWritesByDocument.delete(doc);
     }
   }
 
@@ -2602,7 +2498,7 @@
   // OneUp is open — the user opens the photo (one click) and copies from there.
   function installOneUpCopyButton(doc, win) {
     if (!doc || oneUpCopyStateByDocument.has(doc)) return;
-    const state = { button: null, disposeDragging: null, timer: null, hintShown: false };
+    const state = { button: null, disposeDragging: null, scheduled: false, hintShown: false };
     oneUpCopyStateByDocument.set(doc, state);
 
     function removeButton() {
@@ -2618,13 +2514,11 @@
     }
 
     function sync() {
-      if (typeof doc.querySelectorAll !== 'function') return;
+      state.scheduled = false;
+      if (doc.hidden || typeof doc.querySelectorAll !== 'function') return;
       if (state.button && (state.button.isConnected === false || state.button.parentNode !== doc.body)) {
         removeButton();
       }
-      // Presence is derived from a viewer-sized photo, not from a class name:
-      // the image only qualifies once its bitmap is decoded, so keep polling
-      // instead of trusting a single DOM mutation.
       const hasViewerPhoto = Boolean(resolveOneUpImage(doc));
       if (hasViewerPhoto && !state.button && doc.body && typeof doc.body.appendChild === 'function') {
         state.button = createOneUpCopyButton(doc, win);
@@ -2639,29 +2533,39 @@
       }
     }
 
-    function tick() {
-      state.timer = null;
-      if (doc.hidden) return;
-      sync();
-      state.timer = win && typeof win.setTimeout === 'function' ? win.setTimeout(tick, 700) : null;
+    function scheduleSync() {
+      if (doc.hidden || state.scheduled) return;
+      state.scheduled = true;
+      // A subtree update can happen while Chromium is throttling animation
+      // frames in an iframe. Coalesce each mutation delivery without waiting
+      // for paint to remove or create the button.
+      Promise.resolve().then(sync);
     }
 
-    function visibilityChanged() {
-      if (state.timer !== null) {
-        const cancel = (win && win.clearTimeout) || root.clearTimeout;
-        cancel.call(win, state.timer);
-        state.timer = null;
+    const Observer = (win && win.MutationObserver) || root.MutationObserver;
+    if (typeof Observer === 'function' && (doc.documentElement || doc.body)) {
+      const observer = new Observer(function () {
+        if (state.button || getCenteredViewer(doc)) scheduleSync();
+      });
+      observer.observe(doc.documentElement || doc.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+    }
+    doc.addEventListener('load', function (event) {
+      const image = event.target;
+      if (image && image.tagName === 'IMG' && image.closest &&
+          (image.closest(CENTERED_VIEWER) ||
+            (!image.closest(GRID_TILE) && Math.max(image.naturalWidth, image.naturalHeight) >= VIEWER_MIN_NATURAL_PX))) {
+        scheduleSync();
       }
-      if (!doc.hidden) tick();
-    }
-
-    doc.addEventListener('visibilitychange', visibilityChanged);
-    visibilityChanged();
+    }, true);
+    if (win && win.addEventListener) win.addEventListener('resize', scheduleSync);
+    doc.addEventListener('visibilitychange', scheduleSync);
+    sync();
   }
 
   function installGridPhotoKeyboardCopy(doc, win) {
     if (!doc || keyboardPhotoCopyStateByDocument.has(doc)) return;
-    const state = { x: -1, y: -1, busy: false, hintShown: false };
+    const state = { x: -1, y: -1 };
+    let hintShown = false;
     keyboardPhotoCopyStateByDocument.set(doc, state);
 
     function findPhotoUnderPointer() {
@@ -2681,30 +2585,25 @@
       return Boolean(selection && selection.isCollapsed === false && String(selection).length > 0);
     }
 
-    function copyPhotoUnderPointer(image) {
-      state.busy = true;
-      showCopyPhotoStatus(doc, '正在拷贝图像…');
-      copyPhotoImageToClipboard(image, win).then(function (copied) {
-        showCopyPhotoStatus(doc, copied ? '图像已拷贝到剪贴板' : '浏览器不支持图像拷贝', !copied);
-      }).catch(function (error) {
-        const detail = error && error.message ? error.message : '未知错误';
-        showCopyPhotoStatus(doc, '拷贝图像失败：' + detail, true);
-      }).then(function () {
-        state.busy = false;
-      });
-    }
-
     doc.addEventListener('mousemove', function (event) {
       state.x = typeof event.clientX === 'number' ? event.clientX : -1;
       state.y = typeof event.clientY === 'number' ? event.clientY : -1;
     }, true);
 
-    doc.addEventListener('mouseover', function (event) {
-      if (state.hintShown) return;
+    function showHoverHint(event) {
+      if (hintShown) return;
       const image = findGridPhotoImageAtPoint(doc, event.clientX, event.clientY);
       if (!image) return;
-      state.hintShown = true;
+      hintShown = true;
+      if (doc.removeEventListener) doc.removeEventListener('mouseover', showHoverHint, true);
       showCopyPhotoStatus(doc, '提示：鼠标悬停在照片上按 Ctrl+C 可拷贝图像');
+    }
+    doc.addEventListener('mouseover', showHoverHint, true);
+    doc.addEventListener('mouseout', function (event) {
+      if (event.relatedTarget === null) {
+        state.x = -1;
+        state.y = -1;
+      }
     }, true);
 
     doc.addEventListener('keydown', function (event) {
@@ -2712,16 +2611,15 @@
       if (!isCopyShortcut(event)) return;
       if (isEditablePhotoCopyTarget(event.target)) return;
       if (hasTextSelection()) return;
-      // In the enlarged view the pointer often rests on toolbars instead of the
-      // photo, so fall back to the centered OneUp image there.
-      const image = findPhotoUnderPointer() || resolveOneUpImage(doc);
+      const viewer = getCenteredViewer(doc);
+      const viewerImage = resolveOneUpImage(doc, viewer);
+      const image = viewerImage || (!viewer && findPhotoUnderPointer());
       if (!image) return;
       // The real keystroke carries the user activation that the clipboard
       // write below depends on, so claim the event before the page sees it.
       event.preventDefault();
       event.stopPropagation();
-      if (state.busy) return;
-      copyPhotoUnderPointer(image);
+      void copyPhotoWithStatus(doc, win, image, Boolean(viewerImage));
     }, true);
   }
 
@@ -2791,17 +2689,21 @@
       let lineage = null;
       const committed = tree.stateNode && tree.stateNode.current;
       if (committed && committed.child) {
-        const stack = [[committed, []]];
-        const seen = new Set();
+        const stack = [committed];
+        const parents = new Map([[committed, null]]);
         for (let visited = 0; stack.length && visited < 10000; visited += 1) {
-          const entry = stack.pop(), node = entry[0], parents = entry[1];
-          if (!node || seen.has(node)) continue;
-          seen.add(node);
-          if (node.stateNode === element) { lineage = parents.concat(node).reverse(); break; }
+          const node = stack.pop();
+          if (node.stateNode === element) {
+            lineage = [];
+            for (let ancestor = node; ancestor; ancestor = parents.get(ancestor)) lineage.push(ancestor);
+            break;
+          }
           const dom = node.stateNode;
           if (dom && dom.nodeType === 1 && typeof dom.contains === 'function' && !dom.contains(element)) continue;
           for (let child = node.child; child; child = child.sibling) {
-            stack.push([child, parents.concat(node)]);
+            if (parents.has(child)) break;
+            parents.set(child, node);
+            stack.push(child);
           }
         }
         if (!lineage) return null;
@@ -2861,6 +2763,7 @@
     let disposed = false;
     let sessionActive = false;
     let nativeObserver = null;
+    let nativeObserverFrame = null;
     let nativeStyleRelease = null;
     let fallbackStyleRelease = null;
     let nativeDrag = null;
@@ -2888,11 +2791,9 @@
       baseHeight: 0,
       savedInlineTransform: '',
       baseTransform: '',
-      savedTransition: '',
       savedCursor: '',
       savedWillChange: '',
       appliedInlineTransform: null,
-      appliedTransition: null,
       appliedCursor: null,
       appliedWillChange: null,
       watchdogObserver: null,
@@ -2929,11 +2830,7 @@
       const savedAttr = marked ? target.getAttribute(attr) : null;
       const savedVariable = marked ? style.getPropertyValue(variable) : '';
       const variablePriority = marked ? style.getPropertyPriority(variable) : '';
-      let rule = null;
-      if (marked && typeof doc.createElement === 'function' && (doc.head || doc.body)) {
-        rule = doc.createElement('style');
-        rule.textContent = '[data-iu-camera="active"]{transition:var(--iu-camera-transition)!important}';
-        (doc.head || doc.body).appendChild(rule);
+      if (marked) {
         target.setAttribute(attr, 'active');
         style.setProperty(variable, value);
       }
@@ -2945,7 +2842,7 @@
           if (style.setProperty) style.setProperty('transition', saved, priority);
           else style.transition = saved;
         }
-        if (rule) {
+        if (marked) {
           if (target.getAttribute(attr) === 'active') {
             if (savedAttr === null) target.removeAttribute(attr); else target.setAttribute(attr, savedAttr);
           }
@@ -2953,7 +2850,6 @@
             if (savedVariable) style.setProperty(variable, savedVariable, variablePriority);
             else style.removeProperty(variable);
           }
-          if (rule.parentNode) rule.parentNode.removeChild(rule);
         }
       };
     }
@@ -2992,13 +2888,19 @@
       if (nativeObserver) return;
       const Observer = win.MutationObserver || root.MutationObserver;
       if (typeof Observer !== 'function' || !(doc.body || doc.documentElement)) return;
-      nativeObserver = new Observer(function () {
+      function checkController() {
+        nativeObserverFrame = null;
         const controller = findNativeOneUpZoomController(doc);
         if (nativeZoom ? !matchesNativeZoom(controller) : !controller ||
             !sessionController || controller.element !== sessionController.element ||
             controller.target !== sessionController.target || controller.photoIndex !== sessionController.photoIndex) {
           cancelNativeZoom();
         }
+      }
+      nativeObserver = new Observer(function () {
+        if (nativeObserverFrame !== null) return;
+        if (typeof win.requestAnimationFrame === 'function') nativeObserverFrame = win.requestAnimationFrame(checkController);
+        else checkController();
       });
       nativeObserver.observe(doc.documentElement || doc.body, {
         childList: true, subtree: true, attributes: true, attributeFilter: ['class'],
@@ -3011,6 +2913,10 @@
       }
       if (nativeObserver) nativeObserver.disconnect();
       nativeObserver = null;
+      if (nativeObserverFrame !== null && typeof win.cancelAnimationFrame === 'function') {
+        win.cancelAnimationFrame(nativeObserverFrame);
+      }
+      nativeObserverFrame = null;
       if (nativeStyleRelease) nativeStyleRelease();
       nativeStyleRelease = null;
       nativeZoom = null;
@@ -3133,8 +3039,8 @@
       if (image && event) {
         const rect = image.getBoundingClientRect();
         nativeZoom.image = image;
-        nativeZoom.anchor = { x: event.clientX, y: event.clientY,
-          u: (event.clientX - rect.left) / rect.width, v: (event.clientY - rect.top) / rect.height };
+        nativeZoom.anchor = rect.width && rect.height ? { x: event.clientX, y: event.clientY,
+          u: (event.clientX - rect.left) / rect.width, v: (event.clientY - rect.top) / rect.height } : null;
       }
       const reduced = win && typeof win.matchMedia === 'function' &&
         win.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -3189,7 +3095,7 @@
       let best = null;
       let bestArea = 0;
       for (let i = 0; i < stack.length; i += 1) {
-        const el = isLargeMedia(stack[i]) ? stack[i] : findPhotoImageInNode(stack[i], x, y);
+        const el = stack[i];
         const rect = getLargeMediaRect(el);
         if (!rect) continue;
         const area = rect.width * rect.height;
@@ -3198,7 +3104,10 @@
           bestArea = area;
         }
       }
-      return best;
+      const viewer = best ? null : getCenteredViewer(doc);
+      if (!viewer) return best;
+      const photo = findPhotoImageInNode(viewer, x, y);
+      return isLargeMedia(photo) ? photo : null;
     }
 
     // The wheel handler runs on every scroll tick, so cache the "largest media in
@@ -3221,8 +3130,8 @@
       const vh = (win && win.innerHeight) || doc.documentElement.clientHeight;
       for (let i = 0; i < candidates.length; i += 1) {
         const el = candidates[i];
-        const rect = el.getBoundingClientRect();
-        if (rect.width < MIN_PREVIEW_PX || rect.height < MIN_PREVIEW_PX) continue;
+        const rect = getLargeMediaRect(el);
+        if (!rect) continue;
         // Reject elements outside the viewport.
         if (rect.right < 0 || rect.bottom < 0 || rect.left > vw || rect.top > vh) continue;
         const area = rect.width * rect.height;
@@ -3309,7 +3218,6 @@
       state.baseHeight = rect.height;
       state.savedInlineTransform = state.zoomTarget.style.transform || '';
       state.baseTransform = readCurrentTransform(state.zoomTarget);
-      state.savedTransition = state.zoomTarget.style.transition || '';
       state.savedCursor = state.zoomTarget.style.cursor || '';
       state.savedWillChange = state.zoomTarget.style.willChange || '';
 
@@ -3330,9 +3238,6 @@
         restoreOwnedInlineStyle(
           style, 'transform', state.appliedInlineTransform, state.savedInlineTransform
         );
-        restoreOwnedInlineStyle(
-          style, 'transition', state.appliedTransition, state.savedTransition
-        );
         restoreOwnedInlineStyle(style, 'cursor', state.appliedCursor, state.savedCursor);
         restoreOwnedInlineStyle(
           style, 'willChange', state.appliedWillChange, state.savedWillChange
@@ -3345,7 +3250,6 @@
       state.baseTransform = '';
       state.mediaSource = '';
       state.appliedInlineTransform = null;
-      state.appliedTransition = null;
       state.appliedCursor = null;
       state.appliedWillChange = null;
       resetView();
@@ -3525,7 +3429,7 @@
     function onWheel(event) {
       if (event.ctrlKey || event.metaKey || event.altKey || isEditablePhotoCopyTarget(event.target)) return;
       if (event.target && typeof event.target.closest === 'function' &&
-          event.target.closest('button, [role="button"], #' + PANEL_ID + '-toast')) return;
+          event.target.closest('button, [role="button"], #' + PANEL_ID + '-toast, .grid-item, [role="grid"]')) return;
       if (
         event.target &&
         typeof event.target.closest === 'function' &&
@@ -3732,11 +3636,11 @@
           target.closest('button, input, textarea, select, [role="button"], #' + PANEL_ID + '-toast')) return;
       const img = findPreviewImage(target, event.clientX, event.clientY);
       if (!img || (typeof img.closest === 'function' && img.closest('.grid-item, [role="grid"]'))) return;
-      if (!findNativeOneUpZoomController(doc) && hasPendingNativeViewer()) return;
+      const native = findNativeOneUpZoomController(doc);
+      if (!native && hasPendingNativeViewer()) return;
       event.preventDefault();
       event.stopPropagation();
       if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
-      const native = findNativeOneUpZoomController(doc);
       if (native) {
         const next = getNativeZoomScale(native) > native.min + 0.001 ? native.min : Math.min(2, native.max);
         requestNativeZoom(native, next, false, img, event);
@@ -3771,14 +3675,7 @@
       if (!state.element) return;
       // Only claim the reset keys when the user is not typing or invoking a
       // browser/OS shortcut.
-      const target = event.target;
-      if (target && typeof target.matches === 'function') {
-        try {
-          if (target.matches('input, textarea, select, [contenteditable]')) return;
-        } catch (error) {
-          // ignore selector errors and continue
-        }
-      }
+      if (isEditablePhotoCopyTarget(event.target)) return;
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       if (event.key === 'Escape' || event.key === '0') {
         event.preventDefault();
@@ -3858,55 +3755,38 @@
     }
   }
 
-  function observeAndRemount(doc, win) {
+  function observeAndRemount(doc, win, attachPanel) {
     const MutationObserverCtor = (win && win.MutationObserver) || root.MutationObserver;
     if (typeof MutationObserverCtor !== 'function') return;
 
-    let observed = null;
-    let reattachTimer = null;
-
-    const observer = new MutationObserverCtor(function () {
-      const panel = doc.getElementById(PANEL_ID);
-      if (panel && panel.isConnected) {
-        // React can replace the subtree the panel lives in (not just body's
-        // direct children), so track whichever parent currently holds it.
-        if (observed !== panel.parentNode) {
-          observed = panel.parentNode;
-          if (observed) observer.observe(observed, { childList: true, subtree: false });
-        }
-        return;
-      }
-      try {
-        const remounted = createPanel(doc, win);
-        observed = remounted && remounted.parentNode;
-        if (observed) observer.observe(observed, { childList: true, subtree: false });
-      } catch (error) {
-        console.warn(LOG_PREFIX, 'Remount failed:', error && error.message ? error.message : error);
-      }
-      // Swapping out the subtree can drop our document-level listeners too;
-      // re-assert them, which is idempotent thanks to the handler marker.
-      if (reattachTimer) clearTimeout(reattachTimer);
-      reattachTimer = setTimeout(function () {
-        reattachTimer = null;
+    let observedBody = null;
+    const observer = new MutationObserverCtor(sync);
+    function sync() {
+      if (!doc.body) return;
+      if (observedBody !== doc.body) {
+        observer.disconnect();
+        observedBody = doc.body;
+        if (doc.documentElement) observer.observe(doc.documentElement, { childList: true });
+        observer.observe(observedBody, { childList: true });
         installPasteListener(doc, win);
-      }, 200);
-    });
-
-    const target = (doc.getElementById(PANEL_ID) || {}).parentNode || doc.body || doc.documentElement;
-    if (target) {
-      observed = target;
-      observer.observe(target, { childList: true, subtree: false });
+      }
+      // Move the existing nodes, keeping the queue, timers and resize listener.
+      attachPanel();
     }
+    sync();
   }
 
   function mountPanel(doc, win) {
-    createPanel(doc, win);
+    const frameRoot = doc.documentElement;
+    if ((frameRoot && frameRoot.hasAttribute(MOUNT_ATTRIBUTE)) || doc.getElementById(PANEL_ID)) return true;
+    const attachPanel = createPanel(doc, win);
+    if (frameRoot) frameRoot.setAttribute(MOUNT_ATTRIBUTE, '');
     installPasteListener(doc, win);
     installGridPhotoCopyMenu(doc, win);
     installGridPhotoKeyboardCopy(doc, win);
     installOneUpCopyButton(doc, win);
     installImageZoomPan(doc, win);
-    observeAndRemount(doc, win);
+    observeAndRemount(doc, win, attachPanel);
     return true;
   }
 

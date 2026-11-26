@@ -2,12 +2,199 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
 
 const api = require('../icloud-photos-web-uploader.user.js');
 const source = fs.readFileSync(
   path.join(__dirname, '..', 'icloud-photos-web-uploader.user.js'),
   'utf8'
 );
+
+class UploaderElement extends EventTarget {
+  constructor(tag) {
+    super();
+    this.tagName = tag.toUpperCase();
+    this.attrs = new Map();
+    this.style = {};
+    this.children = [];
+    this.files = [];
+    const classes = new Set();
+    this.classList = {
+      add: name => classes.add(name),
+      remove: name => classes.delete(name),
+      contains: name => classes.has(name),
+      toggle: (name, on) => on ? classes.add(name) : classes.delete(name),
+    };
+  }
+  setAttribute(key, value) { this.attrs.set(key, value); }
+  getAttribute(key) { return this.attrs.get(key) ?? null; }
+  hasAttribute(key) { return this.attrs.has(key); }
+  closest() { return null; }
+  removeChild(node) {
+    this.children.splice(this.children.indexOf(node), 1);
+    node.parentNode = null;
+  }
+  appendChild(node) {
+    if (node.parentNode) node.parentNode.removeChild(node);
+    this.children.push(node);
+    node.parentNode = this;
+  }
+}
+
+function createUploaderEnvironment() {
+  const panelId = 'icloud-web-uploader-panel';
+  const view = new UploaderElement('main');
+  const nativeInput = Object.assign(new UploaderElement('input'), { type: 'file', multiple: true });
+  nativeInput.setAttribute('accept', 'image/*');
+  const doc = Object.assign(new EventTarget(), {
+    head: new UploaderElement('head'),
+    body: new UploaderElement('body'),
+    documentElement: new UploaderElement('html'),
+    createElement: tag => new UploaderElement(tag),
+    getElementById(id) {
+      return [...this.head.children, ...this.body.children].find(element => element.id === id) || null;
+    },
+    querySelector: selector => selector.includes('PhotosRootContent') ? view : null,
+    querySelectorAll: selector => selector === 'input[type="file"]' ? [nativeInput] : [],
+  });
+  const batches = [];
+  const timers = new Map();
+  const observers = new Set();
+  let timerId = 0;
+  const win = Object.assign(new EventTarget(), {
+    document: doc,
+    location: {
+      pathname: '/applications/photos3/current/zh-cn/index.html',
+      href: 'https://www.icloud.com/applications/photos3/current/zh-cn/index.html',
+    },
+    DataTransfer: class {
+      constructor() {
+        this.files = [];
+        this.items = { add: file => this.files.push(file) };
+      }
+    },
+    Event,
+    AbortController,
+    MutationObserver: class {
+      targets = new Set();
+      constructor(callback) { this.callback = callback; observers.add(this); }
+      observe(target) { this.targets.add(target); }
+      disconnect() { this.targets.clear(); }
+    },
+    setTimeout(callback, delay) {
+      timers.set(++timerId, { callback, delay });
+      return timerId;
+    },
+    clearTimeout(id) { timers.delete(id); },
+    URL: { createObjectURL: () => 'blob:fixture', revokeObjectURL() {} },
+    Image: class {
+      set src(url) { if (url) queueMicrotask(() => this.onerror()); }
+    },
+  });
+  doc.defaultView = win;
+  nativeInput.ownerDocument = doc;
+  nativeInput.addEventListener('change', () => batches.push([...nativeInput.files]));
+  function bootstrap(window = win) {
+    vm.runInNewContext(source, {
+      window, document: window.document, File, Event, AbortController,
+      setTimeout: win.setTimeout, clearTimeout: win.clearTimeout,
+      console: { debug() {}, warn() {}, log() {} },
+    });
+  }
+  function notify(target) {
+    for (const observer of observers) {
+      if (observer.targets.has(target)) observer.callback([{ type: 'childList', target }]);
+    }
+  }
+  return {
+    doc, win, batches, timers, bootstrap, notify,
+    panel: () => doc.getElementById(panelId),
+    toast: () => doc.getElementById(panelId + '-toast'),
+  };
+}
+
+function uploadFixture() {
+  return new File(['fixture'], 'photo.jpg', { type: 'image/jpeg' });
+}
+
+test('外壳先接管 iframe 后，iframe 自身初始化不会让一次粘贴重复交接', async () => {
+  const env = createUploaderEnvironment();
+  env.bootstrap({
+    document: { body: {}, querySelector: () => null },
+    location: { pathname: '/photos/', href: 'https://www.icloud.com/photos/' },
+    frames: [env.win],
+  });
+  env.bootstrap();
+  const paste = new Event('paste', { cancelable: true });
+  Object.defineProperty(paste, 'clipboardData', {
+    value: { items: [{ kind: 'file', getAsFile: uploadFixture }] },
+  });
+  env.win.dispatchEvent(paste);
+  await new Promise(setImmediate);
+  assert.equal(env.batches.length, 1);
+  assert.equal(env.batches[0].length, 1);
+});
+
+test('替换 body 后复用原悬浮球和对应的 resize 监听', () => {
+  const env = createUploaderEnvironment();
+  let reads = 0;
+  env.win.localStorage = { getItem() { reads += 1; return null; } };
+  env.bootstrap();
+  const originalPanel = env.panel();
+  env.doc.body = new UploaderElement('body');
+  env.notify(env.doc.documentElement);
+  assert.equal(env.panel(), originalPanel);
+  assert.ok(env.toast());
+  reads = 0;
+  env.win.dispatchEvent(new Event('resize'));
+  assert.equal(reads, 1);
+});
+
+test('混合批次和后一批均保留转码失败文件名，且已提交批次继续刷新', async () => {
+  const env = createUploaderEnvironment();
+  env.bootstrap();
+  const bad = name => new File(['fixture'], name, { type: 'image/heic' });
+  const send = env.panel()._handlePasteUpload;
+  await Promise.all([send([bad('unreadable.heic'), uploadFixture()]), send([bad('second.heic')])]);
+  assert.equal(env.batches.length, 1);
+  const result = env.toast().textContent;
+  assert.match(result, /已向 iCloud 提交 1 张/);
+  assert.match(result, /unreadable\.heic/);
+  assert.match(result, /second\.heic/);
+  assert.match(result, /尝试软刷新/);
+});
+
+test('空或非图片批次保留原同步计时器', async () => {
+  const env = createUploaderEnvironment();
+  env.bootstrap();
+  const send = env.panel()._handlePasteUpload;
+  await send([uploadFixture()]);
+  const current = Array.from(env.timers.entries()).find(([, item]) => item.delay === 5000);
+  assert.ok(current);
+  await send([new File(['log'], 'log.txt', { type: 'text/plain' })]);
+  assert.ok(env.timers.has(current[0]));
+  assert.equal(env.batches.length, 1);
+});
+
+test('网格滚动命中外层容器时不遍历其全部缩略图', () => {
+  const env = createUploaderEnvironment();
+  const container = new UploaderElement('div');
+  const stack = [container, env.doc.body, env.doc.documentElement];
+  for (const element of stack) {
+    element.querySelectorAll = () => assert.fail('滚轮不得枚举整个图库');
+  }
+  env.doc.elementsFromPoint = () => stack;
+  env.bootstrap();
+  const wheel = new Event('wheel', { cancelable: true });
+  Object.defineProperties(wheel, {
+    target: { value: container },
+    clientX: { value: 120 },
+    clientY: { value: 90 },
+    deltaY: { value: 60 },
+  });
+  env.win.dispatchEvent(wheel);
+  assert.equal(wheel.defaultPrevented, false);
+});
 
 function fakeElement(attributes, text) {
   return {
@@ -288,6 +475,28 @@ test('异步上传准备期间切换图库路由会中止本批交接', async ()
   assert.match(env.messages.at(-1).message, /本批未发送/);
 });
 
+test('外层页面切换相簿也会中止 iframe 中待交接的批次', async () => {
+  const env = setupUploadHandoff();
+  env.win.location.origin = 'https://www.icloud.com';
+  const shell = { href: 'https://www.icloud.com/photos/', origin: env.win.location.origin };
+  env.win.parent = { location: shell };
+  assert.equal(await env.upload(async () => { shell.href += '#/favorites/'; }), 0);
+  assert.deepEqual(env.events, []);
+});
+
+test('批量转码发现视图切换后不再解码剩余文件', async () => {
+  let current = true;
+  let conversions = 0;
+  const files = [fakeFile('first.png', 'image/png'), fakeFile('second.png', 'image/png')];
+  const result = await api.normalizeFilesForICloudWebUpload(files, null, null, async () => {
+    conversions += 1;
+    current = false;
+    return fakeFile('first.jpg', 'image/jpeg');
+  }, { shouldContinue: () => current });
+  assert.deepEqual(result, []);
+  assert.equal(conversions, 1);
+});
+
 test('排队期间离开原图库路由时不会开始上传准备', async () => {
   const env = setupUploadHandoff();
   const routeKey = env.win.location.href;
@@ -524,12 +733,14 @@ test('未被页面接受的拖放不会报告上传成功，也不会广播到�
   assert.deepEqual(dispatched, ['dragenter', 'dragover', 'drop']);
 });
 
-test('页面取消 dragover 时拖放备用通道才报告已接受', () => {
+test('只有 drop 被处理才记录拖放事件已处理，且不宣称文件已入队', async () => {
   const dispatched = [];
+  let handlesDrop = false;
   const target = {
     dispatchEvent(event) {
       dispatched.push(event.type);
       if (event.type === 'dragover') event.preventDefault();
+      if (event.type === 'drop' && handlesDrop) event.preventDefault();
       return !event.defaultPrevented;
     },
   };
@@ -555,14 +766,15 @@ test('页面取消 dragover 时拖放备用通道才报告已接受', () => {
     }
   }
 
-  const accepted = api.dropFilesOnICloudPage(
-    [fakeFile('photo.jpg', 'image/jpeg')],
-    doc,
-    { DataTransfer: DataTransferStub, DragEvent: EventStub, Event: EventStub }
-  );
-
-  assert.equal(accepted, true);
+  const photos = [fakeFile('photo.jpg', 'image/jpeg')];
+  const win = { DataTransfer: DataTransferStub, DragEvent: EventStub, Event: EventStub };
+  assert.equal(api.dropFilesOnICloudPage(photos, doc, win), false);
   assert.deepEqual(dispatched, ['dragenter', 'dragover', 'drop']);
+  handlesDrop = true;
+  assert.equal(api.dropFilesOnICloudPage(photos, doc, win), true);
+  const messages = [];
+  assert.equal(await api.uploadViaICloudPage(photos, doc, win, message => messages.push(message)), 0);
+  assert.match(messages.at(-1), /确认是否入队/);
 });
 
 test('input.files setter 抛错时上传交接返回 false 而不是泄漏异常', () => {
@@ -790,6 +1002,71 @@ test('hash 往返没有观察到图库变化时软刷新返回 false', async () 
 
   assert.equal(refreshed, false);
   assert.equal(hash, '#/recents');
+});
+
+test('等候软刷新时手动切换路由会保留用户选择', async () => {
+  let hash = '#/recents';
+  let view = {};
+  let notify;
+  const win = {
+    location: { get hash() { return hash; }, set hash(value) { hash = value; } },
+    MutationObserver: class {
+      constructor(callback) { notify = callback; }
+      observe() {}
+      disconnect() {}
+    },
+  };
+  const doc = { body: {}, querySelector: selector => selector.includes('PhotosRootContent') ? view : null,
+    querySelectorAll: () => [] };
+  const refresh = api.softRefreshLibraryView(doc, win, { verificationTimeout: 30 });
+  assert.equal(hash, '#/favorites');
+  win.location.hash = '#/albums';
+  view = {};
+  notify();
+  assert.equal(await refresh, false);
+  assert.equal(hash, '#/albums');
+});
+
+test('软刷新通过侧栏并等待外层路由确认两程都完成', async () => {
+  const shell = Object.assign(new EventTarget(), {
+    location: { origin: 'https://www.icloud.com.cn', pathname: '/photos/', hash: '' },
+  });
+  let selected = '图库';
+  let notify;
+  const visited = [];
+  const items = [
+    ['图库', ''],
+    ['最近项目', '#/recents/'],
+  ].map(([name, hash]) => ({
+    textContent: name,
+    getAttribute: attr => attr === 'href' ? 'https://www.icloud.com.cn/photos/' + hash : null,
+    matches: () => name === selected,
+    click() {
+      visited.push(name);
+      if (name === '图库') assert.equal(shell.location.hash, '#/recents/');
+      selected = name;
+      notify();
+      queueMicrotask(() => {
+        shell.location.hash = hash;
+        shell.dispatchEvent(new Event('hashchange'));
+      });
+    },
+  }));
+  const win = {
+    parent: shell,
+    location: { origin: shell.location.origin, hash: '#launchRoute=fixture' },
+    MutationObserver: class {
+      constructor(callback) { notify = callback; }
+      observe() {}
+      disconnect() {}
+    },
+  };
+  const doc = { body: {}, querySelector: () => null,
+    querySelectorAll: selector => selector.includes('Sidebar-innerContainer') ? items : [] };
+  assert.equal(await api.softRefreshLibraryView(doc, win, { verificationTimeout: 800 }), true);
+  assert.deepEqual(visited, ['最近项目', '图库']);
+  assert.equal(shell.location.hash, '');
+  assert.equal(win.location.hash, '#launchRoute=fixture');
 });
 
 test('观察到两次图库变化后软刷新才返回 true', async () => {
@@ -1433,8 +1710,13 @@ async function assertCanvasClipboardFallback(fetch) {
   assert.equal(written, canvasBlob);
 }
 
-test('照片对象地址被回收后改用 canvas 重绘读取二进制', async () => {
-  await assertCanvasClipboardFallback(async () => { throw new TypeError('Failed to fetch'); });
+test('已解码的图片优先通过 canvas 拷贝，避免再次读取对象地址', async () => {
+  let requests = 0;
+  await assertCanvasClipboardFallback(async () => {
+    requests += 1;
+    throw new TypeError('Failed to fetch');
+  });
+  assert.equal(requests, 0);
 });
 
 test('JPEG 来源重绘为 PNG 后才写入剪贴板', async () => {
@@ -1472,6 +1754,7 @@ test('对象地址回收且画布无法重绘时报告读取失败', async () =>
 test('等待图片数据时切换照片不会把新照片误写入剪贴板', async () => {
   const image = {
     currentSrc: 'blob:https://www.icloud.com/first',
+    complete: false,
     naturalWidth: 480,
     naturalHeight: 360,
     ownerDocument: {
@@ -1489,6 +1772,12 @@ test('等待图片数据时切换照片不会把新照片误写入剪贴板', as
     },
   };
   await assert.rejects(api.copyPhotoImageToClipboard(image, win), /照片已切换/);
+});
+
+test('超大图片拷贝在分配画布前提示使用原生下载', async () => {
+  const photo = { naturalWidth: 9000, naturalHeight: 7000,
+    ownerDocument: { createElement() { assert.fail('超大画布不能分配'); } } };
+  await assert.rejects(api.renderPhotoImageToBlob(photo, {}), /剪贴板转换上限/);
 });
 
 function fakeKeydownEvent(overrides) {
@@ -1726,7 +2015,7 @@ test('resolveOneUpImage 靠尺寸识别大图，不吃网格缩略图，也不�
   assert.equal(api.resolveOneUpImage(null), null);
 });
 
-test('大图按钮是图标按钮，随大图出现与移除', () => {
+test('大图按钮是图标按钮，随大图出现与移除', async () => {
   const created = [];
   const documentListeners = {};
   let viewerPresent = true;
@@ -1812,10 +2101,11 @@ test('大图按钮是图标按钮，随大图出现与移除', () => {
   viewerPresent = false;
   doc.hidden = false;
   documentListeners.visibilitychange();
+  await Promise.resolve();
   assert.equal(created.length, 1, '不能重复注入按钮');
   assert.equal(btn.removed, true, '大图关闭后按钮应被移除');
   assert.equal(btn.listeners.mousedown, undefined, '移除按钮时解除拖动监听');
-  assert.equal(timers.size, 1, '回到前台后恢复轮询');
+  assert.equal(timers.size, 0, '回到前台时按事件同步，无常驻轮询');
 });
 
 test('拖动大图按钮会记住位置，并且拖动结束那一下不触发拷贝', () => {
@@ -1881,9 +2171,27 @@ test('拖动大图按钮会记住位置，并且拖动结束那一下不触发�
   assert.equal(reopened.style.top, '280px');
 });
 
-test('Ctrl+C 在大图里不再依赖鼠标位置（回退到居中大图）', () => {
-  assert.match(source, /findPhotoUnderPointer\(\) \|\| resolveOneUpImage\(doc\)/);
-  assert.match(source, /installOneUpCopyButton\(doc, win\);/);
+test('Ctrl+C 优先拷贝 OneUp 中已加载的小图，即使鼠标下有其他缩略图', async () => {
+  const env = setupKeyboardCopyEnv();
+  const png = { type: 'image/png', size: 3200 };
+  const currentPhoto = {
+    ...env.image,
+    naturalWidth: 640,
+    naturalHeight: 480,
+    ownerDocument: {
+      createElement: () => ({ getContext: () => ({ drawImage() {} }), toBlob: callback => callback(png) }),
+    },
+  };
+  env.doc.querySelector = selector => selector === '.OneUpCarouselItem.is-center'
+    ? { querySelectorAll: () => [currentPhoto] } : null;
+  env.doc.documentElement = { clientWidth: 500, clientHeight: 400 };
+  env.doc.querySelectorAll = () => [env.image];
+  api.installGridPhotoKeyboardCopy(env.doc, env.win);
+  env.handlers.mousemove[0]({ clientX: 50, clientY: 50 });
+  env.handlers.keydown[0](fakeKeydownEvent());
+  await flushKeyboardCopy();
+  assert.equal(env.getWritten(), png);
+  assert.match(env.messages.at(-1).message, /640×480/);
 });
 
 test('弹层基准高度能区分“我们已加高”和“iCloud 重写了高度”', () => {
